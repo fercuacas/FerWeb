@@ -234,10 +234,13 @@ export function StatusApp() {
             <Icon name="folder" />
             Proyectos
           </a>
+          <a className="nav-item" href="#/agents">
+            <Icon name="agent" />
+            Agentes
+          </a>
           {(
             [
               ['chat', 'Conversaciones'],
-              ['agent', 'Agentes'],
               ['chart', 'Comparativas'],
             ] as const
           ).map(([icon, label]) => (

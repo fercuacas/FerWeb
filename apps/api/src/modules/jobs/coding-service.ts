@@ -6,6 +6,8 @@ import {
   codingConfiguration,
   codingRunSchema,
   codingPath,
+  agentSnapshot,
+  supportsAgent,
   type repeatCodingInput,
 } from '@ferweb/contracts';
 import { HttpError } from '../../http-error.js';
@@ -16,6 +18,7 @@ import { JobService } from './service.js';
 import { RunnerClient } from './runner-client.js';
 import { indexable } from '../retrieval/chunking.js';
 import { canonical } from './review-artifacts.js';
+import { AgentCatalog } from '../agents/catalog.js';
 const missing = () => new HttpError(404, 'not_found', 'No se ha encontrado el recurso.');
 const changed = () =>
   new HttpError(
@@ -23,9 +26,16 @@ const changed = () =>
     'coding_source_changed',
     'La tarea o el repositorio han cambiado. Actualiza antes de ejecutar.',
   );
+const incompatible = () =>
+  new HttpError(
+    422,
+    'agent_incompatible',
+    'La versión del rol requiere capacidades o herramientas que Codex no ofrece.',
+  );
 export class CodingService {
   readonly projects: ProjectRepository;
   readonly jobs: JobService;
+  private readonly agents: AgentCatalog;
   constructor(
     readonly pool: Pool,
     readonly github: GitHubService,
@@ -33,6 +43,7 @@ export class CodingService {
   ) {
     this.projects = new ProjectRepository(pool);
     this.jobs = new JobService(pool);
+    this.agents = new AgentCatalog(pool);
   }
   async capabilities(owner: string, project: string) {
     await this.projects.get(owner, project);
@@ -75,6 +86,7 @@ export class CodingService {
       manifest: row.manifest,
       excluded: row.excluded,
       report: row.report,
+      agent: row.agent_snapshot,
     });
   }
   async create(owner: string, project: string, input: z.infer<typeof codingInput>) {
@@ -100,6 +112,9 @@ export class CodingService {
       throw new HttpError(409, 'project_archived', 'Restaura el proyecto antes de ejecutar.');
     const task = await this.projects.getTask(owner, project, input.taskId);
     if (task.version !== input.taskVersion) throw changed();
+    const agent = input.agent
+      ? await this.agents.select(this.pool, owner, project, input.agent)
+      : null;
     const capabilities = await this.runner.capabilities();
     if (
       !capabilities.available ||
@@ -115,6 +130,7 @@ export class CodingService {
           ? 'El modelo no está permitido para el ejecutor Codex.'
           : 'Configura Codex en el servidor y selecciona un modelo permitido.',
       );
+    if (agent && !supportsAgent(agent, describeCoding(capabilities))) throw incompatible();
     const { link } = await this.github.read(owner, project);
     if (
       !link ||
@@ -207,6 +223,7 @@ export class CodingService {
         return prior.id as string;
       }
       if (current.archived_at) throw changed();
+      if (input.agent) await this.agents.select(db, owner, project, input.agent);
       const currentTask = (
         await db.query('SELECT version FROM tasks WHERE id=$1 AND project_id=$2 FOR UPDATE', [
           task.id,
@@ -242,7 +259,7 @@ export class CodingService {
         )
       ).rows[0];
       await db.query(
-        'INSERT INTO coding_runs(job_id,task_id,task_snapshot,owner_id,repository_id,repository,commit_sha,files,manifest,excluded,base_branch,source_tree,environment) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)',
+        'INSERT INTO coding_runs(job_id,task_id,task_snapshot,owner_id,repository_id,repository,commit_sha,files,manifest,excluded,base_branch,source_tree,environment,agent_snapshot) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)',
         [
           job.id,
           task.id,
@@ -257,6 +274,7 @@ export class CodingService {
           link.branch,
           JSON.stringify(sourceTree),
           JSON.stringify(capabilities.environment),
+          agent ? JSON.stringify(agent) : null,
         ],
       );
       await this.jobs.queue.event(db, job.id, 'queued', 'Tarea y snapshot del commit guardados.');
@@ -267,19 +285,27 @@ export class CodingService {
   async executionInput(id: string, fence: string, checkOnly: boolean) {
     const row = (
       await this.pool.query(
-        "SELECT j.*,c.owner_id,c.repository_id,c.repository,c.commit_sha,c.files,c.task_snapshot,c.environment FROM jobs j JOIN coding_runs c ON c.job_id=j.id JOIN projects p ON p.id=j.project_id WHERE j.id=$1 AND j.fence=$2 AND j.state='running' AND j.lease_until>clock_timestamp() AND NOT j.cancel_requested AND p.archived_at IS NULL",
+        "SELECT j.*,c.owner_id,c.repository_id,c.repository,c.commit_sha,c.files,c.task_snapshot,c.environment,c.agent_snapshot FROM jobs j JOIN coding_runs c ON c.job_id=j.id JOIN projects p ON p.id=j.project_id WHERE j.id=$1 AND j.fence=$2 AND j.state='running' AND j.lease_until>clock_timestamp() AND NOT j.cancel_requested AND p.archived_at IS NULL",
         [id, fence],
       )
     ).rows[0];
     if (!row) throw missing();
     await this.access(row.owner_id, row.project_id, Number(row.repository_id));
     if (checkOnly) return { authorized: true };
+    const agent = row.agent_snapshot ? agentSnapshot.parse(row.agent_snapshot) : null;
     return {
       jobId: id,
       fence,
       repository: row.repository,
       commit: row.commit_sha,
       task: row.task_snapshot,
+      ...(agent && {
+        role: {
+          purpose: agent.purpose,
+          instructions: agent.instructions,
+          outputFormat: agent.outputFormat,
+        },
+      }),
       files: row.files,
       environment: row.environment,
       model: row.configuration.model,
@@ -331,6 +357,8 @@ export class CodingService {
       ...source.configuration,
       model: input.model,
     });
+    const agent = source.agent_snapshot ? agentSnapshot.parse(source.agent_snapshot) : null;
+    if (agent && !supportsAgent(agent, describeCoding(caps))) throw incompatible();
     const id = await this.jobs.queue.tx(async (db) => {
       const p = (
         await db.query('SELECT archived_at FROM projects WHERE id=$1 AND owner_id=$2 FOR UPDATE', [
@@ -349,6 +377,7 @@ export class CodingService {
         if (old.request_hash !== hash) throw changed();
         return old.id as string;
       }
+      if (agent) await this.agents.select(db, owner, project, agent);
       const counts = (
         await db.query(
           "SELECT count(*)::int AS total,count(*) FILTER(WHERE state IN ('pending','running'))::int AS active FROM jobs WHERE project_id=$1",
@@ -370,7 +399,7 @@ export class CodingService {
         )
       ).rows[0]!;
       await db.query(
-        'INSERT INTO coding_runs(job_id,task_id,task_snapshot,owner_id,repository_id,repository,commit_sha,files,manifest,excluded,base_branch,source_tree,environment,baseline_job_id) SELECT $1,task_id,task_snapshot,owner_id,repository_id,repository,commit_sha,files,manifest,excluded,base_branch,source_tree,environment,job_id FROM coding_runs WHERE job_id=$2',
+        'INSERT INTO coding_runs(job_id,task_id,task_snapshot,owner_id,repository_id,repository,commit_sha,files,manifest,excluded,base_branch,source_tree,environment,agent_snapshot,baseline_job_id) SELECT $1,task_id,task_snapshot,owner_id,repository_id,repository,commit_sha,files,manifest,excluded,base_branch,source_tree,environment,agent_snapshot,job_id FROM coding_runs WHERE job_id=$2',
         [job.id, baseline],
       );
       await this.jobs.queue.event(

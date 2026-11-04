@@ -6,7 +6,7 @@ P00 se completó el **4 de noviembre de 2026**. La revisión de código y docume
 |---|---|---|---|
 | [P00](P00-baseline.md) | Ninguna | Completada | [Contrato y evidencia de código](BASELINE.md) y [cobertura revisada](coverage.md). |
 | [P01](P01-capabilities.md) | P00 | Completada | 4 de noviembre de 2026. Catálogo protegido, diagnóstico en Estado y Trabajos, y validación en Docker con proveedores simulados. [Contrato y uso](../../codex.md) |
-| [P02](P02-agents.md) | P01 | Pendiente | P01 verificado. Catálogo versionado de agentes y verificaciones pendientes. |
+| [P02](P02-agents.md) | P01 | Completada | 4 de noviembre de 2026. Catálogo por proyecto, seis plantillas y versión congelada en la cola Codex. Validación en Docker con proveedores simulados. [Contrato y uso](../../codex.md#roles-versionados-por-proyecto-p02) |
 | [P03](P03-skills.md) | P01, P02 | Pendiente | Implementación y verificaciones del prompt. |
 | [P04](P04-budgets.md) | P01, P02 | Pendiente | Implementación y verificaciones del prompt. |
 | [P05](P05-teams.md) | P02, P03, P04 | Pendiente | Implementación y verificaciones del prompt. |
@@ -37,5 +37,7 @@ Las dependencias se cotejaron con cada prompt. Las 27 fases están ordenadas sin
 Comprobaciones de P00. Enlaces locales, coherencia de fases y cobertura, coincidencia del recopilatorio con los prompts individuales y comprobaciones de whitespace con Git. La evidencia de ejecución de E1–E11 sigue fechada en el [estado de FerWeb](../../status.md).
 
 Comprobaciones de P01. `npm run docker:check` pasó con 10 pruebas Python, 12 básicas, 75 pruebas y subcasos de integración, 14 pruebas Chromium, tipos, compilación, formato y smoke. Se comprobó el diagnóstico con y sin configuración, acceso por proyecto, simulación, capacidades desconocidas y rechazo de modelos y proveedores incompatibles. La aceptación con modelos reales permanece pendiente.
+
+Comprobaciones de P02. `npm run docker:check` pasó con 10 pruebas Python, 12 básicas, 75 pruebas y subcasos de integración, 14 pruebas Chromium, tipos, compilación, formato y smoke. El proveedor simulado comprobó el texto congelado que recibió Codex después de una edición y archivo. Chromium verificó la creación, la elección de una versión anterior, la repetición y el archivo desde móvil. La API rechazó acceso ajeno, roles incompatibles, versiones fuera de rango y escrituras en proyectos archivados. La migración 011 quedó aplicada en la instancia local. La aceptación con un proveedor real y la ejecución de estos roles con IA local quedan pendientes.
 
 Al ejecutar una entrega, registra fecha, archivos/contratos relevantes, checks realmente ejecutados, simulación o aceptación real, límites y bloqueos. No marques completa una fase funcional con checks requeridos pendientes ni sobrescribas evidencia histórica para que parezca recién ejecutada.

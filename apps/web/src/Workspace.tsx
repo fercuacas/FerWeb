@@ -21,6 +21,7 @@ import { GitHubSettings, ProjectGitHub } from './GitHub';
 import { ProjectConversations } from './Conversations';
 import { ProjectLaboratory } from './Laboratory';
 import { ProjectJobs } from './Jobs';
+import { AgentsPage } from './Agents';
 
 const statusLabels = { todo: 'Por hacer', in_progress: 'En curso', done: 'Hecho' };
 const priorityLabels = { low: 'Baja', medium: 'Media', high: 'Alta', urgent: 'Urgente' };
@@ -603,6 +604,11 @@ function ProjectPage({ id }: { id: string }) {
           Trabajos
         </button>
       </div>
+      <p>
+        <a className="text-link" href={`#/agents/${id}`}>
+          Catálogo de agentes del proyecto
+        </a>
+      </p>
       {tab === 'tasks' ? (
         <Board key={id} project={project} />
       ) : tab === 'github' ? (
@@ -733,6 +739,9 @@ export function Workspace({ route, user }: { route: string; user: User }) {
   const [logout, { isLoading, error }] = authApi.useLogoutMutation();
   const dispatch = useDispatch<AppDispatch>();
   const id = route.match(/^\/projects\/([^/]+)$/)?.[1];
+  const agentsRoute = route.match(/^\/agents(?:\/([^/]+))?$/);
+  const githubRoute = route.split('?')[0] === '/github';
+  const agentsHref = id ? `#/agents/${id}` : agentsRoute ? `#${route}` : '#/agents';
   useEffect(() => {
     dispatch(workspaceUi.actions.resetFilters());
   }, [id, dispatch]);
@@ -770,9 +779,9 @@ export function Workspace({ route, user }: { route: string; user: User }) {
         <p className="nav-label">ESPACIO DE TRABAJO</p>
         <nav aria-label="Navegación principal">
           <a
-            className={`nav-item ${!route.startsWith('/github') ? 'active' : ''}`}
+            className={`nav-item ${!githubRoute && !agentsRoute ? 'active' : ''}`}
             href="#/projects"
-            aria-current={!route.startsWith('/github') ? 'page' : undefined}
+            aria-current={!githubRoute && !agentsRoute ? 'page' : undefined}
           >
             <span aria-hidden="true">▧</span>Proyectos
             <span className="nav-active-dot" />
@@ -787,12 +796,13 @@ export function Workspace({ route, user }: { route: string; user: User }) {
           <a className="nav-item" href="#/status">
             <span aria-hidden="true">◉</span>Estado del sistema
           </a>
-          {['Agentes'].map((label) => (
-            <span className="nav-item upcoming" aria-disabled="true" key={label}>
-              {label}
-              <span className="nav-soon">Pronto</span>
-            </span>
-          ))}
+          <a
+            className={`nav-item ${agentsRoute ? 'active' : ''}`}
+            href={agentsHref}
+            aria-current={agentsRoute ? 'page' : undefined}
+          >
+            <span aria-hidden="true">✳</span>Agentes
+          </a>
         </nav>
         <div className="sidebar-bottom">
           <span className="sidebar-flower">✳</span>
@@ -810,7 +820,7 @@ export function Workspace({ route, user }: { route: string; user: User }) {
           <span>
             <a href="#/projects">Mi espacio</a>
             <span className="breadcrumb-slash">/</span>
-            <strong>{id ? 'Tablero' : 'Proyectos'}</strong>
+            <strong>{agentsRoute ? 'Agentes' : id ? 'Tablero' : 'Proyectos'}</strong>
           </span>
           <div className="account-menu">
             <span className="account-email">{user.email}</span>
@@ -823,12 +833,15 @@ export function Workspace({ route, user }: { route: string; user: User }) {
           <a href="#/projects">Proyectos</a>
           <a href="#/status">Estado</a>
           <a href="#/github">GitHub</a>
+          <a href={agentsHref}>Agentes</a>
         </nav>
         <main id="workspace-main" tabIndex={-1}>
           {error && <Notice>{errorMessage(error)}</Notice>}
           {id ? (
             <ProjectPage key={id} id={id} />
-          ) : route.split('?')[0] === '/github' ? (
+          ) : agentsRoute ? (
+            <AgentsPage id={agentsRoute[1]} />
+          ) : githubRoute ? (
             <GitHubSettings />
           ) : route === '/projects' ? (
             <ProjectList />

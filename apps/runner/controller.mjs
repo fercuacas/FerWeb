@@ -380,6 +380,7 @@ export async function createController({ token, configuration, fakeProvider, nam
       repository: input.repository,
       commit: input.commit,
       task: input.task,
+      role: input.role,
       files: input.files,
       model: input.model,
       deadlineAt: input.deadlineAt,

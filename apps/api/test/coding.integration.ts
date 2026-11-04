@@ -7,6 +7,9 @@ import { setTimeout as delay } from 'node:timers/promises';
 import {
   codingCapabilitiesResponse,
   codingRunSchema,
+  agentMutationResponse,
+  agentResponse,
+  agentsResponse,
   executionCatalogSchema,
   jobDetailSchema,
 } from '@ferweb/contracts';
@@ -198,10 +201,99 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
       'strict task/commit admission, scope, immutable snapshots, real Codex tools and independent diff/tests',
       async () => {
         assert.equal((await runner.capabilities()).simulated, true);
-        const { job, body } = await enqueue();
-        const repeated = await request('POST', `/projects/${project}/coding`, body, cookie);
-        assert.equal(repeated.status, 202);
-        assert.equal((await repeated.json()).job.id, job.id);
+        const agentsPath = `/projects/${project}/agents`;
+        const codingPath = `/projects/${project}/coding`;
+        const list = await request('GET', agentsPath, undefined, cookie);
+        assert.equal(list.status, 200);
+        assert.equal(agentsResponse.parse(await list.json()).templates.length, 6);
+        assert.equal((await request('GET', agentsPath)).status, 401);
+        assert.equal((await request('GET', agentsPath, undefined, foreign)).status, 404);
+
+        const definition = {
+          name: 'Private coding role',
+          purpose: 'Resolve the sum task.',
+          instructions: 'P02 frozen prompt marker v1.',
+          outputFormat: 'Summary and verified tests.',
+          requiredCapabilities: ['text', 'workspaceWrite'],
+          allowedToolProfiles: ['node-isolated-v1'],
+        };
+        async function createAgent(path: string, value: unknown) {
+          const response = await request('POST', path, value, cookie);
+          assert.equal(response.status, 201);
+          return agentMutationResponse.parse(await response.json()).role;
+        }
+        const role = await createAgent(agentsPath, definition);
+        const agentPath = `${agentsPath}/${role.id}`;
+        const template = await createAgent(agentsPath, { template: 'reviewer' });
+        assert.equal(template.latest.origin.kind, 'template');
+        const incompatible = await createAgent(agentsPath, {
+          ...definition,
+          requiredCapabilities: ['text', 'structuredOutput'],
+          allowedToolProfiles: ['text-only'],
+        });
+        const otherProject = await request(
+          'POST',
+          '/projects',
+          { name: 'Other project', description: '' },
+          cookie,
+        );
+        assert.equal(otherProject.status, 201);
+        const other = (await otherProject.json()).project;
+        const otherPath = `/projects/${other.id}/agents`;
+        const otherRole = await createAgent(otherPath, definition);
+        assert.equal(
+          (await request('GET', `${otherPath}/${role.id}`, undefined, cookie)).status,
+          404,
+        );
+        assert.equal((await request('GET', agentPath, undefined, foreign)).status, 404);
+        const projectArchived = await request(
+          'PATCH',
+          `/projects/${other.id}`,
+          { version: other.version, archived: true },
+          cookie,
+        );
+        assert.equal(projectArchived.status, 200);
+        assert.equal((await request('POST', otherPath, definition, cookie)).status, 409);
+        assert.equal(
+          (await request('GET', `${otherPath}/${otherRole.id}`, undefined, cookie)).status,
+          200,
+        );
+
+        const { job, body } = await enqueue('Fix addition with agent role', {
+          agent: { id: role.id, version: 1 },
+        });
+        const tryAgent = (id: string, version = 1) =>
+          request(
+            'POST',
+            codingPath,
+            { ...body, requestId: randomUUID(), agent: { id, version } },
+            cookie,
+          );
+        assert.equal((await tryAgent(otherRole.id)).status, 404);
+        assert.equal((await tryAgent(role.id, 99)).status, 404);
+        assert.equal((await tryAgent(role.id, 2_147_483_648)).status, 400);
+        const denied = await tryAgent(incompatible.id);
+        assert.equal(denied.status, 422);
+        assert.equal((await denied.json()).error.code, 'agent_incompatible');
+        const edit = {
+          version: 1,
+          definition: { ...definition, instructions: 'Edited prompt v2.' },
+        };
+        const edits = await Promise.all([
+          request('PATCH', agentPath, edit, cookie),
+          request('PATCH', agentPath, edit, cookie),
+        ]);
+        assert.deepEqual(edits.map((result) => result.status).sort(), [200, 409]);
+        const history = agentResponse.parse(
+          await (await request('GET', agentPath, undefined, cookie)).json(),
+        );
+        assert.deepEqual(
+          history.versions.map((v) => [v.version, v.instructions]),
+          [
+            [2, edit.definition.instructions],
+            [1, definition.instructions],
+          ],
+        );
         assert.equal(
           (
             await request(
@@ -267,6 +359,17 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
           ).status,
           409,
         );
+        assert.equal(
+          (await request('POST', `${agentPath}/archive`, { version: 2 }, cookie)).status,
+          200,
+        );
+        const archived = await tryAgent(role.id);
+        assert.equal(archived.status, 409);
+        assert.equal((await archived.json()).error.code, 'agent_archived');
+        assert.equal((await report(job.id)).agent?.version, 1);
+        const repeated = await request('POST', codingPath, body, cookie);
+        assert.equal(repeated.status, 202);
+        assert.equal((await repeated.json()).job.id, job.id);
         await pool.query(
           "UPDATE tasks SET title='Later edited task',version=version+1 WHERE id=$1",
           [body.taskId],
@@ -277,7 +380,8 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
         assert.equal(done.job.attempt, 1);
         const run = await report(job.id),
           r = run.report!;
-        assert.equal(run.task.title, 'Fix addition');
+        assert.equal(run.task.title, 'Fix addition with agent role');
+        assert.deepEqual(run.agent, role.latest);
         assert.equal(run.commit, 'a'.repeat(40));
         assert.equal(r.simulated, true);
         assert.equal(r.terminationConfirmed, true);

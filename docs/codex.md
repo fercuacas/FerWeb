@@ -34,6 +34,16 @@ UUID y condiciones de admisión son idempotentes por proyecto. Un UUID repetido 
 
 PostgreSQL es la autoridad duradera. Tras confirmar el informe en SQL, el worker libera la copia en memoria del controlador; reiniciar este último no borra el informe SQL. Las transacciones cortas de cola limitan también la inactividad dentro de una transacción, para que un worker pausado no retenga el bloqueo e impida recuperaciones.
 
+## Roles versionados por proyecto (P02)
+
+Desde **Agentes**, abre un proyecto y crea un rol o añade una de las seis plantillas revisadas. Editar crea una versión nueva. El historial permite ver el propósito, las instrucciones, la forma de salida, las capacidades y perfiles requeridos y el origen de cada versión. Las plantillas de FerWeb son de redacción propia e identifican las especialidades que las inspiraron. [Catálogo de ECC](https://github.com/affaan-m/ECC/tree/main/agents)
+
+En **Trabajos → Nueva tarea con Codex**, selecciona la tarea, el rol opcional y una versión compatible. Codex comprueba las capacidades declaradas como compatibles en P01 y el perfil permitido. El modelo sigue escogido de la lista del ejecutor. El rol guía el trabajo y el formato de la respuesta. Los perfiles de esta fase sirven para comprobar compatibilidad y las sugerencias de mantener archivos intactos dependen de que el agente las siga. El aislamiento efectivo sigue siendo el del perfil Node existente.
+
+La migración 011 guarda el catálogo y el historial en PostgreSQL. Cada trabajo guarda una copia íntegra de la versión elegida junto a la tarea y el commit. El informe muestra **Rol congelado**, incluso tras editar o archivar el rol. Una repetición requiere que el rol siga activo y conserva la versión del trabajo original. La comparación detecta cambios de versión o contenido del rol.
+
+El catálogo y la entrada congelada se consultan con autorización de proyecto. El ejecutor recibe el propósito, las instrucciones y el formato del rol seleccionado al ejecutar. En el destino OpenAI, estos textos forman parte de la solicitud al modelo. La forma de salida es una guía textual. Una versión que requiera salida estructurada validada u otra capacidad que Codex no confirme se rechaza. Cada proyecto admite hasta 50 roles y cada rol hasta 50 versiones.
+
 ## Separación de componentes
 
 ```text

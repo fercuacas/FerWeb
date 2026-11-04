@@ -1,0 +1,42 @@
+.project-agents,
+.agent-history {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.agent-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: 12px;
+  padding: 0;
+  list-style: none;
+}
+.agent-list li,
+.agent-history {
+  padding: 14px;
+  border: 1px solid #d8dfce;
+  border-radius: 9px;
+}
+.agent-history dd {
+  margin: 4px 0 12px;
+  white-space: pre-wrap;
+}
+.agent-history dt {
+  font-weight: 700;
+}
+.agent-history select {
+  display: block;
+  margin-top: 6px;
+}
+.agent-editor textarea {
+  resize: vertical;
+}
+.agent-editor .agent-check {
+  display: flex;
+  align-items: center;
+}
+.agent-editor .agent-check input {
+  width: 18px;
+  min-height: 0;
+  height: 18px;
+  padding: 0;
+}

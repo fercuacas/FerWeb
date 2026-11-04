@@ -158,6 +158,22 @@ La ruta interna `POST /internal/coding/:jobId/input` requiere token de servidor 
 
 `GET /api/execution/capabilities` exige sesión y devuelve `{options}` con Codex y las dos rutas de chat. Cada opción indica proveedor, runtime, destino, perfil, disponibilidad, motivo, modelos, simulación y revisión observada. La consulta usa el catálogo existente de IA y el descriptor del controlador. El estado público de salud sigue un recorrido independiente. [Contrato](../packages/contracts/src/execution.ts)
 
+## Catálogo de agentes (P02)
+
+Rutas autenticadas bajo `/api/projects/:projectId/agents`.
+
+| Método y sufijo | Entrada y resultado |
+| --- | --- |
+| `GET /` | `{ roles, templates }` con la versión actual de cada rol del proyecto. |
+| `POST /` | Definición completa o `{ template }` con el identificador de una plantilla. Devuelve 201 con `{ role }`. |
+| `GET /:agentId` | `{ role, versions }` con las versiones inmutables, de la última a la primera. |
+| `PATCH /:agentId` | `{ version, definition }`. La versión indicada debe ser la última. Devuelve `{ role }` con la versión siguiente. |
+| `POST /:agentId/archive` | `{ version }` de la última versión. Devuelve `{ role }` con la fecha de archivo y mantiene el historial. |
+
+La definición incluye `name`, `purpose`, `instructions`, `outputFormat`, `requiredCapabilities` y `allowedToolProfiles`. La procedencia la asigna el servidor. Las escrituras sobre proyectos o roles archivados y las ediciones concurrentes devuelven 409. Los recursos ajenos devuelven 404.
+
+`POST /projects/:projectId/coding` admite opcionalmente `agent: { id, version }`. Devuelve 422 con `agent_incompatible` si el perfil de herramientas o las capacidades de la versión no encajan. El detalle de la ejecución devuelve `agent` con la versión congelada o `null` para trabajos sin rol. [Uso y límites](codex.md#roles-versionados-por-proyecto-p02)
+
 ## Revisión y PR (E9)
 
 | Método y ruta bajo `/api/projects/:projectId/coding/:jobId` | Entrada / resultado |

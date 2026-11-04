@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { executionOptionSchema } from './execution.js';
+import { agentSelection, agentSnapshot } from './agents.js';
 export const codingConfiguration = z.strictObject({
   taskId: z.uuid(),
   commit: z.string().regex(/^[a-f0-9]{40}$/),
@@ -20,6 +21,7 @@ export const codingInput = z.strictObject({
   timeoutMs: z.number().int().min(10000).max(1200000),
   maxRequests: z.number().int().min(1).max(20),
   maxOutputTokens: z.number().int().min(64).max(8192),
+  agent: agentSelection.optional(),
 });
 export const codingCapabilities = z.object({
   available: z.boolean(),
@@ -100,6 +102,7 @@ export const codingRunSchema = z.object({
   manifest: z.array(z.object({ path: z.string(), sha: z.string(), contentHash: z.string() })),
   excluded: z.array(z.string()),
   report: codingReport.nullable(),
+  agent: agentSnapshot.nullable(),
 });
 export function codingPath(path: string) {
   return (

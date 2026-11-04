@@ -2,6 +2,15 @@
 import { createController } from './controller.mjs';
 let sequence = 0;
 async function fakeProvider(run, value, res) {
+  if (
+    run.input.task.title === 'Fix addition with agent role' &&
+    run.requests === 1 &&
+    !JSON.stringify(value.input).includes('P02 frozen prompt marker v1.')
+  ) {
+    res.writeHead(422);
+    res.end('{"error":{"message":"frozen role missing from Codex input"}}');
+    return;
+  }
   if (/provider failure/i.test(run.input.task.title)) {
     res.writeHead(503);
     res.end('{"error":{"message":"simulated provider failure"}}');

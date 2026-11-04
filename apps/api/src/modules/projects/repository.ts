@@ -66,7 +66,7 @@ export class ProjectRepository {
     );
     return project(result.rows[0]!);
   }
-  private async locked<T>(
+  async locked<T>(
     owner: string,
     id: string,
     action: (client: PoolClient, row: QueryResultRow) => Promise<T>,

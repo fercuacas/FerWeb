@@ -27,6 +27,7 @@ Rutas desde la raíz. Las instrucciones están junto al directorio indicado; sui
 | Estrategias de contexto/adopción | `context-*` en laboratorio, captura de recuperación, chat, `apps/web/src/ContextStrategies.tsx` | [Contexto E10](context-optimization.md) | `context.integration.ts`, `context.spec.ts`; chat/recuperación si cambia su contrato |
 | Cola/simulador | `apps/api/src/modules/jobs/`, `apps/api/src/job-worker.ts` | [Trabajos](jobs.md) | `jobs.integration.ts`, `jobs.spec.ts` |
 | Codex/aislamiento | `coding-*` en jobs, `apps/runner/`, `apps/sandbox/`, `apps/web/src/Coding.tsx` | [Codex](codex.md) | `coding-boundaries.test.ts`, `coding.integration.ts`, `coding.spec.ts` |
+| Catálogo de agentes | `apps/api/src/modules/agents/`, `apps/web/src/Agents.tsx`, `coding-service.ts` | [Roles](codex.md#roles-versionados-por-proyecto-p02) | `coding.integration.ts`, `coding.spec.ts` |
 | Revisión/PR/comparación | `review-*` y `coding-service.ts` en jobs, cliente GitHub, `apps/web/src/CodingReview.tsx` | [Revisión y PR](reviews.md) | `review.integration.ts`, `coding-boundaries.test.ts`, `coding.spec.ts` |
 | Esquemas/SQL | `packages/contracts/`, `apps/api/migrations/` | Contrato del dominio | Compilar consumidores, `migrations.test.ts`, `database.integration.ts` |
 | Arranque/salud/Docker | `scripts/`, `compose*.yaml`, Dockerfiles, `apps/api/src/health.ts` | [Docker](docker.md), README para CA | `app.test.ts`, `status.spec.ts`, smoke; Compose si cambia operación |
@@ -80,7 +81,7 @@ try {
 }
 ```
 
-Sustituye la suite por la de la tabla. Para un recorrido de navegador, prepara también Qdrant (el fixture de navegador lo usa al limpiar) y aplica la misma limpieza: `docker @ferwebComposeArgs --profile tools run --rm --no-deps tools npm run test:browser -- coding.spec.ts`. Navegador completo necesita ambos fixtures. No ejecutes simultáneamente otras suites que los compartan.
+Sustituye la suite por la de la tabla. Para el recorrido de navegador de Codex, prepara también `ai-test` para el diagnóstico de capacidades y Qdrant para la limpieza. Ejecuta `docker @ferwebComposeArgs --profile tools run --rm --no-deps tools npm run test:browser -- coding.spec.ts` y retira los fixtures con la misma limpieza. Navegador completo necesita ambos fixtures. No ejecutes simultáneamente otras suites que los compartan.
 
 Solo Python: `docker @ferwebComposeArgs --profile tools build ai-test`, después `docker @ferwebComposeArgs --profile tools run --rm --no-deps ai-test python -m unittest discover -s tests -v`. Sin modelos reales ni `ferweb_ai.verify`.
 

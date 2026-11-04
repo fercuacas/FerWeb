@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
+import { skipToken } from '@reduxjs/toolkit/query';
+import { supportsAgent } from '@ferweb/contracts';
 import type { Job } from '@ferweb/contracts';
+import { agentsApi } from './agents-store';
 import { codingApi } from './coding-store';
 import { githubApi } from './github-store';
 import { workspaceApi, errorMessage } from './workspace-store';
@@ -15,6 +18,12 @@ export function CodingForm({
   const caps = codingApi.useCodingCapabilitiesQuery(project, { refetchOnFocus: true });
   const source = githubApi.useGithubLinkQuery(project, { refetchOnFocus: true });
   const tasks = workspaceApi.useTasksQuery({ projectId: project, filters: {} });
+  const agents = agentsApi.useAgentsQuery(project, { refetchOnFocus: true });
+  const [agentId, setAgentId] = useState('');
+  const [agentVersion, setAgentVersion] = useState(0);
+  const history = agentsApi.useAgentQuery(agentId ? { project, id: agentId } : skipToken, {
+    refetchOnFocus: true,
+  });
   const [taskId, setTask] = useState(''),
     [model, setModel] = useState(''),
     [timeoutMs, setTimeoutMs] = useState(120000),
@@ -26,6 +35,19 @@ export function CodingForm({
     link = source.currentData?.link;
   const options = caps.error ? undefined : caps.currentData;
   const selectedModel = model || options?.models[0] || '';
+  const roles = agents.error
+    ? []
+    : (agents.currentData?.roles.filter((role) => !role.archivedAt) ?? []);
+  const versions =
+    options &&
+    !agents.error &&
+    !history.error &&
+    roles.some((role) => role.id === agentId) &&
+    history.currentData &&
+    !history.currentData.role.archivedAt
+      ? history.currentData.versions.filter((version) => supportsAgent(version, options.execution))
+      : [];
+  const selectedAgent = versions.find((version) => version.version === agentVersion);
   const ready =
     !!task &&
     !!link?.snapshot &&
@@ -34,6 +56,7 @@ export function CodingForm({
     !link.snapshot.treeTruncated &&
     options?.execution.available &&
     options.models.includes(selectedModel) &&
+    (!agentId || !!selectedAgent) &&
     !source.error &&
     !caps.error &&
     !tasks.error;
@@ -56,6 +79,9 @@ export function CodingForm({
               timeoutMs,
               maxRequests,
               maxOutputTokens,
+              ...(selectedAgent && {
+                agent: { id: selectedAgent.id, version: selectedAgent.version },
+              }),
             },
           })
             .unwrap()
@@ -78,7 +104,8 @@ export function CodingForm({
           {options && <ExecutionDetails option={options.execution} />}
           {options?.execution.destination === 'openai-api' && (
             <p>
-              Al ejecutar, el contexto de la tarea se enviará a OpenAI mediante la API configurada.
+              Al ejecutar, el contexto de la tarea y las instrucciones del rol seleccionado se
+              enviarán a OpenAI mediante la API configurada.
             </p>
           )}
           {caps.isLoading || source.isLoading || tasks.isLoading ? (
@@ -107,6 +134,55 @@ export function CodingForm({
               ))}
             </select>
           </label>
+          <label>
+            Rol de agente
+            <select
+              value={agentId}
+              onChange={(e) => {
+                setAgentId(e.target.value);
+                setAgentVersion(0);
+              }}
+            >
+              <option value="">Sin rol personalizado</option>
+              {agentId && !roles.some((role) => role.id === agentId) && (
+                <option value={agentId} disabled>
+                  Rol seleccionado no disponible
+                </option>
+              )}
+              {roles.map((role) => (
+                <option key={role.id} value={role.id}>
+                  {role.latest.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          {agentId && (
+            <label>
+              Versión del agente
+              <select
+                value={selectedAgent?.version ?? ''}
+                disabled={!versions.length}
+                onChange={(e) => setAgentVersion(Number(e.target.value))}
+              >
+                <option value="">Seleccionar versión compatible</option>
+                {versions.map((version) => (
+                  <option key={version.version} value={version.version}>
+                    {version.name} · versión {version.version}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          {agents.isLoading || history.isFetching ? (
+            <p role="status">Consultando roles y versiones…</p>
+          ) : agentId && !versions.length && !agents.error && !history.error ? (
+            <p>No hay versiones de este rol compatibles con el ejecutor actual.</p>
+          ) : null}
+          {(agents.error || history.error) && (
+            <p role="alert" className="form-error">
+              {errorMessage(agents.error || history.error)}
+            </p>
+          )}
           <label>
             Modelo Codex
             <select value={selectedModel} onChange={(e) => setModel(e.target.value)}>
@@ -241,6 +317,14 @@ export function CodingView({
           <p className="job-id">
             {visible.repository} · commit {visible.commit}
           </p>
+          {visible.agent && (
+            <details>
+              <summary>
+                Rol congelado · {visible.agent.name} · versión {visible.agent.version}
+              </summary>
+              <pre>{JSON.stringify(visible.agent, null, 2)}</pre>
+            </details>
+          )}
           <details>
             <summary>Tarea y archivos de partida</summary>
             <pre>{JSON.stringify(visible.task, null, 2)}</pre>

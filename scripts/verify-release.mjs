@@ -185,7 +185,7 @@ try {
     ),
   );
   report.checks.push(
-    'fresh volumes + 10 migrations + compiled Chromium journey + cross-owner authorization + simulated worker + load',
+    'fresh volumes + applied migrations + compiled Chromium journey + cross-owner authorization + simulated worker + load',
   );
   // Freeze writers before hashing so timestamps/leases do not change between checkpoints.
   await options.run(['stop', 'web', 'api', 'worker', 'runner', 'ai', 'qdrant']);

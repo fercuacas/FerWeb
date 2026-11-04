@@ -274,6 +274,7 @@ export class ReviewService {
           acceptanceCriteria: row.task_snapshot.acceptanceCriteria,
         },
         toolsAndLimits: row.environment,
+        agent: row.agent_snapshot,
         configuration,
       };
     };

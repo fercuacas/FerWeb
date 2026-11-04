@@ -28,6 +28,8 @@ import { CodingService } from './modules/jobs/coding-service.js';
 import { codingRouter } from './modules/jobs/coding-routes.js';
 import { RunnerClient } from './modules/jobs/runner-client.js';
 import { describeChat, describeCoding } from './execution-capabilities.js';
+import { AgentCatalog } from './modules/agents/catalog.js';
+import { agentRouter } from './modules/agents/routes.js';
 
 export interface WorkspaceOptions {
   pool: Pool;
@@ -113,6 +115,7 @@ export function createWorkspaceRouter({
   if (retrieval) router.use(createRetrievalRouter(retrieval));
   if (laboratory) router.use(createLaboratoryRouter(laboratory));
   router.use(createJobRouter(new JobService(pool)));
+  router.use(agentRouter(new AgentCatalog(pool)));
   router.use(codingRouter(codingService));
   router.get('/projects', async (_request, response) => {
     response.json({ projects: await projects.list(owner(response)) });

@@ -95,7 +95,7 @@ export const workspaceApi = createApi({
     if (result.error?.status === 401) api.dispatch(workspaceUi.actions.sessionExpired());
     return result;
   },
-  tagTypes: ['Project', 'Task', 'GitHub', 'Conversation', 'Laboratory', 'Job'],
+  tagTypes: ['Project', 'Task', 'GitHub', 'Conversation', 'Laboratory', 'Job', 'Agent'],
   endpoints: (builder) => ({
     executionCapabilities: builder.query<ReturnType<typeof executionCatalogSchema.parse>, string>({
       query: () => '/execution/capabilities',

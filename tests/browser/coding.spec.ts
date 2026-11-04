@@ -61,17 +61,48 @@ test('Codex task UI freezes a commit, shows a verified diff, reloads evidence an
   });
   await post(`/projects/${project.id}/github/sync`, { version: 1 });
   await page.goto('/#/projects/' + project.id);
+  await page
+    .getByRole('navigation', { name: 'Navegación principal' })
+    .getByRole('link', { name: 'Agentes' })
+    .click();
+  await expect(page.getByRole('heading', { name: 'Agentes · Codex aislado' })).toBeVisible();
+  await page.getByRole('button', { name: 'Nuevo rol' }).press('Enter');
+  await expect(page.getByLabel('Nombre del rol')).toBeFocused();
+  await page.getByLabel('Nombre del rol').fill('Agente de suma');
+  await page.getByLabel('Propósito', { exact: true }).fill('Resolver la suma de prueba.');
+  await page.getByLabel('Instrucciones del rol').fill('Instrucciones congeladas de prueba.');
+  await page.getByLabel('Formato de salida').fill('Resumen y pruebas.');
+  await page.getByRole('button', { name: 'Crear rol', exact: true }).click();
+  const history = page.getByRole('region', { name: 'Historial del rol' });
+  await expect(history.getByText('Instrucciones congeladas de prueba.')).toBeVisible();
+  await page.getByRole('button', { name: 'Crear versión' }).click();
+  await page.getByLabel('Instrucciones del rol').fill('Instrucciones nuevas de prueba.');
+  await page.getByRole('button', { name: 'Guardar nueva versión' }).click();
+  await expect(history.getByText('Instrucciones nuevas de prueba.')).toBeVisible();
+  await page.getByLabel('Versión del historial').selectOption('1');
+  await expect(history.getByText('Instrucciones congeladas de prueba.')).toBeVisible();
+  await page.getByRole('link', { name: /Volver al proyecto/ }).click();
   await page.getByRole('button', { name: 'Trabajos', exact: true }).click();
   await page.getByText('Nueva tarea con Codex', { exact: true }).click();
   await expect(page.getByText(/Proveedor simulado.*Herramientas Node aisladas/)).toBeVisible();
   await page
     .getByRole('combobox', { name: 'Tarea de programación', exact: true })
     .selectOption(task.id);
+  await page
+    .getByRole('combobox', { name: 'Rol de agente', exact: true })
+    .selectOption({ label: 'Agente de suma' }, { timeout: 5000 });
+  await page
+    .getByRole('combobox', { name: 'Versión del agente', exact: true })
+    .selectOption('1', { timeout: 5000 });
   await page.getByRole('button', { name: 'Ejecutar tarea con Codex', exact: true }).click();
   await expect(page.getByText('Estado: Completado', { exact: true })).toBeVisible({
     timeout: 30000,
   });
   await expect(page.getByText('Snapshot final recogido.', { exact: true })).toBeVisible();
+  await page.getByText('Rol congelado · Agente de suma · versión 1', { exact: true }).click();
+  await expect(
+    page.locator('.job-view pre').filter({ hasText: 'Instrucciones congeladas de prueba.' }),
+  ).toBeVisible();
   await page.getByText('src/add.cjs', { exact: true }).click();
   await expect(page.locator('.job-view pre').filter({ hasText: 'diff --git' })).toContainText(
     '+exports.add = (a, b) => a + b;',
@@ -117,6 +148,9 @@ test('Codex task UI freezes a commit, shows a verified diff, reloads evidence an
   expect(repeatResponse.status()).toBe(202);
   const repeatedJob = (await repeatResponse.json()).job;
   await expect(page.getByText(`Identificador: ${repeatedJob.id}`, { exact: true })).toBeVisible();
+  await expect(
+    page.getByText('Rol congelado · Agente de suma · versión 1', { exact: true }),
+  ).toBeVisible();
   await expect(page.getByText('Estado: Completado', { exact: true })).toBeVisible({
     timeout: 30000,
   });
@@ -175,6 +209,23 @@ test('Codex task UI freezes a commit, shows a verified diff, reloads evidence an
     `/api/projects/${process.env.FERWEB_FOREIGN_PROJECT}/coding/capabilities`,
   );
   expect(foreign.status()).toBe(404);
+  const foreignCatalog = await page.request.get(
+    `/api/projects/${process.env.FERWEB_FOREIGN_PROJECT}/agents`,
+  );
+  expect(foreignCatalog.status()).toBe(404);
+  expect(await foreignCatalog.text()).not.toContain('Instrucciones congeladas');
+  await page
+    .getByRole('navigation', { name: 'Navegación móvil' })
+    .getByRole('link', { name: 'Agentes' })
+    .click();
+  await expect(page.getByRole('heading', { name: 'Agentes · Codex aislado' })).toBeVisible();
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
+  ).toBeTruthy();
+  await page.getByRole('button', { name: 'Ver historial' }).click();
+  await page.getByRole('button', { name: 'Archivar rol', exact: true }).click();
+  await page.getByRole('button', { name: 'Confirmar archivo' }).click();
+  await expect(page.getByText('Rol archivado. Historial de solo lectura.')).toBeVisible();
   const disconnect = await page.request.post('/api/github/disconnect', {
     headers: { Origin: origin, 'X-FerWeb-Request': '1' },
     data: {},
