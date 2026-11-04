@@ -23,7 +23,9 @@ Actualizado: **2026-11-04**. Evidencias anteriores en [history.md](history.md), 
 
 ## Límites y siguiente paso
 
-Despliegue permanente y CI hospedada pendientes. Las pruebas usan proveedores y GitHub simulados con CLI, procesos, SQL y Qdrant reales. Inferencia externa, ahorro y capacidad IA/GPU por medir.
+Despliegue permanente pendiente. GitHub Actions conserva el diagnóstico de arranque antes de limpiar. Docker 28.0.4 requiere negociar la API del controlador. [Ejecuciones de CI](https://github.com/fercuacas/FerWeb/actions)
+
+Las pruebas usan proveedores y GitHub simulados con CLI, procesos, SQL y Qdrant reales. Inferencia externa, ahorro y capacidad IA/GPU por medir.
 
 Reconstrucción cacheada valida capas/configuración web, no igualdad bit a bit entre constructores. Chat/índice/laboratorio siguen en proceso. Codex: perfil Node, kernel compartido, repositorios controlados y controlador privilegiado; [límites](codex.md). Carga breve sin saturación/SLA.
 

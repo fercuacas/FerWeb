@@ -21,13 +21,15 @@ try {
   });
   controller.server.listen(8010, '0.0.0.0');
   process.on('SIGTERM', () => void controller.close().then(() => process.exit(0)));
-} catch {
+} catch (error) {
   console.error(
     JSON.stringify({
       timestamp: new Date().toISOString(),
       level: 'error',
       service: 'runner',
       event: 'runner_start_failed',
+      ...(error instanceof Error &&
+        error.message === 'docker_api_incompatible' && { reason: 'docker_api_incompatible' }),
     }),
   );
   process.exit(1);

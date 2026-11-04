@@ -6,7 +6,20 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { modelPayload, attachUsageMeter, providerUsage } from '../../runner/policy.mjs';
 import { validateFiles, differences } from '../../runner/files.mjs';
+import { selectDockerApiVersion } from '../../runner/docker.mjs';
 import { publicationTree } from '../src/modules/jobs/review-artifacts.js';
+
+test('Docker API negotiation preserves isolated volume subpaths and the tested API ceiling', () => {
+  assert.equal(selectDockerApiVersion({ ApiVersion: '1.48', MinAPIVersion: '1.24' }), '1.48');
+  assert.equal(selectDockerApiVersion({ ApiVersion: '1.56', MinAPIVersion: '1.40' }), '1.51');
+  assert.equal(selectDockerApiVersion({ ApiVersion: '1.45', MinAPIVersion: '1.24' }), '1.45');
+  for (const versions of [
+    { ApiVersion: '1.44', MinAPIVersion: '1.24' },
+    { ApiVersion: '1.56', MinAPIVersion: '1.52' },
+    { ApiVersion: 'unknown', MinAPIVersion: '1.24' },
+  ])
+    assert.throws(() => selectDockerApiVersion(versions), /docker_api_incompatible/);
+});
 
 test('publication reconstructs collected text exactly, preserves modes and refuses tampered/excluded paths', () => {
   const before = [

@@ -62,6 +62,8 @@ Cada trabajo obtiene un contenedor y un volumen temporal propios. Los volúmenes
 
 La producción y las pruebas tienen redes/volúmenes y etiquetas de controlador separadas por proyecto Compose. Al reiniciar, cada controlador elimina solamente sus contenedores huérfanos y volúmenes temporales etiquetados. Las bases y volúmenes de la aplicación no forman parte de esa limpieza.
 
+El controlador negocia la API del motor por el socket local. Admite de 1.45 a 1.51 y utiliza la versión más alta del intervalo que acepte el motor. El mínimo conserva el montaje de un subdirectorio del volumen de control por ejecución. La versión negociada queda registrada en las condiciones congeladas. [Historial de la API de Docker](https://docs.docker.com/reference/api/engine/version-history/#v145-api-changes)
+
 ## Límites efectivos
 
 | Recurso | Límite aplicado |

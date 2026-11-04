@@ -1,7 +1,7 @@
 import http from 'node:http';
 import { mkdir, writeFile, chmod, rm, readdir, readFile } from 'node:fs/promises';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
-import { docker, json, demux } from './docker.mjs';
+import { connectDocker, demux } from './docker.mjs';
 import { validateFiles, differences, hash } from './files.mjs';
 import { modelPayload, attachUsageMeter, providerUsage } from './policy.mjs';
 
@@ -25,17 +25,19 @@ export async function createController({ token, configuration, fakeProvider, nam
   if (!token || token.length < 32) throw Error('runner_token_missing');
   if (!/^[a-z0-9][a-z0-9_-]{1,80}$/.test(namespace) || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]+$/.test(volume))
     throw Error('runner_scope_invalid');
+  const { docker, json, apiVersion } = await connectDocker();
   // Resolve the tag once. A rebuild must never change tools mid-run.
   const image = (await json('GET', '/images/ferweb-codex-sandbox:0.166.0/json')).Id;
   const environment = {
     image,
+    dockerApi: apiVersion,
     cli: '0.166.0',
     profile: 'node-isolated-v1',
     simulated: !!fakeProvider,
     policyHash: hash(
       (
         await Promise.all(
-          ['controller.mjs', 'policy.mjs', 'files.mjs'].map((file) =>
+          ['controller.mjs', 'policy.mjs', 'files.mjs', 'docker.mjs'].map((file) =>
             readFile(new URL(file, import.meta.url), 'utf8'),
           ),
         )
