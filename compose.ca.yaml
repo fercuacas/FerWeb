@@ -1,0 +1,32 @@
+# Optional build-only CA for HTTPS inspection by a trusted antivirus/proxy.
+services:
+  sandbox-image:
+    build:
+      secrets:
+        - npm_ca
+  worker:
+    build:
+      secrets:
+        - npm_ca
+  api:
+    build:
+      secrets: [npm_ca]
+  migrate:
+    build:
+      secrets: [npm_ca]
+  web:
+    build:
+      secrets: [npm_ca]
+  tools:
+    build:
+      secrets: [npm_ca]
+  ai:
+    build:
+      secrets: [npm_ca]
+  ai-test:
+    build:
+      secrets: [npm_ca]
+
+secrets:
+  npm_ca:
+    file: ${FERWEB_BUILD_CA_FILE:?Set FERWEB_BUILD_CA_FILE to a trusted PEM certificate}

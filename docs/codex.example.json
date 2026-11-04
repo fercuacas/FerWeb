@@ -1,0 +1,4 @@
+{
+  "apiKey": "replace-with-a-dedicated-openai-project-key",
+  "models": ["replace-with-your-enabled-codex-model"]
+}

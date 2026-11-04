@@ -1,0 +1,9 @@
+{
+  "appId": 123456,
+  "clientId": "replace-with-github-app-client-id",
+  "clientSecret": "replace-with-github-app-client-secret",
+  "appSlug": "replace-with-your-app-slug",
+  "webhookSecret": "replace-with-a-random-webhook-secret-of-at-least-32-characters",
+  "encryptionKey": "replace-with-base64-of-32-random-bytes",
+  "callbackUrl": "http://127.0.0.1:5173/api/github/callback"
+}

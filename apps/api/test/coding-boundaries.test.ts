@@ -1,0 +1,142 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { mkdtemp, writeFile, mkdir, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { modelPayload, attachUsageMeter, providerUsage } from '../../runner/policy.mjs';
+import { validateFiles, differences } from '../../runner/files.mjs';
+import { publicationTree } from '../src/modules/jobs/review-artifacts.js';
+
+test('publication reconstructs collected text exactly, preserves modes and refuses tampered/excluded paths', () => {
+  const before = [
+      { path: 'bin/run.js', content: 'old\nlast' },
+      { path: 'delete.txt', content: '' },
+    ],
+    after = [
+      { path: 'bin/run.js', content: 'new\nlast\n' },
+      { path: 'empty.txt', content: '' },
+      { path: 'unicode.txt', content: 'á\r\nsin salto' },
+    ],
+    source = [
+      { path: 'bin', type: 'tree', mode: '040000' },
+      { path: 'bin/run.js', type: 'blob', mode: '100755' },
+      { path: 'delete.txt', type: 'blob', mode: '100644' },
+      { path: 'link', type: 'blob', mode: '120000' },
+    ],
+    report = { diff: differences(before, after), diffComplete: true };
+  const tree = publicationTree(report, before, source);
+  assert.equal(tree.find((f) => f.path === 'bin/run.js')?.mode, '100755');
+  assert.equal(tree.find((f) => f.path === 'delete.txt')?.sha, null);
+  for (const file of after)
+    assert.equal(tree.find((f) => f.path === file.path)?.content, file.content);
+  assert.throws(() => publicationTree({ ...report, diffComplete: false }, before, source));
+  assert.throws(() =>
+    publicationTree({ ...report, diff: [...report.diff, report.diff[0]] }, before, source),
+  );
+  for (const path of [
+    '../escape',
+    'AGENTS.md',
+    '.env',
+    '.github/workflows/ci.yml',
+    'link',
+    'link/child',
+    'bin',
+  ]) {
+    const changed = differences([], [{ path, content: 'unsafe' }]);
+    assert.throws(() => publicationTree({ diff: changed, diffComplete: true }, before, source));
+  }
+  const changed = differences(before, after);
+  changed[0].patch = changed[0].patch.replace('+new', '+tampered');
+  assert.throws(() => publicationTree({ diff: changed, diffComplete: true }, before, source));
+});
+test('coding boundary rejects path escapes, duplicate files and remote model tools or references', () => {
+  for (const path of [
+    '../escape',
+    '/etc/passwd',
+    'src/../../escape',
+    '.git/config',
+    '.codex/config.toml',
+    'src/AGENTS.md',
+    'bad\npath',
+  ])
+    assert.throws(() => validateFiles([{ path, content: 'x' }]));
+  assert.throws(() =>
+    validateFiles([
+      { path: 'src/x.js', content: 'x' },
+      { path: 'src/x.js', content: 'y' },
+    ]),
+  );
+  const run = { input: { model: 'fixture', maxOutputTokens: 512, jobId: 'job' } },
+    base = {
+      model: 'fixture',
+      stream: true,
+      input: [{ role: 'user', content: [{ type: 'input_text', text: 'task' }] }],
+      tools: [{ type: 'function', name: 'exec_command' }],
+    };
+  assert.equal(modelPayload(base, run).store, false);
+  assert.equal(modelPayload(base, run).max_output_tokens, 512);
+  for (const extra of [
+    { model: 'other' },
+    { previous_response_id: 'resp_private' },
+    { conversation: 'private' },
+    { tools: [{ type: 'web_search' }] },
+    { tools: [{ type: 'file_search' }] },
+    { input: [{ type: 'item_reference', id: 'private' }] },
+    { input: [{ role: 'user', content: [{ type: 'input_file', file_id: 'private' }] }] },
+  ])
+    assert.throws(() => modelPayload({ ...base, ...extra }, run));
+});
+test('provider usage meter preserves missing values and incomplete requests independently of agent events', () => {
+  const run = { requests: 1, meters: [] },
+    res = { write: () => true };
+  attachUsageMeter(run, res);
+  const message =
+    'data: ' +
+    JSON.stringify({
+      type: 'response.completed',
+      response: {
+        usage: { input_tokens: 100, output_tokens: 20, input_tokens_details: { cached_tokens: 0 } },
+      },
+    }) +
+    '\r\n\r\n';
+  res.write(Buffer.from(message.slice(0, 15)));
+  res.write(Buffer.from(message.slice(15)));
+  assert.equal(providerUsage(run).inputTokens, 100);
+  assert.equal(providerUsage(run).cachedInputTokens, 0);
+  assert.equal(providerUsage(run).reasoningTokens, null);
+  run.requests++;
+  attachUsageMeter(run, { write: () => true });
+  assert.equal(providerUsage(run).reportedRequests, 1);
+  assert.equal(providerUsage(run).inputTokens, null);
+});
+test('text diff applies cleanly including additions, deletions, spaces, quotes and missing final newline', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'ferweb-diff-'));
+  const before = [
+      { path: 'src/a "quoted" file.js', content: 'old\nlast' },
+      { path: 'delete.txt', content: '' },
+    ],
+    after = [
+      { path: 'src/a "quoted" file.js', content: 'new\nlast\n' },
+      { path: 'new empty.txt', content: '' },
+      { path: 'added.txt', content: 'new' },
+    ];
+  try {
+    await mkdir(join(dir, 'src'));
+    for (const f of before) await writeFile(join(dir, f.path), f.content);
+    const init = spawnSync('git', ['init', '--quiet'], { cwd: dir });
+    assert.equal(init.status, 0);
+    const apply = spawnSync('git', ['apply', '-'], {
+      cwd: dir,
+      input: differences(before, after)
+        .map((f) => f.patch)
+        .join(''),
+      encoding: 'utf8',
+    });
+    assert.equal(apply.status, 0, apply.stderr);
+    for (const f of after) assert.equal(await readFile(join(dir, f.path), 'utf8'), f.content);
+    await assert.rejects(readFile(join(dir, 'delete.txt')));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

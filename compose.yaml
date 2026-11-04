@@ -1,0 +1,320 @@
+name: ferweb
+
+x-api-build: &api-build
+  context: .
+  dockerfile: apps/api/Dockerfile
+
+x-database-environment: &database-environment
+  POSTGRES_DB: ${POSTGRES_DB:?Run npm run setup or copy .env.example to .env}
+  POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+  PGHOST: db
+  PGPORT: '5432'
+
+services:
+  sandbox-image:
+    profiles: ['build-sandbox']
+    image: ferweb-codex-sandbox:0.166.0
+    build:
+      context: .
+      dockerfile: apps/sandbox/Dockerfile
+
+  runner:
+    build:
+      context: .
+      dockerfile: apps/runner/Dockerfile
+    init: true
+    restart: unless-stopped
+    environment:
+      RUNNER_SERVICE_TOKEN: ${RUNNER_SERVICE_TOKEN:?Run npm run setup}
+      RUNNER_RUNTIME_VOLUME: ${COMPOSE_PROJECT_NAME:-ferweb}_runner_runtime
+      RUNNER_NAMESPACE: ${COMPOSE_PROJECT_NAME:-ferweb}-production
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - runner_runtime:/runtime
+    read_only: true
+    cap_drop: ['ALL']
+    security_opt: ['no-new-privileges:true']
+    mem_limit: 384m
+    pids_limit: 64
+    stop_grace_period: 15s
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:8010/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+
+  runner-test:
+    profiles: ['tools']
+    build:
+      context: .
+      dockerfile: apps/runner/Dockerfile
+    command: ['node', 'test-server.mjs']
+    init: true
+    environment:
+      RUNNER_SERVICE_TOKEN: ferweb-test-only-runner-token-1234567890
+      RUNNER_RUNTIME_VOLUME: ${COMPOSE_PROJECT_NAME:-ferweb}_runner_test_runtime
+      RUNNER_NAMESPACE: ${COMPOSE_PROJECT_NAME:-ferweb}-test
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - runner_test_runtime:/runtime
+    read_only: true
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:8010/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  db:
+    image: postgres:18.6-bookworm@sha256:5c4783a8cc3f0074912164f94dfa1be4e043438f0f707cf968d7af9a0d31a2c8
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    stop_grace_period: 30s
+
+  migrate:
+    build: *api-build
+    environment: *database-environment
+    command: ['npm', 'run', 'db:migrate', '-w', '@ferweb/api']
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: 'no'
+
+  api:
+    build: *api-build
+    restart: unless-stopped
+    init: true
+    environment:
+      RUNNER_SERVICE_TOKEN: ${RUNNER_SERVICE_TOKEN:?Run npm run setup}
+      RUNNER_URL: http://runner:8010
+      <<: *database-environment
+      HOST: 0.0.0.0
+      PORT: '3001'
+      APP_ORIGIN: ${APP_ORIGIN:-http://127.0.0.1:${WEB_PORT:-5173}}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      CHOKIDAR_USEPOLLING: ${WATCH_POLLING:-true}
+      AI_SERVICE_URL: http://ai:8000
+      AI_SERVICE_TOKEN: ${AI_SERVICE_TOKEN:?Run npm run setup to generate AI_SERVICE_TOKEN}
+      QDRANT_URL: http://qdrant:6333
+    ports:
+      - '127.0.0.1:${API_PORT:-3001}:3001'
+    volumes:
+      - ./apps/api/src:/app/apps/api/src:ro
+    depends_on:
+      ai:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3001/api/health/ready', {signal: AbortSignal.timeout(3000)}).then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 4s
+      retries: 12
+      start_period: 10s
+
+  web:
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    init: true
+    environment:
+      HOST: 0.0.0.0
+      WEB_PORT: '5173'
+      API_PROXY_TARGET: http://api:3001
+      WATCH_POLLING: ${WATCH_POLLING:-true}
+    ports:
+      - '127.0.0.1:${WEB_PORT:-5173}:5173'
+    volumes:
+      - ./apps/web/src:/app/apps/web/src:ro
+      - ./apps/web/index.html:/app/apps/web/index.html:ro
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:5173/', {signal: AbortSignal.timeout(3000)}).then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 4s
+      retries: 6
+      start_period: 10s
+
+  worker:
+    build: *api-build
+    command: ['node', 'dist/job-worker.js']
+    init: true
+    restart: unless-stopped
+    environment:
+      RUNNER_SERVICE_TOKEN: ${RUNNER_SERVICE_TOKEN:?Run npm run setup}
+      RUNNER_URL: http://runner:8010
+      FERWEB_INTERNAL_API_URL: http://api:3001
+      <<: *database-environment
+      JOB_WORKER_CONCURRENCY: ${JOB_WORKER_CONCURRENCY:-2}
+      JOB_WORKER_LEASE_MS: ${JOB_WORKER_LEASE_MS:-5000}
+      JOB_WORKER_HEALTH_PORT: '3002'
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16777216,mode=1777
+    cap_drop: ['ALL']
+    security_opt: ['no-new-privileges:true']
+    pids_limit: 64
+    mem_limit: 384m
+    cpus: 1
+    stop_grace_period: 10s
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:3002/health',{signal:AbortSignal.timeout(3000)}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 4s
+      retries: 12
+      start_period: 10s
+
+  tools:
+    profiles: ['tools']
+    build:
+      context: .
+      dockerfile: Dockerfile.tools
+    init: true
+    shm_size: 1gb
+    environment:
+      RUNNER_URL: http://runner-test:8010
+      RUNNER_SERVICE_TOKEN: ferweb-test-only-runner-token-1234567890
+      <<: *database-environment
+      AI_TEST_URL: http://ai-test:8000
+      AI_TEST_TOKEN: ferweb-test-only-internal-token-1234567890
+      QDRANT_URL: http://qdrant:6333
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./.artifacts/docker-tests:/app/test-results
+      - ./.artifacts/evaluations:/app/evaluations
+
+  ai:
+    build:
+      context: .
+      dockerfile: apps/ai/Dockerfile
+      target: runtime
+    init: true
+    restart: unless-stopped
+    environment:
+      AI_SERVICE_TOKEN: ${AI_SERVICE_TOKEN:?Run npm run setup}
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'python',
+          '-c',
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health',timeout=3)",
+        ]
+      interval: 5s
+      timeout: 4s
+      retries: 12
+      start_period: 10s
+
+  ai-test:
+    profiles: ['tools']
+    build:
+      context: .
+      dockerfile: apps/ai/Dockerfile
+      target: tests
+    init: true
+    environment:
+      AI_SERVICE_TOKEN: ferweb-test-only-internal-token-1234567890
+    command:
+      [
+        'uvicorn',
+        'tests.fake_app:app',
+        '--host',
+        '0.0.0.0',
+        '--port',
+        '8000',
+        '--no-access-log',
+        '--log-level',
+        'warning',
+      ]
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'python',
+          '-c',
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health',timeout=3)",
+        ]
+      interval: 2s
+      timeout: 4s
+      retries: 15
+
+  qdrant:
+    image: qdrant/qdrant:v1.20.0@sha256:9bfc89f9914fc14876a88c05270685921a55b8877b254a98bcc1cc2f0a424cd2
+    restart: unless-stopped
+    environment:
+      QDRANT__TELEMETRY_DISABLED: 'true'
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          "bash -c 'exec 3<>/dev/tcp/127.0.0.1/6333; printf \"GET /readyz HTTP/1.0\\r\\n\\r\\n\" >&3; read -r status <&3; [[ \"$$status\" == *\"200\"* ]]'",
+        ]
+      interval: 5s
+      timeout: 4s
+      retries: 12
+      start_period: 10s
+
+volumes:
+  runner_test_runtime:
+  runner_runtime:
+  postgres_data:
+  qdrant_data:

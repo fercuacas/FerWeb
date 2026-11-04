@@ -1,0 +1,127 @@
+.github-panel {
+  min-width: 0;
+}
+.github-panel h2 {
+  margin-top: 1.8rem;
+}
+.github-panel p {
+  line-height: 1.6;
+}
+.github-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.8rem;
+  margin: 1rem 0;
+}
+.github-installation {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 0;
+  border-bottom: 1px solid var(--line, #ddd);
+}
+.github-installation small,
+.github-provenance span {
+  display: block;
+  margin-top: 0.4rem;
+}
+.github-empty,
+.github-link-form,
+.github-provenance {
+  padding: 1.4rem;
+  border: 1px solid #dce3db;
+  background: #fafbf7;
+  border-radius: 16px;
+  margin: 1rem 0;
+}
+.github-link-form {
+  max-width: 700px;
+}
+.github-link-form label,
+.github-panel > label {
+  display: grid;
+  gap: 0.5rem;
+  margin: 1rem 0;
+}
+.github-link-form input,
+.github-link-form select,
+.github-panel > label input {
+  width: 100%;
+  padding: 0.8rem;
+  border: 1px solid #c8d2c5;
+  border-radius: 8px;
+  background: white;
+  font: inherit;
+}
+.github-provenance code {
+  overflow-wrap: anywhere;
+}
+.github-explorer {
+  display: grid;
+  grid-template-columns: minmax(200px, 1fr) minmax(0, 2fr);
+  gap: 1rem;
+  margin-top: 1rem;
+}
+.github-tree {
+  border: 1px solid #dce3db;
+  border-radius: 12px;
+  padding: 1rem;
+  min-width: 0;
+}
+.github-tree ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  max-height: 550px;
+  overflow: auto;
+}
+.github-tree li {
+  padding: 0.4rem 0;
+  overflow-wrap: anywhere;
+}
+.github-tree button {
+  text-align: left;
+  overflow-wrap: anywhere;
+  max-width: 100%;
+}
+.github-file {
+  min-width: 0;
+}
+.github-file h3,
+.github-file p {
+  overflow-wrap: anywhere;
+}
+.github-file pre {
+  padding: 1rem;
+  max-height: 600px;
+  overflow: auto;
+  background: #152d28;
+  color: #f3f6ef;
+  border-radius: 12px;
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+.github-item {
+  padding: 1rem;
+  border-bottom: 1px solid #dce3db;
+}
+.github-item summary {
+  cursor: pointer;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.github-item p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 800px) {
+  .github-explorer {
+    grid-template-columns: 1fr;
+  }
+  .github-installation {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

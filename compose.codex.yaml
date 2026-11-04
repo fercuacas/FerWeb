@@ -1,0 +1,9 @@
+services:
+  runner:
+    environment:
+      FERWEB_CODEX_CONFIG: /run/secrets/codex.json
+    volumes:
+      - type: bind
+        source: ${FERWEB_CODEX_CONFIG_FILE:?Set FERWEB_CODEX_CONFIG_FILE}
+        target: /run/secrets/codex.json
+        read_only: true

@@ -1,0 +1,8 @@
+{
+  "openaiApiKey": "",
+  "openaiModels": [],
+  "ollamaUrl": "http://host.docker.internal:11434",
+  "ollamaModels": [],
+  "embeddingModel": "",
+  "embeddingDimensions": 768
+}

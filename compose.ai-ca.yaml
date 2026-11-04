@@ -1,0 +1,11 @@
+services:
+  ai:
+    environment:
+      AI_EXTRA_CA_FILE: /run/secrets/ai-ca.pem
+    volumes:
+      - type: bind
+        source: ${FERWEB_BUILD_CA_FILE:?Set the trusted public CA path}
+        target: /run/secrets/ai-ca.pem
+        read_only: true
+        bind:
+          create_host_path: false

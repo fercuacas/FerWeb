@@ -1,0 +1,67 @@
+# Overlay: docker compose -f compose.yaml -f compose.release.yaml ...
+# Always select a separate project and private env file; see docs/deployment.md.
+x-logging: &logging
+  driver: json-file
+  options: { max-size: '10m', max-file: '3' }
+x-hardening: &hardening
+  read_only: true
+  cap_drop: ['ALL']
+  security_opt: ['no-new-privileges:true']
+  pids_limit: 128
+  logging: *logging
+services:
+  api:
+    <<: *hardening
+    build: { target: runtime, args: { SOURCE_DATE_EPOCH: '${SOURCE_DATE_EPOCH:-0}' } }
+    image: ferweb-api:${FERWEB_RELEASE_TAG:-candidate}
+    command: ['node', 'dist/server.js']
+    environment:
+      NODE_ENV: production
+      APP_ORIGIN: ${APP_ORIGIN:?Set the exact browser origin in the release env file}
+      COOKIE_SECURE: ${COOKIE_SECURE:?Set COOKIE_SECURE explicitly}
+      METRICS_TOKEN: ${METRICS_TOKEN:?Generate a private metrics token}
+    ports: !reset []
+    volumes: !reset []
+    tmpfs: ['/tmp:rw,noexec,nosuid,size=16777216,mode=1777']
+    mem_limit: 768m
+    cpus: 2
+  web:
+    <<: *hardening
+    build: { target: runtime, args: { SOURCE_DATE_EPOCH: '${SOURCE_DATE_EPOCH:-0}' } }
+    image: ferweb-web:${FERWEB_RELEASE_TAG:-candidate}
+    environment: { NODE_ENV: production }
+    volumes: !reset []
+    mem_limit: 192m
+    cpus: 1
+  migrate:
+    <<: *hardening
+    build: { target: runtime, args: { SOURCE_DATE_EPOCH: '${SOURCE_DATE_EPOCH:-0}' } }
+    image: ferweb-api:${FERWEB_RELEASE_TAG:-candidate}
+    command: ['node', 'dist/migrate.js']
+    restart: 'no'
+    mem_limit: 384m
+  worker:
+    build: { target: runtime, args: { SOURCE_DATE_EPOCH: '${SOURCE_DATE_EPOCH:-0}' } }
+    image: ferweb-api:${FERWEB_RELEASE_TAG:-candidate}
+    logging: *logging
+  ai:
+    <<: *hardening
+    image: ferweb-ai:${FERWEB_RELEASE_TAG:-candidate}
+    build: { args: { SOURCE_DATE_EPOCH: '${SOURCE_DATE_EPOCH:-0}' } }
+    tmpfs: ['/tmp:rw,noexec,nosuid,size=16777216,mode=1777']
+    mem_limit: 512m
+    cpus: 2
+  runner:
+    image: ferweb-runner:${FERWEB_RELEASE_TAG:-candidate}
+    build: { args: { SOURCE_DATE_EPOCH: '${SOURCE_DATE_EPOCH:-0}' } }
+    logging: *logging
+  db:
+    logging: *logging
+    mem_limit: 1g
+    cpus: 2
+    pids_limit: 256
+  qdrant:
+    logging: *logging
+    mem_limit: 1g
+    cpus: 2
+    pids_limit: 128

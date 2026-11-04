@@ -1,0 +1,12 @@
+# Optional runtime trust for the API when GitHub HTTPS is inspected locally.
+services:
+  api:
+    environment:
+      NODE_EXTRA_CA_CERTS: /run/secrets/github-ca.pem
+    volumes:
+      - type: bind
+        source: ${FERWEB_BUILD_CA_FILE:?Set the trusted public CA path}
+        target: /run/secrets/github-ca.pem
+        read_only: true
+        bind:
+          create_host_path: false

@@ -1,0 +1,12 @@
+# Only Python receives provider credentials.
+services:
+  ai:
+    environment:
+      AI_PROVIDER_FILE: /run/secrets/ai-providers.json
+    volumes:
+      - type: bind
+        source: ${FERWEB_AI_CONFIG_FILE:?Set the private AI configuration path}
+        target: /run/secrets/ai-providers.json
+        read_only: true
+        bind:
+          create_host_path: false

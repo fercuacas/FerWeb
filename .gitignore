@@ -1,0 +1,41 @@
+# Secretos y configuración local
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+secrets/
+
+# Dependencias y herramientas
+node_modules/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+
+# Compilación, pruebas y registros
+dist/
+build/
+coverage/
+playwright-report/
+test-results/
+*.log
+*.tsbuildinfo
+
+# Datos privados, modelos y espacios de ejecución
+.local/
+.data/
+.models/
+.workspaces/
+.artifacts/
+backups/
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+Desktop.ini

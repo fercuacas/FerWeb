@@ -1,0 +1,138 @@
+.conversations-layout {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(0, 3fr);
+  gap: 24px;
+}
+.conversations-layout > div,
+.chat-view {
+  min-width: 0;
+}
+.conversation-choice {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 14px;
+  background: #fafbf7;
+  border: 1px solid #dce3db;
+  border-radius: 10px;
+  margin-bottom: 10px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.conversation-choice[aria-pressed='true'] {
+  background: #e5eadc;
+  border-color: #6a805a;
+}
+.conversation-choice small {
+  display: block;
+  margin-top: 8px;
+}
+.conversation-editor,
+.chat-view form {
+  display: grid;
+  gap: 14px;
+}
+.conversation-editor label,
+.chat-view label {
+  display: grid;
+  gap: 7px;
+}
+.chat-view textarea {
+  width: 100%;
+  padding: 12px;
+  resize: vertical;
+  border: 1px solid #c8d2c5;
+  border-radius: 8px;
+  font: inherit;
+}
+.chat-context-note {
+  font-size: 12px;
+  color: #63715c;
+  line-height: 1.6;
+}
+.chat-message {
+  padding: 18px;
+  border: 1px solid #dce3db;
+  border-radius: 12px;
+  margin: 14px 0;
+  background: #fffefa;
+  overflow-wrap: anywhere;
+}
+.user-message {
+  background: #edf0e5;
+}
+.chat-message p {
+  white-space: pre-wrap;
+  line-height: 1.7;
+}
+.chat-state {
+  display: inline-block;
+  margin-left: 12px;
+  font-size: 12px;
+  color: #63715c;
+}
+.chat-message summary {
+  cursor: pointer;
+  margin-top: 12px;
+  font-size: 12px;
+}
+.chat-metrics {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  font-size: 12px;
+}
+.chat-metrics dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.repository-context {
+  margin: 18px 0;
+  padding: 16px;
+  border: 1px solid #d9dfd5;
+  border-radius: 12px;
+}
+.repository-context summary {
+  cursor: pointer;
+}
+.context-sources {
+  padding-left: 22px;
+}
+.context-sources li {
+  margin: 12px 0;
+  overflow-wrap: anywhere;
+}
+.context-sources small {
+  display: block;
+  margin: 6px 0;
+  color: #63715c;
+}
+.context-sources pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+.chat-view .context-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.chat-view .context-option input {
+  width: 18px;
+  height: 18px;
+  min-height: 0;
+  padding: 0;
+  margin: 0;
+  flex-shrink: 0;
+  accent-color: #435737;
+}
+@media (max-width: 800px) {
+  .conversations-layout {
+    grid-template-columns: 1fr;
+  }
+  .conversations-layout > nav {
+    max-height: 220px;
+    overflow: auto;
+  }
+}

@@ -1,0 +1,115 @@
+import { z } from 'zod';
+import { executionOptionSchema } from './execution.js';
+export const codingConfiguration = z.strictObject({
+  taskId: z.uuid(),
+  commit: z.string().regex(/^[a-f0-9]{40}$/),
+  model: z.string().min(1).max(100),
+  maxRequests: z.number().int().min(1).max(20),
+  maxOutputTokens: z.number().int().min(64).max(8192),
+  limits: z.strictObject({
+    timeoutMs: z.number().int().min(10000).max(1200000),
+    maxAttempts: z.literal(1),
+  }),
+});
+export const codingInput = z.strictObject({
+  requestId: z.uuid(),
+  taskId: z.uuid(),
+  taskVersion: z.number().int().positive(),
+  commit: z.string().regex(/^[a-f0-9]{40}$/),
+  model: z.string().min(1).max(100),
+  timeoutMs: z.number().int().min(10000).max(1200000),
+  maxRequests: z.number().int().min(1).max(20),
+  maxOutputTokens: z.number().int().min(64).max(8192),
+});
+export const codingCapabilities = z.object({
+  available: z.boolean(),
+  models: z.array(z.string()),
+  simulated: z.boolean(),
+  environment: z.record(z.string(), z.unknown()).nullable().default(null),
+});
+export const codingCapabilitiesResponse = codingCapabilities.extend({
+  execution: executionOptionSchema,
+});
+const nullableCount = z.number().int().nonnegative().nullable();
+const command = z.object({
+  command: z.string(),
+  output: z.string(),
+  exitCode: z.number().nullable(),
+  origin: z.string(),
+  status: z.string().optional(),
+});
+export const codingReport = z.object({
+  providerUsage: z
+    .object({
+      reportedRequests: z.number().int(),
+      totalRequests: z.number().int(),
+      inputTokens: nullableCount,
+      cachedInputTokens: nullableCount,
+      outputTokens: nullableCount,
+      reasoningTokens: nullableCount,
+    })
+    .optional(),
+  kind: z.literal('codex-v1'),
+  jobId: z.uuid(),
+  commit: z.string(),
+  repository: z.string(),
+  task: z.record(z.string(), z.unknown()),
+  model: z.string(),
+  cliVersion: z.string(),
+  simulated: z.boolean(),
+  startedAt: z.string(),
+  finishedAt: z.string().nullable(),
+  summary: z.string(),
+  commands: z.array(command),
+  tests: z.array(command),
+  diff: z.array(
+    z.object({
+      path: z.string(),
+      patch: z.string(),
+      beforeHash: z.string().nullable(),
+      afterHash: z.string().nullable(),
+    }),
+  ),
+  diffComplete: z.boolean(),
+  usage: z
+    .object({
+      inputTokens: nullableCount,
+      cachedInputTokens: nullableCount,
+      outputTokens: nullableCount,
+      reasoningTokens: nullableCount,
+    })
+    .nullable(),
+  cost: z.null(),
+  durationMs: z.number().nullable(),
+  modelRequests: z.number().int(),
+  terminationConfirmed: z.boolean().nullable(),
+  limitations: z.array(z.string()),
+  reason: z.string().optional(),
+  agentExitCode: z.number().nullable().optional(),
+  turnCompleted: z.boolean().optional(),
+  agentError: z.boolean().optional(),
+  oomKilled: z.boolean().optional(),
+});
+export const codingRunSchema = z.object({
+  jobId: z.uuid(),
+  task: z.record(z.string(), z.unknown()),
+  commit: z.string(),
+  repository: z.string(),
+  baseBranch: z.string().nullable(),
+  environment: z.record(z.string(), z.unknown()).nullable(),
+  manifest: z.array(z.object({ path: z.string(), sha: z.string(), contentHash: z.string() })),
+  excluded: z.array(z.string()),
+  report: codingReport.nullable(),
+});
+export function codingPath(path: string) {
+  return (
+    path.length <= 220 &&
+    !/[\x00-\x1f\x7f\\]/.test(path) &&
+    !path.startsWith('/') &&
+    path.split('/').every((p) => p && p !== '.' && p !== '..') &&
+    !path.split('/').some((p) => /^\.(git|codex|env)(\.|$)/i.test(p)) &&
+    !/(^|\/)(AGENTS\.md|node_modules|secrets|backups|\.local)(\/|$)|\.(pem|key|p12|pfx)$/i.test(
+      path,
+    )
+  );
+}

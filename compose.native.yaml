@@ -1,0 +1,5 @@
+# Optional: expose PostgreSQL only for npm-based development on the host.
+services:
+  db:
+    ports:
+      - '127.0.0.1:${POSTGRES_PORT:-5432}:5432'

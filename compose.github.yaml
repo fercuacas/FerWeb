@@ -1,0 +1,12 @@
+# Opt-in: only the API receives the GitHub App configuration.
+services:
+  api:
+    environment:
+      GITHUB_CONFIG_FILE: /run/secrets/github-app.json
+    volumes:
+      - type: bind
+        source: ${FERWEB_GITHUB_CONFIG_FILE:?Set the private GitHub App configuration path}
+        target: /run/secrets/github-app.json
+        read_only: true
+        bind:
+          create_host_path: false

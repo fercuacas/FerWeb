@@ -1,0 +1,108 @@
+.laboratory {
+  min-width: 0;
+}
+.filter-tabs[aria-label='Secciones del proyecto'] {
+  flex-wrap: wrap;
+}
+.lab-editors > details,
+.lab-batch > details,
+.lab-run {
+  border: 1px solid #d9dfd5;
+  border-radius: 10px;
+  padding: 16px;
+  margin: 14px 0;
+  background: #fcfcf8;
+}
+.laboratory summary {
+  cursor: pointer;
+  line-height: 1.6;
+}
+.lab-form {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+}
+.lab-form label {
+  display: grid;
+  gap: 7px;
+}
+.lab-form textarea {
+  width: 100%;
+  padding: 12px;
+  resize: vertical;
+  border: 1px solid #d8dfce;
+  border-radius: 6px;
+  font: inherit;
+  background: #fffefa;
+}
+.lab-form fieldset {
+  min-width: 0;
+  border: 1px solid #d8dfce;
+  border-radius: 8px;
+  padding: 14px;
+  display: grid;
+  gap: 12px;
+}
+.lab-form .lab-check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.laboratory .lab-check input {
+  width: 18px;
+  height: 18px;
+  min-height: 0;
+  padding: 0;
+  margin: 0;
+  flex-shrink: 0;
+  accent-color: #435737;
+}
+.lab-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+.lab-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 14px 0;
+}
+.lab-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 18px 0;
+}
+.lab-table-wrap table {
+  border-collapse: collapse;
+  width: 100%;
+  min-width: 950px;
+  font-size: 12px;
+}
+.lab-table-wrap th,
+.lab-table-wrap td {
+  padding: 12px;
+  text-align: left;
+  border-bottom: 1px solid #d8dfce;
+  vertical-align: top;
+}
+.lab-table-wrap caption {
+  text-align: left;
+  font-weight: 600;
+  padding: 8px 0;
+}
+.laboratory small {
+  display: block;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+  color: #63715c;
+}
+.laboratory pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+  font-size: 13px;
+}
+.laboratory .chat-metrics {
+  margin: 18px 0;
+}

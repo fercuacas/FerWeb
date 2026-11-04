@@ -1,0 +1,9 @@
+services:
+  runner:
+    environment:
+      NODE_EXTRA_CA_CERTS: /run/certs/codex-ca.pem
+    volumes:
+      - type: bind
+        source: ${FERWEB_BUILD_CA_FILE:?Set FERWEB_BUILD_CA_FILE}
+        target: /run/certs/codex-ca.pem
+        read_only: true

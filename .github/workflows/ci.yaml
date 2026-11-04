@@ -1,0 +1,38 @@
+name: FerWeb checks
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ferweb-ci-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  containers:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      COMPOSE_PROJECT_NAME: ferweb-ci-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6, verified upstream
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6, verified upstream
+        with:
+          node-version: 24.22.2
+      - name: Prepare disposable configuration
+        run: |
+          npm run setup
+          mkdir -p .artifacts/docker-tests .artifacts/evaluations
+          chmod 777 .artifacts/docker-tests .artifacts/evaluations
+      - name: Types, build, unit, integration, browser and simulated providers
+        run: npm run docker:check
+      - name: Clean release images, browser journey, load and backup/restore
+        run: npm run release:check
+      - name: Cleanup this CI project only
+        if: always()
+        shell: bash
+        run: |
+          case "$COMPOSE_PROJECT_NAME" in ferweb-ci-[0-9]*-[0-9]*) ;; *) exit 1 ;; esac
+          docker compose -p "$COMPOSE_PROJECT_NAME" --profile tools down --volumes --remove-orphans

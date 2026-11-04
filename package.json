@@ -1,0 +1,60 @@
+{
+  "name": "ferweb",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=24.22.2 <25",
+    "npm": ">=11.19.1 <12"
+  },
+  "packageManager": "npm@11.19.1",
+  "scripts": {
+    "setup": "node scripts/setup.mjs",
+    "dev": "node scripts/docker.mjs up",
+    "dev:native": "npm run build -w @ferweb/contracts && node scripts/dev.mjs",
+    "docker:up": "node scripts/docker.mjs up",
+    "docker:stop": "node scripts/docker.mjs stop",
+    "docker:restart": "node scripts/docker.mjs restart",
+    "docker:status": "node scripts/docker.mjs status",
+    "docker:logs": "node scripts/docker.mjs logs",
+    "docker:check": "node scripts/docker.mjs check",
+    "docker:format": "node scripts/docker.mjs format",
+    "build": "npm run build -w @ferweb/contracts && npm run build -w @ferweb/api && npm run build -w @ferweb/web",
+    "typecheck": "npm run build -w @ferweb/contracts && npm run typecheck --workspaces --if-present",
+    "test": "npm run build -w @ferweb/contracts && node --import tsx --test apps/api/test/app.test.ts apps/api/test/migrations.test.ts apps/api/test/identity.test.ts apps/api/test/coding-boundaries.test.ts apps/api/test/observability.test.ts",
+    "test:browser": "npm run build && node scripts/test-browser.mjs",
+    "test:integration": "node --env-file-if-exists=.env --import tsx --test --test-concurrency=1 apps/api/test/database.integration.ts apps/api/test/workspace.integration.ts apps/api/test/github.integration.ts apps/api/test/chat.integration.ts apps/api/test/retrieval.integration.ts apps/api/test/laboratory.integration.ts apps/api/test/jobs.integration.ts apps/api/test/coding.integration.ts apps/api/test/review.integration.ts apps/api/test/context.integration.ts",
+    "db:migrate": "node scripts/docker.mjs migrate",
+    "owner:create": "node scripts/docker.mjs owner",
+    "check:smoke": "npm run build -w @ferweb/contracts && node scripts/smoke.mjs",
+    "check:compose": "npm run build -w @ferweb/contracts && node scripts/verify-compose.mjs",
+    "release:setup": "node scripts/release.mjs setup",
+    "release:build": "node scripts/release.mjs build",
+    "release:start": "node scripts/release.mjs start",
+    "release:stop": "node scripts/release.mjs stop",
+    "release:status": "node scripts/release.mjs status",
+    "release:logs": "node scripts/release.mjs logs",
+    "release:owner": "node scripts/release.mjs owner",
+    "release:migrate": "node scripts/release.mjs migrate",
+    "release:backup": "node scripts/release.mjs backup",
+    "release:restore": "node scripts/release.mjs restore",
+    "release:check": "node scripts/verify-release.mjs",
+    "format": "prettier --write apps packages scripts tests compose*.yaml playwright.config.ts package.json tsconfig.base.json",
+    "format:check": "prettier --check apps packages scripts tests compose*.yaml playwright.config.ts package.json tsconfig.base.json",
+    "check": "npm run typecheck && npm test && npm run build"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "@types/node": "24.19.2",
+    "prettier": "3.9.10",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
+  }
+}

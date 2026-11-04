@@ -1,0 +1,19 @@
+FROM node:24.22.2-bookworm-slim@sha256:c86ecead9e55a5210ac1727de38a4ca840bf03dcaf34dc9749addbf383b1920c AS node-runtime
+FROM mcr.microsoft.com/playwright:v1.64.1-noble@sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f
+ARG SOURCE_DATE_EPOCH=0
+COPY --from=node-runtime /usr/local/ /usr/local/
+RUN --mount=type=secret,id=npm_ca \
+    if [ -f /run/secrets/npm_ca ]; then export NODE_EXTRA_CA_CERTS=/run/secrets/npm_ca; fi; \
+    npm install --global npm@11.19.1 --no-audit --no-fund
+WORKDIR /app
+COPY package.json package-lock.json .npmrc tsconfig.base.json ./
+COPY apps/api/package.json apps/api/package.json
+COPY apps/web/package.json apps/web/package.json
+COPY packages/contracts/package.json packages/contracts/package.json
+RUN --mount=type=secret,id=npm_ca \
+    if [ -f /run/secrets/npm_ca ]; then export NODE_EXTRA_CA_CERTS=/run/secrets/npm_ca; fi; \
+    npm ci --no-audit --no-fund
+COPY . .
+RUN chown -R pwuser:pwuser /app
+USER pwuser
+CMD ["sh", "-c", "npm run check && npm run format:check && npm run test:integration && npm run test:browser && FERWEB_URL=http://web:5173 npm run check:smoke"]
