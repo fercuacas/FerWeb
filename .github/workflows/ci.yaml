@@ -30,6 +30,13 @@ jobs:
         run: npm run docker:check
       - name: Clean release images, browser journey, load and backup/restore
         run: npm run release:check
+      - name: Diagnose Docker startup failure
+        if: failure()
+        run: |
+          docker version --format 'Engine {{.Server.Version}}, API {{.Server.APIVersion}}, minimum {{.Server.MinAPIVersion}}' || true
+          docker compose --profile tools ps --all || true
+          docker compose --profile tools logs --no-color --tail 20 runner || true
+          docker image inspect ferweb-codex-sandbox:0.166.0 --format '{{.Id}}' || true
       - name: Cleanup this CI project only
         if: always()
         shell: bash
