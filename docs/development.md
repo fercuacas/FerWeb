@@ -26,6 +26,7 @@ Rutas desde la raíz. Las instrucciones están junto al directorio indicado; sui
 | Comparaciones | `apps/api/src/modules/laboratory/`, `apps/web/src/Laboratory.tsx` | [Laboratorio](laboratory.md) | `laboratory.integration.ts`, `laboratory.spec.ts` |
 | Estrategias de contexto/adopción | `context-*` en laboratorio, captura de recuperación, chat, `apps/web/src/ContextStrategies.tsx` | [Contexto E10](context-optimization.md) | `context.integration.ts`, `context.spec.ts`; chat/recuperación si cambia su contrato |
 | Cola/simulador | `apps/api/src/modules/jobs/`, `apps/api/src/job-worker.ts` | [Trabajos](jobs.md) | `jobs.integration.ts`, `jobs.spec.ts` |
+| Presupuestos Codex | `jobs/budgets.ts`, `queue.ts`, `apps/runner/controller.mjs`, `apps/web/src/Budgets.tsx` | [Presupuestos](codex.md#presupuesto-compartido-p04) | `coding.integration.ts`, `coding.spec.ts`; cola si cambian leases |
 | Codex/aislamiento | `coding-*` en jobs, `apps/runner/`, `apps/sandbox/`, `apps/web/src/Coding.tsx` | [Codex](codex.md) | `coding-boundaries.test.ts`, `coding.integration.ts`, `coding.spec.ts` |
 | Catálogo de agentes | `apps/api/src/modules/agents/`, `apps/web/src/Agents.tsx`, `coding-service.ts` | [Roles](codex.md#roles-versionados-por-proyecto-p02) | `coding.integration.ts`, `coding.spec.ts` |
 | Biblioteca de skills | `apps/api/src/modules/skills/`, `apps/web/src/Skills.tsx`, catálogo y cola Codex | [Biblioteca](codex.md#biblioteca-de-skills-p03) | `coding.integration.ts`, `coding.spec.ts` |

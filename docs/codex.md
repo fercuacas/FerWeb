@@ -93,6 +93,18 @@ El código podría llamar directamente a su pasarela de modelo: no es una creden
 
 Esta frontera utiliza namespaces, cgroups, montajes, usuarios y capacidades de Linux en Docker Desktop. **Comparte kernel; no es una microVM ni un entorno validado contra exploits de kernel o código hostil arbitrario.** Está destinada inicialmente a repositorios controlados. Los temporales en memoria pueden usar swap del motor/anfitrión; no se promete borrado físico seguro.
 
+## Presupuesto compartido (P04)
+
+Cada trabajo Codex nuevo reserva un cupo en PostgreSQL antes de entrar en la cola. Puede crear su propio presupuesto o seleccionar uno desde **Trabajos → Presupuestos compartidos de Codex**. El presupuesto padre admite hasta veinte peticiones, un plazo de diez segundos a veinte minutos y un paso activo. Los máximos de dos trabajos globales y uno por proyecto siguen aplicándose.
+
+El primer paso inicia el plazo del padre. Los siguientes comparten ese vencimiento y reservan su máximo de peticiones al encolarse. Al terminar se libera la reserva sobrante. Las peticiones admitidas conservan su cargo interno aunque falle el proveedor o se desconozca el resultado. **Repetir con las mismas condiciones** crea un presupuesto nuevo con los mismos límites y atribución para esa ejecución explícita.
+
+Antes de cada llamada al modelo, el controlador consulta la ruta interna de admisión, autenticada con su token de servicio. PostgreSQL valida estado, generación, lease, cancelación, plazo y reserva. Las reconsultas internas reutilizan el UUID y el hash de la petición. Un mensaje de una generación antigua queda rechazado y el controlador detiene las llamadas si pierde la autorización. La configuración del worker determina el origen interno de control; el código ejecutado recibe únicamente su pasarela de modelo.
+
+La contabilidad clasifica cada paso como agente, coordinador, selección, resumen o revisor. Muestra reserva, peticiones admitidas, uso conocido y cobertura de reportes del proveedor. Los tokens conocidos pueden ser parciales y el coste final permanece desconocido. Las métricas de CLI siguen identificadas por separado. El modo monetario se rechaza como campo no admitido.
+
+Cancelar un presupuesto cierra nuevas admisiones y detiene sus pasos mediante el control de la cola. Los reportes de uso de peticiones ya admitidas pueden llegar después de cancelar y se conservan de forma idempotente. La migración 013 añade la reserva y el registro de admisiones en PostgreSQL. Los trabajos antiguos sin este registro muestran su informe histórico; un trabajo pendiente anterior recibe presupuesto al asignarse. [Contrato HTTP](api.md#presupuesto-de-ejecución-p04)
+
 ## Supervisión, cancelación e informe
 
 La pestaña Trabajos consulta eventos persistentes y resultados. Se guarda informe parcial durante la ejecución. Al cancelar se conserva la solicitud SQL, el worker pide detener al controlador, este bloquea nuevas peticiones al modelo, recoge el estado final y mata el contenedor completo, incluidos descendientes separados del shell. Se confirma la parada mediante Docker; si no puede observarse, queda desconocida. Cancelar no revierte llamadas facturables previas ni garantiza la parada/facturación remota de OpenAI.

@@ -1,7 +1,14 @@
 import express from 'express';
 import { timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
-import { codingInput, repeatCodingInput, reviewInput, reviewPublishInput } from '@ferweb/contracts';
+import {
+  codingInput,
+  repeatCodingInput,
+  reviewInput,
+  reviewPublishInput,
+  requestAdmissionInput,
+  requestUsageInput,
+} from '@ferweb/contracts';
 import { CodingService } from './coding-service.js';
 import { ReviewService } from './review-service.js';
 export function codingRouter(service: CodingService) {
@@ -82,6 +89,21 @@ export function codingInternalRouter(service: CodingService, token: string) {
     next();
   });
   router.use(express.json({ limit: '2kb' }));
+  router.post('/coding/:jobId/admit', async (req, res) => {
+    res.json(
+      await service.jobs.queue.budgets.admit(
+        z.uuid().parse(req.params.jobId),
+        requestAdmissionInput.parse(req.body),
+      ),
+    );
+  });
+  router.post('/coding/:jobId/usage', async (req, res) => {
+    await service.jobs.queue.budgets.recordUsage(
+      z.uuid().parse(req.params.jobId),
+      requestUsageInput.parse(req.body),
+    );
+    res.json({ recorded: true });
+  });
   router.post('/coding/:jobId/input', async (req, res) => {
     const b = z
       .strictObject({ fence: z.uuid(), checkOnly: z.boolean().default(false) })

@@ -102,6 +102,7 @@ export function attachUsageMeter(run, res) {
     }
     return original(chunk, ...args);
   };
+  return slot;
 }
 export function providerUsage(run) {
   const result = {
@@ -110,7 +111,9 @@ export function providerUsage(run) {
   };
   for (const key of ['inputTokens', 'cachedInputTokens', 'outputTokens', 'reasoningTokens'])
     result[key] =
-      run.meters.length && run.meters.every((m) => m?.[key] !== null && m?.[key] !== undefined)
+      run.meters.length === run.requests &&
+      run.requests > 0 &&
+      run.meters.every((m) => m?.[key] !== null && m?.[key] !== undefined)
         ? run.meters.reduce((sum, m) => sum + m[key], 0)
         : null;
   return result;

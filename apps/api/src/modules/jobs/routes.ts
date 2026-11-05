@@ -1,12 +1,43 @@
 import express from 'express';
 import { z } from 'zod';
-import { jobInput } from '@ferweb/contracts';
+import { jobInput, executionBudgetInput } from '@ferweb/contracts';
 import { JobService } from './service.js';
 export function createJobRouter(service: JobService) {
   const router = express.Router();
   const scope = (req: express.Request, res: express.Response) => ({
     owner: (res.locals.user as { id: string }).id,
     project: z.uuid().parse(req.params.projectId),
+  });
+  router.get('/projects/:projectId/budgets', async (req, res) => {
+    const { owner, project } = scope(req, res);
+    res.json(await service.queue.budgets.list(owner, project));
+  });
+  router.post('/projects/:projectId/budgets', async (req, res) => {
+    const { owner, project } = scope(req, res);
+    res.status(201).json({
+      budget: await service.queue.budgets.create(
+        owner,
+        project,
+        executionBudgetInput.parse(req.body),
+      ),
+    });
+  });
+  router.get('/projects/:projectId/budgets/:budgetId', async (req, res) => {
+    const { owner, project } = scope(req, res);
+    res.json({
+      budget: await service.queue.budgets.read(owner, project, z.uuid().parse(req.params.budgetId)),
+    });
+  });
+  router.post('/projects/:projectId/budgets/:budgetId/cancel', async (req, res) => {
+    const { owner, project } = scope(req, res);
+    z.strictObject({}).parse(req.body);
+    res.json({
+      budget: await service.queue.budgets.cancel(
+        owner,
+        project,
+        z.uuid().parse(req.params.budgetId),
+      ),
+    });
   });
   router.get('/projects/:projectId/jobs', async (req, res) => {
     const { owner, project } = scope(req, res);

@@ -7,6 +7,7 @@ import {
   type JobConfiguration,
 } from '@ferweb/contracts';
 import type { z } from 'zod';
+import { ExecutionBudgets } from './budgets.js';
 
 export class JobControlError extends Error {
   constructor(readonly code: string) {
@@ -26,11 +27,13 @@ export interface Claim {
   deadline_at: Date;
 }
 export class JobQueue {
+  readonly budgets: ExecutionBudgets;
   constructor(
     readonly pool: Pool,
     readonly leaseMs = 5000,
   ) {
     if (leaseMs < 2000 || leaseMs > 30000) throw new Error('Invalid lease');
+    this.budgets = new ExecutionBudgets(pool, (action) => this.tx(action));
   }
   async tx<T>(action: (db: PoolClient) => Promise<T>, mutex = false) {
     const db = await this.pool.connect();
@@ -82,7 +85,9 @@ export class JobQueue {
   private async row(db: PoolClient, id: string) {
     const row = (
       await db.query(
-        'SELECT j.*,EXISTS(SELECT 1 FROM projects p WHERE p.id=j.project_id AND p.archived_at IS NOT NULL) AS archived,clock_timestamp() AS server_now FROM jobs j WHERE j.id=$1 FOR UPDATE',
+        `SELECT j.*,EXISTS(SELECT 1 FROM projects p WHERE p.id=j.project_id AND p.archived_at IS NOT NULL) AS archived,
+        EXISTS(SELECT 1 FROM execution_budget_steps s JOIN execution_budgets b ON b.id=s.budget_id WHERE s.job_id=j.id AND b.cancelled_at IS NOT NULL) AS budget_cancelled,
+        clock_timestamp() AS server_now FROM jobs j WHERE j.id=$1 FOR UPDATE`,
         [id],
       )
     ).rows[0];
@@ -97,7 +102,8 @@ export class JobQueue {
       row.lease_until <= row.server_now
     )
       throw new JobControlError('lease_lost');
-    if (row.cancel_requested || row.archived) throw new JobControlError('cancelled');
+    if (row.cancel_requested || row.archived || row.budget_cancelled)
+      throw new JobControlError('cancelled');
     if (row.deadline_at <= row.server_now) throw new JobControlError('timeout');
   }
   private async terminal(
@@ -119,6 +125,7 @@ export class JobQueue {
             ),
             simulated: true,
           };
+    await this.budgets.release(db, row.id, row.fence ?? null);
     await db.query(
       'UPDATE jobs SET state=$2,finished_at=clock_timestamp(),lease_until=NULL,fence=NULL,result=$3,error_code=$4,error_message=$5 WHERE id=$1',
       [row.id, state, JSON.stringify(result), code, code ? message : null],
@@ -127,7 +134,8 @@ export class JobQueue {
   }
   private async settle(db: PoolClient, row: QueryResultRow, reason: string, retryable: boolean) {
     if (row.kind === 'codex-v1') {
-      const cancelled = row.cancel_requested || row.archived || reason === 'cancelled';
+      const cancelled =
+        row.cancel_requested || row.archived || row.budget_cancelled || reason === 'cancelled';
       const completed =
         !cancelled &&
         reason === 'completed' &&
@@ -208,7 +216,8 @@ export class JobQueue {
   private async reap(db: PoolClient) {
     const candidates = (
       await db.query(
-        `SELECT j.id FROM jobs j JOIN projects p ON p.id=j.project_id WHERE (j.state='running' AND j.lease_until+interval '1 second'<clock_timestamp()) OR (j.state='pending' AND (j.cancel_requested OR p.archived_at IS NOT NULL OR j.deadline_at<clock_timestamp())) ORDER BY j.created_at LIMIT 100 FOR UPDATE OF j SKIP LOCKED`,
+        `SELECT j.id FROM jobs j JOIN projects p ON p.id=j.project_id WHERE (j.state='running' AND j.lease_until+interval '1 second'<clock_timestamp()) OR (j.state='pending' AND (j.cancel_requested OR p.archived_at IS NOT NULL OR j.deadline_at<clock_timestamp()
+        OR EXISTS(SELECT 1 FROM execution_budget_steps s JOIN execution_budgets b ON b.id=s.budget_id WHERE s.job_id=j.id AND (b.cancelled_at IS NOT NULL OR b.deadline_at<clock_timestamp())))) ORDER BY j.created_at LIMIT 100 FOR UPDATE OF j SKIP LOCKED`,
       )
     ).rows;
     for (const candidate of candidates) {
@@ -229,7 +238,7 @@ export class JobQueue {
         await this.settle(
           db,
           row,
-          row.cancel_requested || row.archived ? 'cancelled' : 'timeout',
+          row.cancel_requested || row.archived || row.budget_cancelled ? 'cancelled' : 'timeout',
           false,
         );
     }
@@ -279,7 +288,8 @@ export class JobQueue {
       await this.event(db, row.id, 'claimed', 'Trabajo asignado a un ejecutor.', {
         checkpoint: row.completed_steps,
       });
-      return { ...updated, configuration: cfg } as Claim;
+      const budgeted = await this.budgets.activate(db, updated);
+      return { ...budgeted, configuration: cfg } as Claim;
     }, true);
   }
   async heartbeat(claim: Claim) {
@@ -387,7 +397,8 @@ export class JobQueue {
           claim.id,
           JSON.stringify(codingReport.parse(report)),
         ]);
-      const cancelled = row.cancel_requested || row.archived || reason === 'cancelled',
+      const cancelled =
+          row.cancel_requested || row.archived || row.budget_cancelled || reason === 'cancelled',
         state = cancelled
           ? 'cancelled'
           : exitCode === 0 && reason === 'completed'

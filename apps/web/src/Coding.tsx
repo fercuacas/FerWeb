@@ -9,6 +9,9 @@ import { githubApi } from './github-store';
 import { workspaceApi, errorMessage } from './workspace-store';
 import { CodingReview, CodingComparison } from './CodingReview';
 import { ExecutionDetails } from './ExecutionDetails';
+import { budgetsApi } from './budgets-store';
+import { attributionNames, BudgetUsage } from './Budgets';
+import { usageAttribution } from '@ferweb/contracts';
 export function CodingForm({
   project,
   onCreated,
@@ -20,6 +23,10 @@ export function CodingForm({
   const source = githubApi.useGithubLinkQuery(project, { refetchOnFocus: true });
   const tasks = workspaceApi.useTasksQuery({ projectId: project, filters: {} });
   const agents = agentsApi.useAgentsQuery(project, { refetchOnFocus: true });
+  const budgets = budgetsApi.useBudgetsQuery(project, { refetchOnFocus: true });
+  const [budgetId, setBudgetId] = useState('');
+  const [attribution, setAttribution] =
+    useState<(typeof usageAttribution.options)[number]>('agent');
   const [agentId, setAgentId] = useState('');
   const [agentVersion, setAgentVersion] = useState(0);
   const history = agentsApi.useAgentQuery(agentId ? { project, id: agentId } : skipToken, {
@@ -53,6 +60,10 @@ export function CodingForm({
         )
       : [];
   const selectedAgent = versions.find((version) => version.version === agentVersion);
+  const budgetChoices = budgets.error
+    ? []
+    : (budgets.currentData?.budgets.filter((item) => !item.stopReason) ?? []);
+  const budgetAvailable = !budgetId || budgetChoices.some((item) => item.id === budgetId);
   const ready =
     !!task &&
     !!link?.snapshot &&
@@ -62,6 +73,7 @@ export function CodingForm({
     options?.execution.available &&
     options.models.includes(selectedModel) &&
     (!agentId || !!selectedAgent) &&
+    budgetAvailable &&
     !source.error &&
     !caps.error &&
     !tasks.error;
@@ -84,6 +96,8 @@ export function CodingForm({
               timeoutMs,
               maxRequests,
               maxOutputTokens,
+              ...(budgetId && { budgetId }),
+              attribution,
               ...(selectedAgent && {
                 agent: { id: selectedAgent.id, version: selectedAgent.version },
               }),
@@ -210,6 +224,36 @@ export function CodingForm({
               ))}
             </select>
           </label>
+          <label>
+            Presupuesto de ejecución
+            <select value={budgetId} onChange={(e) => setBudgetId(e.target.value)}>
+              <option value="">Crear presupuesto propio para esta ejecución</option>
+              {!budgetAvailable && (
+                <option value={budgetId} disabled>
+                  Presupuesto seleccionado no disponible
+                </option>
+              )}
+              {budgetChoices.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name} · disponibles {item.availableRequests}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Atribución de uso
+            <select
+              value={attribution}
+              onChange={(e) => setAttribution(usageAttribution.parse(e.target.value))}
+            >
+              {usageAttribution.options.map((value) => (
+                <option key={value} value={value}>
+                  {attributionNames[value]}
+                </option>
+              ))}
+            </select>
+          </label>
+          {budgets.error && <p role="alert">{errorMessage(budgets.error)}</p>}
           <div className="job-grid">
             <label>
               Plazo de ejecución (segundos)
@@ -331,6 +375,14 @@ export function CodingView({
           <p className="job-id">
             {visible.repository} · commit {visible.commit}
           </p>
+          {visible.budget ? (
+            <BudgetUsage budget={visible.budget} />
+          ) : (
+            <p>
+              Esta ejecución antigua conserva el informe sin contabilidad de peticiones del
+              presupuesto padre.
+            </p>
+          )}
           {visible.agent && (
             <details>
               <summary>

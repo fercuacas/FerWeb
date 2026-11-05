@@ -39,7 +39,16 @@ export function codingExecutor(
       try {
         const bundle = await input(false);
         const lease = await queue.heartbeat(claim);
-        await runner.request('/runs', { ...bundle, ...lease }, undefined, 10000);
+        await runner.request(
+          '/runs',
+          {
+            ...bundle,
+            ...lease,
+            controlOrigin: process.env.FERWEB_RUNNER_API_ORIGIN ?? new URL(internalUrl).origin,
+          },
+          undefined,
+          10000,
+        );
         for (;;) {
           if (stopReason) throw new JobControlError(stopReason);
           const renewal = await queue.heartbeat(claim);

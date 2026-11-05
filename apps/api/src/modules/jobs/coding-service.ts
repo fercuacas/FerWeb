@@ -91,6 +91,7 @@ export class CodingService {
       excluded: row.excluded,
       report: row.report,
       agent: row.agent_snapshot,
+      budget: await this.jobs.queue.budgets.forJob(owner, project, id),
     });
   }
   async create(owner: string, project: string, input: z.infer<typeof codingInput>) {
@@ -275,6 +276,23 @@ export class CodingService {
           [project, input.requestId, requestHash, task.title, JSON.stringify(configuration)],
         )
       ).rows[0];
+      const budgetLimits = await this.jobs.queue.budgets.allocate(
+        db,
+        project,
+        job.id,
+        task.title,
+        { maxRequests: input.maxRequests, timeoutMs: input.timeoutMs, concurrency: 1 },
+        input.budgetId,
+        input.attribution,
+      );
+      await db.query('UPDATE jobs SET configuration=$2 WHERE id=$1', [
+        job.id,
+        JSON.stringify({
+          ...configuration,
+          budgetLimits,
+          budgetAttribution: input.attribution ?? 'agent',
+        }),
+      ]);
       await db.query(
         'INSERT INTO coding_runs(job_id,task_id,task_snapshot,owner_id,repository_id,repository,commit_sha,files,manifest,excluded,base_branch,source_tree,environment,agent_snapshot) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)',
         [
@@ -418,6 +436,20 @@ export class CodingService {
           ],
         )
       ).rows[0]!;
+      await this.jobs.queue.budgets.allocate(
+        db,
+        project,
+        job.id,
+        source.task_snapshot.title,
+        {
+          maxRequests: configuration.maxRequests,
+          timeoutMs: configuration.limits.timeoutMs,
+          concurrency: 1,
+        },
+        undefined,
+        configuration.budgetAttribution,
+        configuration.budgetLimits,
+      );
       await db.query(
         'INSERT INTO coding_runs(job_id,task_id,task_snapshot,owner_id,repository_id,repository,commit_sha,files,manifest,excluded,base_branch,source_tree,environment,agent_snapshot,baseline_job_id) SELECT $1,task_id,task_snapshot,owner_id,repository_id,repository,commit_sha,files,manifest,excluded,base_branch,source_tree,environment,agent_snapshot,job_id FROM coding_runs WHERE job_id=$2',
         [job.id, baseline],

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
+import { networkInterfaces } from 'node:os';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import {
@@ -14,6 +15,7 @@ import {
   jobDetailSchema,
   skillResponse,
   skillsResponse,
+  executionBudgetResponse,
 } from '@ferweb/contracts';
 import { createPool } from '../src/database.js';
 import { readConfig } from '../src/config.js';
@@ -83,11 +85,15 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
       runnerToken: process.env.RUNNER_SERVICE_TOKEN!,
       appOrigin: origin,
       secureCookies: false,
-    }).listen(0, '127.0.0.1');
+    }).listen(0, '0.0.0.0');
     await once(server, 'listening');
     const address = server.address();
     assert.ok(address && typeof address !== 'string');
     const base = `http://127.0.0.1:${address.port}`;
+    const runnerAddress = Object.values(networkInterfaces())
+      .flat()
+      .find((entry) => entry?.family === 'IPv4' && !entry.internal)?.address;
+    assert.ok(runnerAddress);
     const request = (method: string, path: string, body?: unknown, cookie?: string) =>
       fetch(base + '/api' + path, {
         method,
@@ -161,6 +167,7 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
           JOB_WORKER_HEALTH_PORT: '0',
           JOB_WORKER_LEASE_MS: '6000',
           FERWEB_INTERNAL_API_URL: base,
+          FERWEB_RUNNER_API_ORIGIN: `http://${runnerAddress}:${address.port}`,
         },
         stdio: ['ignore', 'pipe', 'pipe'],
       });
@@ -198,6 +205,131 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
         const payload = codingCapabilitiesResponse.parse(await allowed.json());
         assert.deepEqual(payload.execution, codex);
         assert.deepEqual(payload.models, ['fixture-codex']);
+      },
+    );
+    await t.test(
+      'parent budgets reserve atomically, fence admissions and preserve partial usage after cancellation',
+      async () => {
+        const queue = coding.jobs.queue;
+        const budgetPath = `/projects/${project}/budgets`;
+        const budgetBody = {
+          requestId: randomUUID(),
+          name: 'Shared quota fixture',
+          limits: { maxRequests: 4, timeoutMs: 60000, concurrency: 1 },
+        };
+        const response = await request('POST', budgetPath, budgetBody, cookie);
+        assert.equal(response.status, 201);
+        const parent = executionBudgetResponse.parse(await response.json()).budget;
+        const duplicate = await request('POST', budgetPath, budgetBody, cookie);
+        assert.equal(executionBudgetResponse.parse(await duplicate.json()).budget.id, parent.id);
+        assert.equal(
+          (await request('GET', `${budgetPath}/${parent.id}`, undefined, foreign)).status,
+          404,
+        );
+        assert.equal(
+          (await request('POST', budgetPath, { ...budgetBody, maxCostUsd: 1 }, cookie)).status,
+          400,
+        );
+        const one = await enqueue('SQL budget admission fixture', {
+          maxRequests: 2,
+          budgetId: parent.id,
+          attribution: 'reviewer',
+        });
+        const two = await enqueue('SQL budget second step', {
+          maxRequests: 2,
+          budgetId: parent.id,
+          attribution: 'summary',
+        });
+        const rejected = await request(
+          'POST',
+          `/projects/${project}/coding`,
+          { ...one.body, requestId: randomUUID() },
+          cookie,
+        );
+        assert.equal(rejected.status, 409);
+        const executor = randomUUID();
+        await queue.register(executor);
+        const firstClaim = await queue.claim(executor);
+        assert.ok(firstClaim);
+        assert.equal(firstClaim.id, one.job.id);
+        assert.equal(await queue.claim(executor), null);
+        const requests = Array.from({ length: 10 }, () => ({
+          fence: firstClaim.fence,
+          requestId: randomUUID(),
+          payloadHash: 'a'.repeat(64),
+        }));
+        const attempts = await Promise.allSettled(
+          requests.map((body) => queue.budgets.admit(firstClaim.id, body)),
+        );
+        const accepted = requests.filter((_body, index) => attempts[index]?.status === 'fulfilled');
+        assert.equal(accepted.length, 2);
+        assert.equal((await queue.budgets.admit(firstClaim.id, accepted[0]!)).repeated, true);
+        await assert.rejects(
+          queue.budgets.admit(firstClaim.id, { ...accepted[0]!, payloadHash: 'b'.repeat(64) }),
+        );
+        const usage = {
+          fence: firstClaim.fence,
+          requestId: accepted[0]!.requestId,
+          usage: {
+            inputTokens: 100,
+            cachedInputTokens: 0,
+            outputTokens: 20,
+            reasoningTokens: null,
+          },
+        };
+        await queue.budgets.recordUsage(firstClaim.id, usage);
+        await queue.budgets.recordUsage(firstClaim.id, usage);
+        await queue.tx((db) => queue.budgets.release(db, firstClaim.id, randomUUID()));
+        assert.equal((await queue.budgets.read(owner.id, project, parent.id)).reservedRequests, 4);
+        assert.equal(
+          await queue.finish({ ...firstClaim, fence: randomUUID() }, 'completed', 0, null, true),
+          false,
+        );
+        assert.equal(await queue.finish(firstClaim, 'completed', 0, null, true), true);
+        const deadline = (await queue.budgets.read(owner.id, project, parent.id)).deadlineAt;
+        const secondClaim = await queue.claim(executor);
+        assert.ok(secondClaim);
+        assert.equal(secondClaim.id, two.job.id);
+        assert.equal((await queue.budgets.read(owner.id, project, parent.id)).deadlineAt, deadline);
+        await assert.rejects(
+          queue.budgets.admit(secondClaim.id, {
+            fence: firstClaim.fence,
+            requestId: randomUUID(),
+            payloadHash: 'c'.repeat(64),
+          }),
+        );
+        const lastRequest = {
+          fence: secondClaim.fence,
+          requestId: randomUUID(),
+          payloadHash: 'd'.repeat(64),
+        };
+        await queue.budgets.admit(secondClaim.id, lastRequest);
+        const cancellation = await request('POST', `${budgetPath}/${parent.id}/cancel`, {}, cookie);
+        assert.equal(cancellation.status, 200);
+        await assert.rejects(
+          queue.budgets.admit(secondClaim.id, {
+            ...lastRequest,
+            requestId: randomUUID(),
+          }),
+        );
+        await queue.budgets.recordUsage(secondClaim.id, {
+          fence: secondClaim.fence,
+          requestId: lastRequest.requestId,
+          usage: null,
+        });
+        await queue.finish(secondClaim, 'cancelled', 1, null, true);
+        const result = await queue.budgets.read(owner.id, project, parent.id);
+        assert.equal(result.admittedRequests, 3);
+        assert.equal(result.reservedRequests, 3);
+        assert.equal(result.availableRequests, 1);
+        assert.equal(result.reportedRequests, 1);
+        assert.equal(result.knownInputTokens, 100);
+        assert.equal(result.costUsd, null);
+        assert.deepEqual(result.steps.map((step) => step.attribution).sort(), [
+          'reviewer',
+          'summary',
+        ]);
+        await queue.stopExecutor(executor);
       },
     );
     await t.test(
@@ -387,6 +519,9 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
         assert.deepEqual(run.agent, role.latest);
         assert.equal(run.commit, 'a'.repeat(40));
         assert.equal(r.simulated, true);
+        assert.equal(run.budget?.admittedRequests, r.modelRequests);
+        assert.equal(run.budget?.reportedRequests, r.providerUsage?.reportedRequests);
+        assert.equal(run.budget?.knownInputTokens, r.providerUsage?.inputTokens);
         assert.equal(r.terminationConfirmed, true);
         assert.equal(r.diffComplete, true);
         assert.equal(r.diff.length, 1);
@@ -570,6 +705,9 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
         assert.equal(stopped.job.state, 'cancelled');
         assert.equal(stopped.attempts[0]!.terminationConfirmed, true);
         assert.equal((await report(job.id)).report!.terminationConfirmed, true);
+        const budget = (await report(job.id)).budget;
+        assert.ok(budget && budget.admittedRequests >= 1);
+        assert.ok(budget.reportedRequests <= budget.admittedRequests);
       },
     );
     await t.test(

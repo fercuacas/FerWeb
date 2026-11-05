@@ -212,6 +212,23 @@ Ejemplo de archivo JSON para importar desde la web. El SHA-256 se calcula sobre 
 
 El UUID identifica una versión concreta. La API devuelve 404 para recursos ajenos, 409 para hash de revisión obsoleto, estados terminales incompatibles o proyectos archivados y 422 para contenido inválido o dependencias bloqueadas. Solo una versión aprobada del mismo proyecto puede vincularse a un rol. `GET /coding/:jobId` incluye el texto congelado bajo `agent.materials` cuando se usó material. [Contratos](../packages/contracts/src/skills.ts)
 
+## Presupuesto de ejecución (P04)
+
+Rutas autenticadas bajo `/api/projects/:projectId/budgets`.
+
+| Método y sufijo | Entrada y resultado |
+| --- | --- |
+| `GET /` | `{ budgets }` con los últimos cien presupuestos del proyecto y su contabilidad. |
+| `POST /` | `{ requestId, name, limits: { maxRequests, timeoutMs, concurrency: 1 } }`. Devuelve 201 y `{ budget }`. |
+| `GET /:budgetId` | `{ budget }` con reserva, admisiones, uso conocido y cobertura. |
+| `POST /:budgetId/cancel` | `{}`. Cierra nuevas admisiones y conserva el consumo. |
+
+Los límites admiten 1–20 peticiones y 10 000–1 200 000 ms. El UUID de creación es idempotente por proyecto. Los presupuestos ajenos devuelven 404 y las condiciones incompatibles, cancelación o plazo agotado devuelven 409. Los campos monetarios se rechazan por el contrato estricto.
+
+`POST /coding` acepta `budgetId` opcional y `attribution` opcional (`agent`, `coordinator`, `selection`, `summary` o `reviewer`). Sin presupuesto indicado crea uno propio. La configuración congelada conserva los límites del padre y la atribución. `GET /coding/:jobId` añade `budget`, nullable para informes históricos sin registro.
+
+Las rutas internas `POST /internal/coding/:jobId/admit` y `/usage` exigen el token del controlador. La primera recibe generación, UUID y hash de la petición. La segunda conserva el uso reportado del proveedor para ese UUID y generación, incluido el uso parcial conocido después de cancelar. [Contratos](../packages/contracts/src/usage.ts)
+
 ## Revisión y PR (E9)
 
 | Método y ruta bajo `/api/projects/:projectId/coding/:jobId` | Entrada / resultado |

@@ -34,6 +34,7 @@ export async function createController({ token, configuration, fakeProvider, nam
     cli: '0.166.0',
     profile: 'node-isolated-v1',
     simulated: !!fakeProvider,
+    budgetAuthority: 'postgres-v1',
     policyHash: hash(
       (
         await Promise.all(
@@ -188,7 +189,9 @@ export async function createController({ token, configuration, fakeProvider, nam
     if (run.finishing) return run.finished;
     run.finishing = true;
     run.finished = (async () => {
-      run.reason = reason;
+      run.reason = ['cancelled', 'timeout', 'lease_lost'].includes(reason)
+        ? reason
+        : (run.budgetReason ?? reason);
       run.phase = 'collecting';
       for (const abort of run.upstreams) abort.abort();
       try {
@@ -236,6 +239,40 @@ export async function createController({ token, configuration, fakeProvider, nam
     })();
     return run.finished;
   }
+  async function budgetCall(run, operation, data) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const response = await fetch(
+          `${run.controlOrigin}/internal/coding/${run.input.jobId}/${operation}`,
+          {
+            method: 'POST',
+            headers: { authorization: 'Bearer ' + token, 'content-type': 'application/json' },
+            body: JSON.stringify({ fence: run.input.fence, ...data }),
+            signal: AbortSignal.timeout(2000),
+            redirect: 'error',
+          },
+        );
+        if (response.ok) return await response.json();
+        const result = await response.json().catch(() => ({}));
+        const code = result.error?.code;
+        const error = new Error(
+          [
+            'request_budget_exhausted',
+            'budget_cancelled',
+            'budget_timeout',
+            'lease_lost',
+            'request_conflict',
+          ].includes(code)
+            ? code
+            : 'budget_unavailable',
+        );
+        if (response.status < 500) throw Object.assign(error, { definitive: true });
+      } catch (error) {
+        if (error.definitive) throw error;
+      }
+    }
+    throw Error('budget_unavailable');
+  }
   async function gateway(run, req, res) {
     if (req.url === '/lease' && req.method === 'GET') {
       res.writeHead(
@@ -259,6 +296,7 @@ export async function createController({ token, configuration, fakeProvider, nam
       Date.now() >= run.deadline ||
       run.requests >= run.input.maxRequests
     ) {
+      if (run.requests >= run.input.maxRequests) run.budgetReason ??= 'request_budget_exhausted';
       res.writeHead(403);
       res.end('{"error":{"message":"FerWeb execution limit or unsupported route"}}');
       return;
@@ -285,56 +323,83 @@ export async function createController({ token, configuration, fakeProvider, nam
         );
       throw error;
     }
-    // Admission happens after reading/validating the body, synchronously with
-    // incrementing the counter, so concurrent clients cannot overbook calls.
+    // The SQL reservation is the authority. Retries reuse one request ID.
     if (
       run.finishing ||
       Date.now() >= run.lease ||
       Date.now() >= run.deadline ||
       run.requests >= run.input.maxRequests
-    )
+    ) {
+      if (run.requests >= run.input.maxRequests) run.budgetReason ??= 'request_budget_exhausted';
       throw Error('execution_limit');
-    run.requests++;
-    attachUsageMeter(run, res);
-    if (fakeProvider) {
-      await fakeProvider(run, value, res);
-      return;
     }
-    const abort = new AbortController();
-    run.upstreams.add(abort);
-    const timer = setTimeout(() => abort.abort(), Math.min(120000, run.deadline - Date.now()));
-    res.on('close', () => abort.abort());
+    const requestId = randomUUID();
     try {
-      const reply = await fetch('https://api.openai.com/v1/responses', {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          authorization: 'Bearer ' + configuration.apiKey,
-        },
-        body: JSON.stringify(value),
-        signal: abort.signal,
-        redirect: 'error',
-      });
-      if (!reply.ok) {
-        await reply.body?.cancel();
-        res.writeHead(reply.status);
-        res.end('{"error":{"message":"OpenAI request failed; upstream content withheld"}}');
+      await budgetCall(run, 'admit', { requestId, payloadHash: hash(JSON.stringify(value)) });
+    } catch (error) {
+      run.budgetReason ??= error.message;
+      throw error;
+    }
+    run.requests++;
+    const slot = attachUsageMeter(run, res);
+    if (run.finishing || Date.now() >= run.lease || Date.now() >= run.deadline)
+      throw Error('execution_limit');
+    try {
+      if (fakeProvider) {
+        await fakeProvider(run, value, res);
         return;
       }
-      res.writeHead(200, { 'content-type': 'text/event-stream' });
-      let size = 0;
-      for await (const chunk of reply.body) {
-        size += chunk.length;
-        if (size > 4000000) throw Error('model_output_limit');
-        if (!res.write(chunk)) await new Promise((resolve) => res.once('drain', resolve));
+      const abort = new AbortController();
+      run.upstreams.add(abort);
+      const timer = setTimeout(() => abort.abort(), Math.min(120000, run.deadline - Date.now()));
+      res.on('close', () => abort.abort());
+      try {
+        const reply = await fetch('https://api.openai.com/v1/responses', {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            authorization: 'Bearer ' + configuration.apiKey,
+          },
+          body: JSON.stringify(value),
+          signal: abort.signal,
+          redirect: 'error',
+        });
+        if (!reply.ok) {
+          await reply.body?.cancel();
+          res.writeHead(reply.status);
+          res.end('{"error":{"message":"OpenAI request failed; upstream content withheld"}}');
+          return;
+        }
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        let size = 0;
+        for await (const chunk of reply.body) {
+          size += chunk.length;
+          if (size > 4000000) throw Error('model_output_limit');
+          if (!res.write(chunk)) await new Promise((resolve) => res.once('drain', resolve));
+        }
+        res.end();
+      } finally {
+        clearTimeout(timer);
+        run.upstreams.delete(abort);
       }
-      res.end();
     } finally {
-      clearTimeout(timer);
-      run.upstreams.delete(abort);
+      // A cancelled request may still report usage. Failure leaves coverage unknown.
+      await budgetCall(run, 'usage', { requestId, usage: run.meters[slot] ?? null }).catch(
+        () => {},
+      );
     }
   }
   async function start(input) {
+    const control = new URL(input.controlOrigin);
+    if (
+      !['http:', 'https:'].includes(control.protocol) ||
+      control.username ||
+      control.password ||
+      control.pathname !== '/' ||
+      control.search ||
+      control.hash
+    )
+      throw Error('invalid_control_origin');
     const environmentKeys = Object.keys(environment).sort();
     if (
       JSON.stringify(input.environment, environmentKeys) !==
@@ -391,6 +456,8 @@ export async function createController({ token, configuration, fakeProvider, nam
     const run = {
       key,
       input,
+      controlOrigin: control.origin,
+      budgetReason: null,
       digest,
       lease,
       deadline,

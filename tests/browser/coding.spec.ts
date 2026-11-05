@@ -108,7 +108,17 @@ test('Codex task UI freezes a commit, shows a verified diff, reloads evidence an
   await expect(history.getByText('Instrucciones congeladas de prueba.')).toBeVisible();
   await page.getByRole('link', { name: /Volver al proyecto/ }).click();
   await page.getByRole('button', { name: 'Trabajos', exact: true }).click();
+  await page.getByText('Presupuestos compartidos de Codex', { exact: true }).click();
+  await page.getByLabel('Nombre del presupuesto').fill('Presupuesto de revisión');
+  await page.getByRole('button', { name: 'Crear presupuesto', exact: true }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Presupuesto de revisión', exact: true }),
+  ).toBeVisible();
   await page.getByText('Nueva tarea con Codex', { exact: true }).click();
+  await page
+    .getByRole('combobox', { name: 'Presupuesto de ejecución' })
+    .selectOption({ label: 'Presupuesto de revisión · disponibles 8' });
+  await page.getByRole('combobox', { name: 'Atribución de uso' }).selectOption('reviewer');
   await expect(page.getByText(/Proveedor simulado.*Herramientas Node aisladas/)).toBeVisible();
   await page
     .getByRole('combobox', { name: 'Tarea de programación', exact: true })
@@ -130,6 +140,8 @@ test('Codex task UI freezes a commit, shows a verified diff, reloads evidence an
     timeout: 30000,
   });
   await expect(page.getByText('Snapshot final recogido.', { exact: true })).toBeVisible();
+  await expect(page.locator('.job-view').getByText(/Peticiones admitidas [1-9]/)).toBeVisible();
+  await expect(page.locator('.job-view').getByText(/Revisor · Reserva inicial 8/)).toBeVisible();
   await page.getByText('Rol congelado · Agente de suma · versión 2', { exact: true }).click();
   await expect(
     page.locator('.job-view pre').filter({ hasText: 'Instrucciones nuevas de prueba.' }),

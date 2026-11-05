@@ -14,6 +14,7 @@ import { randomUUID } from 'node:crypto';
 import { LaboratoryService } from '../../apps/api/dist/modules/laboratory/service.js';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
+import { networkInterfaces } from 'node:os';
 import { codingCorpus } from './coding.mjs';
 import { publicationFixture } from './publication.mjs';
 import { CodingService } from '../../apps/api/dist/modules/jobs/coding-service.js';
@@ -41,6 +42,11 @@ const jobWorker = spawn(process.execPath, ['apps/api/dist/job-worker.js'], {
     ...process.env,
     JOB_WORKER_HEALTH_PORT: '0',
     FERWEB_INTERNAL_API_URL: `http://127.0.0.1:${config.PORT}`,
+    FERWEB_RUNNER_API_ORIGIN: `http://${
+      Object.values(networkInterfaces())
+        .flat()
+        .find((entry) => entry?.family === 'IPv4' && !entry.internal)?.address
+    }:${config.PORT}`,
   },
   stdio: 'inherit',
 });
@@ -59,7 +65,7 @@ const server = createApp(() => inspectDatabase(pool, migrations), migrations.len
     new RunnerClient(process.env.RUNNER_URL, process.env.RUNNER_SERVICE_TOKEN),
   ),
   runnerToken: process.env.RUNNER_SERVICE_TOKEN,
-}).listen(config.PORT, config.HOST);
+}).listen(config.PORT, '0.0.0.0');
 process.on('SIGTERM', async () => {
   chats.shutdown();
   laboratory.shutdown();

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { executionOptionSchema } from './execution.js';
 import { agentSelection, agentSnapshot } from './agents.js';
 import { skillVersion } from './skills.js';
+import { executionBudgetLimits, executionBudgetSchema, usageAttribution } from './usage.js';
 
 export const codingAgentSnapshot = agentSnapshot.extend({
   materials: z.array(skillVersion).max(3).optional(),
@@ -12,6 +13,8 @@ export const codingConfiguration = z.strictObject({
   model: z.string().min(1).max(100),
   maxRequests: z.number().int().min(1).max(20),
   maxOutputTokens: z.number().int().min(64).max(8192),
+  budgetLimits: executionBudgetLimits.optional(),
+  budgetAttribution: usageAttribution.optional(),
   limits: z.strictObject({
     timeoutMs: z.number().int().min(10000).max(1200000),
     maxAttempts: z.literal(1),
@@ -27,6 +30,8 @@ export const codingInput = z.strictObject({
   maxRequests: z.number().int().min(1).max(20),
   maxOutputTokens: z.number().int().min(64).max(8192),
   agent: agentSelection.optional(),
+  budgetId: z.uuid().optional(),
+  attribution: usageAttribution.optional(),
 });
 export const codingCapabilities = z.object({
   available: z.boolean(),
@@ -108,6 +113,7 @@ export const codingRunSchema = z.object({
   excluded: z.array(z.string()),
   report: codingReport.nullable(),
   agent: codingAgentSnapshot.nullable(),
+  budget: executionBudgetSchema.nullable(),
 });
 export function codingPath(path: string) {
   return (
