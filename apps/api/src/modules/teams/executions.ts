@@ -8,11 +8,14 @@ import {
   codingReport,
   codingWorkspace,
   type executeTeamPlanInput,
+  teamPolicy,
+  type updateTeamPolicyInput,
 } from '@ferweb/contracts';
 import { HttpError } from '../../http-error.js';
 import type { CodingService } from '../jobs/coding-service.js';
 import { canonical, digest } from '../jobs/review-artifacts.js';
 import { TeamService } from './service.js';
+import { TeamMessages, systemTeamMessage } from './messages.js';
 
 const active = (state: string) => ['pending', 'running'].includes(state);
 const missing = () => new HttpError(404, 'not_found', 'No se ha encontrado la ejecución.');
@@ -80,6 +83,49 @@ export class TeamExecutions {
     ).rows;
     return { executions: rows.map(dto) };
   }
+  async policy(owner: string, project: string) {
+    await this.coding.projects.get(owner, project);
+    const row = (
+      await this.pool.query(
+        'SELECT team_parallelism,team_policy_version FROM projects WHERE id=$1',
+        [project],
+      )
+    ).rows[0];
+    return teamPolicy.parse({
+      parallelism: row.team_parallelism,
+      version: row.team_policy_version,
+    });
+  }
+  async configure(owner: string, project: string, input: z.infer<typeof updateTeamPolicyInput>) {
+    await this.coding.jobs.queue.tx(async (db) => {
+      const row = (
+        await db.query('SELECT * FROM projects WHERE id=$1 AND owner_id=$2 FOR UPDATE', [
+          project,
+          owner,
+        ])
+      ).rows[0];
+      if (!row) throw missing();
+      if (
+        row.archived_at ||
+        row.team_policy_version !== input.version ||
+        (
+          await db.query(
+            "SELECT 1 FROM team_executions WHERE project_id=$1 AND state IN ('pending','running')",
+            [project],
+          )
+        ).rowCount
+      )
+        throw conflict('team_policy_conflict');
+      await db.query(
+        'UPDATE projects SET team_parallelism=$2,team_policy_version=team_policy_version+1 WHERE id=$1',
+        [project, input.parallelism],
+      );
+    });
+    return this.policy(owner, project);
+  }
+  messages(owner: string, project: string, id: string, after: number) {
+    return new TeamMessages(this.pool, this.coding).read(owner, project, id, after);
+  }
   async read(owner: string, project: string, id: string) {
     const row = await this.owned(owner, project, id);
     // Reports and deliveries carry repository text; revalidate access before returning them.
@@ -102,7 +148,31 @@ export class TeamExecutions {
         [id],
       )
     ).rows;
+    const conflicts = (
+      await this.pool.query(
+        "SELECT count(*)::int AS n FROM team_messages WHERE execution_id=$1 AND kind='conflict'",
+        [id],
+      )
+    ).rows[0].n;
+    const required = steps.filter(
+      (step) =>
+        row.snapshot.plan.template.definition.strategy !== 'specialists' ||
+        row.snapshot.plan.steps.at(-1).key !== step.step_key,
+    );
+    const received = required
+      .filter((step) => step.delivery?.verified)
+      .map((step) => step.step_key);
+    const missingSteps = required
+      .filter((step) => !step.delivery?.verified)
+      .map((step) => step.step_key);
     return teamExecutionResponse.parse({
+      gathering: {
+        complete: row.state === 'completed' && !missingSteps.length && conflicts === 0,
+        received,
+        missing: missingSteps,
+        summary: steps.at(-1)?.delivery?.result ?? null,
+        conflicts,
+      },
       execution: dto(row),
       plan: row.snapshot.plan,
       steps: steps.map((step) => ({
@@ -163,12 +233,14 @@ export class TeamExecutions {
       throw conflict('team_source_changed');
     const id = await this.coding.jobs.queue.tx(async (db) => {
       const p = (
-        await db.query('SELECT archived_at FROM projects WHERE id=$1 AND owner_id=$2 FOR UPDATE', [
-          project,
-          owner,
-        ])
+        await db.query(
+          'SELECT archived_at,team_parallelism FROM projects WHERE id=$1 AND owner_id=$2 FOR UPDATE',
+          [project, owner],
+        )
       ).rows[0];
       if (!p || p.archived_at) throw conflict('project_archived');
+      if (plan.snapshot.limits.concurrency > p.team_parallelism)
+        throw conflict('team_parallelism_not_configured');
       const old = (
         await db.query(
           'SELECT id,request_hash FROM team_executions WHERE project_id=$1 AND request_id=$2',
@@ -222,7 +294,7 @@ export class TeamExecutions {
       );
       const row = (
         await db.query(
-          'INSERT INTO team_executions(project_id,plan_id,request_id,request_hash,snapshot,commit_sha,repository_id,repository,link_version,budget_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id',
+          'INSERT INTO team_executions(project_id,plan_id,request_id,request_hash,snapshot,commit_sha,repository_id,repository,link_version,budget_id,parallelism) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id',
           [
             project,
             planId,
@@ -234,6 +306,7 @@ export class TeamExecutions {
             link.fullName,
             link.version,
             budget,
+            plan.snapshot.limits.concurrency,
           ],
         )
       ).rows[0];
@@ -356,11 +429,15 @@ export class TeamExecutions {
         [run.id],
       )
     ).rows;
+    const snapshot = teamPlanSnapshot.parse(run.snapshot.plan);
+    const specialists = snapshot.template.definition.strategy === 'specialists';
     const stopping = run.cancel_requested || run.archived_at || run.cancelled_at;
     if (stopping) {
       for (const step of steps.filter((item) => item.job_id && active(item.state)))
         await this.coding.jobs.queue.cancel(step.job_id, run.project_id);
       if (steps.some((step) => step.job_id && active(step.state))) return;
+      for (const step of steps.filter((item) => item.job_id && !item.delivery))
+        await this.saveDelivery(run, step, specialists);
       await this.close(
         run.id,
         run.error_code ? 'failed' : 'cancelled',
@@ -368,63 +445,28 @@ export class TeamExecutions {
       );
       return;
     }
-    const current = steps.find((step) => !step.delivery);
-    if (!current) {
+    for (const ended of steps.filter(
+      (step) => step.job_id && !active(step.state) && !step.delivery,
+    )) {
+      ended.delivery = await this.saveDelivery(run, ended, specialists);
+      if (!ended.delivery.verified) throw conflict(ended.error_code ?? 'team_delivery_unverified');
+    }
+    if (steps.every((step) => step.delivery?.verified)) {
       await this.close(run.id, 'completed', null);
       return;
     }
-    if (current.job_id) {
-      if (active(current.state)) return;
-      const report = current.report ? codingReport.parse(current.report) : null;
-      const output = current.output_files ? codingWorkspace.parse(current.output_files) : null;
-      const verified =
-        current.state === 'completed' &&
-        report?.diffComplete === true &&
-        report.terminationConfirmed === true &&
-        !!output?.length &&
-        report.tests.some(
-          (entry) => entry.origin === 'controller-verification' && entry.exitCode === 0,
-        );
-      const delivery = teamDelivery.parse({
-        jobId: current.job_id,
-        step: current.step_key,
-        result: report?.summary ?? '',
-        sources: (output ?? []).map((file) => ({ path: file.path, hash: digest(file.content) })),
-        inputHash: digest(canonical(current.files)),
-        outputHash: output ? digest(canonical(output)) : null,
-        tests: (report?.tests ?? [])
-          .filter((entry) => entry.origin === 'controller-verification')
-          .map(({ command, exitCode, origin }) => ({ command, exitCode, origin })),
-        doubts: [
-          ...(report?.limitations ?? []),
-          'Los criterios de salida y las afirmaciones del agente requieren revisión humana.',
-        ],
-        verified,
-      });
-      await this.coding.jobs.queue.tx(async (db) => {
-        const locked = (
-          await db.query('SELECT state FROM team_executions WHERE id=$1 FOR UPDATE', [run.id])
-        ).rows[0];
-        if (!active(locked.state)) return;
-        const saved = await db.query(
-          'UPDATE team_execution_steps SET delivery=$2 WHERE id=$1 AND delivery IS NULL RETURNING id',
-          [current.id, JSON.stringify(delivery)],
-        );
-        if (saved.rowCount)
-          await teamEvent(
-            db,
-            run.id,
-            'delivery',
-            'Entrega guardada con procedencia y evidencia del controlador.',
-            { step: current.step_key, jobId: current.job_id, verified },
-          );
-      });
-      if (!verified)
-        await this.close(run.id, 'failed', current.error_code ?? 'team_delivery_unverified');
-      return;
-    }
+    const completed = steps.filter((step) => step.delivery?.verified);
+    const current = specialists
+      ? steps.find(
+          (item) =>
+            !item.job_id &&
+            snapshot.steps[item.position - 1]!.dependsOn.every((key) =>
+              completed.some((done) => done.step_key === key),
+            ),
+        )
+      : steps.find((step) => !step.delivery);
+    if (!current || current.job_id) return;
     if (run.deadline_at && run.deadline_at <= new Date()) throw conflict('budget_timeout');
-    const snapshot = teamPlanSnapshot.parse(run.snapshot.plan);
     await this.teams.validateSnapshot(run.owner_id, run.project_id, snapshot);
     const { link } = await this.coding.github.read(run.owner_id, run.project_id);
     if (
@@ -436,10 +478,9 @@ export class TeamExecutions {
     )
       throw conflict('team_source_changed');
     const step = snapshot.steps[current.position - 1]!;
-    const completed = steps.filter((item) => item.delivery?.verified);
     if (step.dependsOn.some((key) => !completed.some((item) => item.step_key === key)))
       throw conflict('team_dependency_missing');
-    const previous = steps[current.position - 2];
+    const previous = specialists ? undefined : steps[current.position - 2];
     if (previous && digest(canonical(previous.output_files)) !== previous.delivery.outputHash)
       throw conflict('team_delivery_changed');
     await this.coding.create(
@@ -456,7 +497,12 @@ export class TeamExecutions {
         timeoutMs: snapshot.limits.timeoutMs,
         agent: step.role,
         budgetId: run.budget_id,
-        attribution: step.requiredCapabilities.includes('workspaceWrite') ? 'agent' : 'reviewer',
+        attribution:
+          specialists && current.position === steps.length
+            ? 'summary'
+            : step.requiredCapabilities.includes('workspaceWrite')
+              ? 'agent'
+              : 'reviewer',
       },
       {
         executionId: run.id,
@@ -467,5 +513,96 @@ export class TeamExecutions {
         deliveries: completed.map((item) => teamDelivery.parse(item.delivery)),
       },
     );
+  }
+  private async saveDelivery(run: QueryResultRow, current: QueryResultRow, specialists: boolean) {
+    const report = current.report ? codingReport.parse(current.report) : null;
+    const output = current.output_files ? codingWorkspace.parse(current.output_files) : null;
+    const origin = specialists ? 'controller-readonly-verification' : 'controller-verification';
+    const fingerprint = (files: z.infer<typeof codingWorkspace>) =>
+      canonical(
+        files
+          .map((file) => [file.path, digest(file.content)])
+          .sort(([a], [b]) => a!.localeCompare(b!)),
+      );
+    const verified =
+      current.state === 'completed' &&
+      report?.diffComplete === true &&
+      report.terminationConfirmed === true &&
+      !!output?.length &&
+      report.tests.some((test) => test.origin === origin && test.exitCode === 0) &&
+      (!specialists ||
+        (report.diff.length === 0 &&
+          fingerprint(output) === fingerprint(codingWorkspace.parse(current.files))));
+    const delivery = teamDelivery.parse({
+      jobId: current.job_id,
+      step: current.step_key,
+      result: report?.summary ?? '',
+      sources: (output ?? []).map((file) => ({ path: file.path, hash: digest(file.content) })),
+      inputHash: digest(canonical(current.files)),
+      outputHash: output ? digest(canonical(output)) : null,
+      tests: (report?.tests ?? [])
+        .filter((test) => test.origin === origin)
+        .map(({ command, exitCode, origin }) => ({ command, exitCode, origin })),
+      doubts: [
+        ...(report?.limitations ?? []),
+        'Los criterios de salida y las afirmaciones del agente requieren revisión humana.',
+      ],
+      verified,
+    });
+    await this.coding.jobs.queue.tx(async (db) => {
+      const locked = (
+        await db.query('SELECT state FROM team_executions WHERE id=$1 FOR UPDATE', [run.id])
+      ).rows[0];
+      if (!active(locked.state)) return;
+      const saved = await db.query(
+        'UPDATE team_execution_steps SET delivery=$2 WHERE id=$1 AND delivery IS NULL RETURNING id',
+        [current.id, JSON.stringify(delivery)],
+      );
+      if (!saved.rowCount) return;
+      await teamEvent(
+        db,
+        run.id,
+        'delivery',
+        'Entrega guardada con procedencia y evidencia del controlador.',
+        { step: current.step_key, jobId: current.job_id, verified },
+      );
+      if (specialists) {
+        await systemTeamMessage(
+          db,
+          run.id,
+          current.id,
+          null,
+          verified ? 'completion' : 'conflict',
+          JSON.stringify({ step: current.step_key, verified, outputHash: delivery.outputHash }),
+          verified,
+        );
+        const snapshot = teamPlanSnapshot.parse(run.snapshot.plan);
+        for (const target of snapshot.steps.filter((step) =>
+          step.dependsOn.includes(current.step_key),
+        )) {
+          const row = (
+            await db.query(
+              'SELECT id FROM team_execution_steps WHERE execution_id=$1 AND step_key=$2',
+              [run.id, target.key],
+            )
+          ).rows[0];
+          await systemTeamMessage(
+            db,
+            run.id,
+            current.id,
+            row.id,
+            'handoff',
+            JSON.stringify({
+              step: current.step_key,
+              verified,
+              inputHash: delivery.inputHash,
+              outputHash: delivery.outputHash,
+            }),
+            verified,
+          );
+        }
+      }
+    });
+    return delivery;
   }
 }

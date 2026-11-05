@@ -17,7 +17,7 @@ export const executionOptionSchema = z.object({
   provider: aiProviderSchema,
   runtime: z.enum(['codex-cli', 'ferweb-chat']),
   destination: z.enum(['openai-api', 'local-ollama', 'simulated', 'unknown']),
-  toolProfile: z.enum(['node-isolated-v1', 'text-only']),
+  toolProfile: z.enum(['node-isolated-v1', 'node-readonly-v1', 'text-only']),
   configurationRevision: z.string().nullable(),
   available: z.boolean(),
   reason: executionUnavailableReason.nullable(),

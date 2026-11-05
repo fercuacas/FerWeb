@@ -26,7 +26,7 @@ export const unknownUsage = (): z.infer<typeof usageSchema> => ({
 export const executionBudgetLimits = z.strictObject({
   maxRequests: z.number().int().min(1).max(20),
   timeoutMs: z.number().int().min(10000).max(1200000),
-  concurrency: z.literal(1),
+  concurrency: z.union([z.literal(1), z.literal(2)]),
 });
 export const usageAttribution = z.enum([
   'agent',
@@ -38,7 +38,7 @@ export const usageAttribution = z.enum([
 export const executionBudgetInput = z.strictObject({
   requestId: z.uuid(),
   name: z.string().trim().min(1).max(160),
-  limits: executionBudgetLimits,
+  limits: executionBudgetLimits.extend({ concurrency: z.literal(1) }),
 });
 const count = z.number().int().nonnegative();
 export const providerRequestUsage = z.strictObject({

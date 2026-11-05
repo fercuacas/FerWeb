@@ -25,6 +25,7 @@ const capabilityLabels: Record<(typeof agentCapability.options)[number], string>
   usage: 'Medición de uso',
 };
 const profileLabels: Record<(typeof agentToolProfile.options)[number], string> = {
+  'node-readonly-v1': 'Node con fuentes de solo lectura',
   'node-isolated-v1': 'Node aislado',
   'text-only': 'Solo texto',
 };

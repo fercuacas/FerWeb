@@ -10,6 +10,9 @@ import {
   type updateTeamTemplateInput,
   type prepareTeamPlanInput,
   type approveTeamPlanInput,
+  teamPolicy,
+  type updateTeamPolicyInput,
+  teamMessagesResponse,
 } from '@ferweb/contracts';
 import type { z } from 'zod';
 import { workspaceApi } from './workspace-store';
@@ -20,6 +23,32 @@ const plans = (project: string) => `/projects/${project}/team-plans`;
 const mutation = teamTemplateResponse.pick({ template: true });
 export const teamsApi = workspaceApi.injectEndpoints({
   endpoints: (b) => ({
+    teamPolicy: b.query<z.infer<typeof teamPolicy>, string>({
+      query: (project) => `/projects/${project}/team-policy`,
+      transformResponse: (data) => teamPolicy.parse(data),
+      providesTags: ['TeamPolicy'],
+      keepUnusedDataFor: 0,
+    }),
+    updateTeamPolicy: b.mutation<
+      z.infer<typeof teamPolicy>,
+      { project: string; body: z.infer<typeof updateTeamPolicyInput> }
+    >({
+      query: ({ project, body }) => ({
+        url: `/projects/${project}/team-policy`,
+        method: 'PATCH',
+        body,
+      }),
+      transformResponse: (data) => teamPolicy.parse(data),
+      invalidatesTags: ['TeamPolicy'],
+    }),
+    teamMessages: b.query<z.infer<typeof teamMessagesResponse>, Scope & { after: number }>({
+      query: ({ project, id, after }) => ({
+        url: `/projects/${project}/team-executions/${id}/messages`,
+        params: { after },
+      }),
+      transformResponse: (data) => teamMessagesResponse.parse(data),
+      keepUnusedDataFor: 0,
+    }),
     teamExecutions: b.query<z.infer<typeof teamExecutionsResponse>, string>({
       query: (project) => `/projects/${project}/team-executions`,
       transformResponse: (data) => teamExecutionsResponse.parse(data),

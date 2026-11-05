@@ -1,6 +1,6 @@
 import type { AgentTemplate } from '@ferweb/contracts';
 
-export const templateRevision = 1;
+export const templateRevision = 2;
 export const templateReference = 'https://github.com/affaan-m/ECC/tree/main/agents';
 
 // FerWeb prompts written for its isolated Node profile, inspired by ECC role specializations.
@@ -61,6 +61,7 @@ export const agentTemplates: AgentTemplate[] = roles.map(({ id, ...definition })
     ...definition,
     requiredCapabilities:
       id === 'implementer' ? ['text', 'toolCalls', 'workspaceWrite'] : ['text', 'toolCalls'],
-    allowedToolProfiles: ['node-isolated-v1'],
+    allowedToolProfiles:
+      id === 'implementer' ? ['node-isolated-v1'] : ['node-isolated-v1', 'node-readonly-v1'],
   },
 }));

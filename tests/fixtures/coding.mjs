@@ -1,7 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { addSource } from './retrieval.mjs';
 export function codingCorpus(fixture) {
-  for (const path of ['src/add.cjs', 'tests/add.test.cjs', 'tests/isolation-probe.cjs'])
+  for (const path of [
+    'src/add.cjs',
+    'tests/add.test.cjs',
+    'tests/isolation-probe.cjs',
+    'tests/readonly-probe.cjs',
+  ])
     addSource(
       fixture,
       path,

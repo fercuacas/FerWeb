@@ -111,8 +111,8 @@ export class ExecutionBudgets {
     if (count >= 1000) throw denied('budget_limit');
     const row = (
       await db.query(
-        'INSERT INTO execution_budgets(project_id,request_id,request_hash,name,max_requests,timeout_ms) VALUES($1,$2,$3,$4,$5,$6) RETURNING id',
-        [project, requestId, hash, name, limits.maxRequests, limits.timeoutMs],
+        'INSERT INTO execution_budgets(project_id,request_id,request_hash,name,max_requests,timeout_ms,concurrency) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id',
+        [project, requestId, hash, name, limits.maxRequests, limits.timeoutMs, limits.concurrency],
       )
     ).rows[0];
     return row.id as string;
@@ -143,7 +143,7 @@ export class ExecutionBudgets {
     return {
       maxRequests: parent.max_requests as number,
       timeoutMs: parent.timeout_ms as number,
-      concurrency: 1 as const,
+      concurrency: parent.concurrency as 1 | 2,
     };
   }
   async activate(db: PoolClient, row: QueryResultRow) {

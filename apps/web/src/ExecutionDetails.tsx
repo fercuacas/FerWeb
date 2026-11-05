@@ -44,7 +44,11 @@ export function ExecutionDetails({ option }: { option: ExecutionOption }) {
         {option.available ? 'Disponible según configuración' : 'No disponible'} ·{' '}
         {destinationLabels[option.destination]} ·{' '}
         {option.runtime === 'codex-cli' ? 'Codex CLI' : 'Chat de FerWeb'} ·{' '}
-        {option.toolProfile === 'node-isolated-v1' ? 'Herramientas Node aisladas' : 'Solo texto'}
+        {option.toolProfile === 'node-isolated-v1'
+          ? 'Herramientas Node aisladas'
+          : option.toolProfile === 'node-readonly-v1'
+            ? 'Node · fuentes de solo lectura'
+            : 'Solo texto'}
       </p>
       {option.reason && <p>{reasonLabels[option.reason]}</p>}
       <details>

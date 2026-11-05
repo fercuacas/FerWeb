@@ -91,7 +91,10 @@ export const jobAttemptSchema = z.object({
 export const jobDetailSchema = z.object({
   job: jobSchema,
   attempts: z.array(jobAttemptSchema),
-  limits: z.object({ globalConcurrency: z.literal(2), projectConcurrency: z.literal(1) }),
+  limits: z.object({
+    globalConcurrency: z.literal(2),
+    projectConcurrency: z.union([z.literal(1), z.literal(2)]),
+  }),
 });
 export const jobListSchema = z.object({ jobs: z.array(jobSchema) });
 export const jobEventsSchema = z.object({

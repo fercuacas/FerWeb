@@ -46,7 +46,8 @@ function PlanDetails({ project, id }: { project: Project; id: string }) {
           <p>
             Máximo previsto: {plan.snapshot.plannedRequests} peticiones · Presupuesto:{' '}
             {plan.snapshot.limits.maxRequests} · Iteraciones: {plan.snapshot.maxIterations} ·
-            Tiempo: {plan.snapshot.limits.timeoutMs / 1000} segundos · Concurrencia: 1
+            Tiempo: {plan.snapshot.limits.timeoutMs / 1000} segundos · Concurrencia:{' '}
+            {plan.snapshot.limits.concurrency}
           </p>
           <p>
             Esta preparación no consume inferencia ni reserva presupuesto. Tokens y coste: sin
@@ -166,18 +167,24 @@ function PlansContent({ project }: { project: Project }) {
   const tasks = tasksQuery.error ? undefined : tasksQuery.currentData?.tasks;
   const templates = templatesQuery.error ? undefined : templatesQuery.currentData?.templates;
   const detail = templateQuery.error ? undefined : templateQuery.currentData;
-  const execution = capabilities.error ? undefined : capabilities.currentData?.execution;
   const plans = plansQuery.error ? undefined : plansQuery.currentData?.plans;
   const task = tasks?.find((item) => item.id === taskId);
   const template = detail?.versions.find(
     (item) => item.version === (version || detail.template.latest.version),
   );
+  const specialists = template?.definition.strategy === 'specialists';
+  const execution = capabilities.error
+    ? undefined
+    : specialists
+      ? capabilities.currentData?.readOnlyExecution
+      : capabilities.currentData?.execution;
   const effectiveModel = execution?.models.some((item) => item.id === model)
     ? model
     : (execution?.models[0]?.id ?? '');
   const classification = task ? classifyPlanTask(task) : null;
   const single =
-    mode === 'single' || (mode === 'auto' && classification?.recommendedMode === 'single');
+    !specialists &&
+    (mode === 'single' || (mode === 'auto' && classification?.recommendedMode === 'single'));
   const orderedSteps = template
     ? teamStepOrder(template.definition.steps)!.map((key) =>
         template.definition.steps.find((step) => step.key === key)!,
@@ -203,8 +210,8 @@ function PlansContent({ project }: { project: Project }) {
           taskVersion: task.version,
           templateId: template.id,
           templateVersion: template.version,
-          mode,
-          ...(mode === 'single' && { singleStep }),
+          mode: specialists ? 'team' : mode,
+          ...(!specialists && mode === 'single' && { singleStep }),
           executionId: 'codex-v1',
           model: effectiveModel || null,
         },
@@ -306,13 +313,17 @@ function PlansContent({ project }: { project: Project }) {
             </label>
             <label>
               Modo del plan
-              <select value={mode} onChange={(e) => setMode(e.target.value as typeof mode)}>
+              <select
+                disabled={specialists}
+                value={specialists ? 'team' : mode}
+                onChange={(e) => setMode(e.target.value as typeof mode)}
+              >
                 <option value="auto">Automático según tamaño</option>
                 <option value="single">Agente único</option>
                 <option value="team">Equipo completo</option>
               </select>
             </label>
-            {mode === 'single' && (
+            {!specialists && mode === 'single' && (
               <label>
                 Etapa del agente único
                 <select required value={singleStep} onChange={(e) => setStep(e.target.value)}>
@@ -341,7 +352,13 @@ function PlansContent({ project }: { project: Project }) {
               </select>
             </label>
           </div>
-          {classification && (
+          {specialists && (
+            <p>
+              Este workflow requiere todos los especialistas y su resumen. Las fuentes se montan
+              como solo lectura y el límite del proyecto debe permitir la concurrencia solicitada.
+            </p>
+          )}
+          {classification && !specialists && (
             <p>
               Clasificación orientativa por longitud y número de criterios:{' '}
               {{ small: 'pequeña', medium: 'mediana', large: 'grande' }[classification.size]}.
@@ -383,7 +400,10 @@ function PlansContent({ project }: { project: Project }) {
           <button
             className="primary-button"
             disabled={
-              preparing.isLoading || !task || !template || (mode === 'single' && !singleStep)
+              preparing.isLoading ||
+              !task ||
+              !template ||
+              (!specialists && mode === 'single' && !singleStep)
             }
           >
             Preparar copia del plan

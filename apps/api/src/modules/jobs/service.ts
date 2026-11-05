@@ -157,7 +157,16 @@ export class JobService {
           errorCode: r.error_code,
         }),
       ),
-      limits: { globalConcurrency: 2 as const, projectConcurrency: 1 as const },
+      limits: {
+        globalConcurrency: 2 as const,
+        projectConcurrency:
+          (
+            await this.pool.query(
+              'SELECT r.parallelism FROM team_execution_steps s JOIN team_executions r ON r.id=s.execution_id WHERE s.job_id=$1',
+              [id],
+            )
+          ).rows[0]?.parallelism ?? 1,
+      },
     };
   }
   async events(owner: string, project: string, id: string, after: number) {

@@ -13,6 +13,7 @@ import { agentsApi } from './agents-store';
 import { teamsApi } from './teams-store';
 import { errorMessage } from './workspace-store';
 import { capabilityLabels } from './ExecutionDetails';
+import { TeamPolicySettings } from './TeamRuns';
 
 function RoleChoice({
   project,
@@ -158,11 +159,48 @@ function TemplateEditor({
       </label>
       <div className="job-grid">
         <label>
+          Estrategia del equipo
+          <select
+            value={draft.strategy ?? 'sequential'}
+            onChange={(e) => {
+              const { strategy: _, ...rest } = draft;
+              setDraft({
+                ...rest,
+                ...(e.target.value === 'specialists' && {
+                  strategy: 'specialists' as const,
+                  maxIterations: 1,
+                }),
+                limits: { ...draft.limits, concurrency: 1 },
+              });
+            }}
+          >
+            <option value="sequential">Cadena secuencial</option>
+            <option value="specialists">Especialistas de solo lectura y resumen</option>
+          </select>
+        </label>
+        {draft.strategy === 'specialists' && (
+          <label>
+            Concurrencia solicitada
+            <select
+              value={draft.limits.concurrency}
+              onChange={(e) =>
+                setDraft({
+                  ...draft,
+                  limits: { ...draft.limits, concurrency: Number(e.target.value) as 1 | 2 },
+                })
+              }
+            >
+              <option value={1}>1 especialista</option>
+              <option value={2}>2 especialistas</option>
+            </select>
+          </label>
+        )}
+        <label>
           Máximo de iteraciones
           <input
             type="number"
             min={1}
-            max={3}
+            max={draft.strategy === 'specialists' ? 1 : 3}
             required
             value={draft.maxIterations}
             onChange={(e) => setDraft({ ...draft, maxIterations: Number(e.target.value) })}
@@ -202,9 +240,16 @@ function TemplateEditor({
         </label>
       </div>
       <p>
-        Concurrencia máxima: 1. El presupuesto debe cubrir todas las etapas en todas las
-        iteraciones.
+        Concurrencia máxima: {draft.limits.concurrency}. El presupuesto debe cubrir todas las etapas
+        en todas las iteraciones.
       </p>
+      {draft.strategy === 'specialists' && (
+        <p>
+          Asigna roles y skills compatibles con Node de solo lectura. Los roles antiguos pueden
+          necesitar una versión nueva. Las etapas independientes van primero y el resumen final
+          depende de todas.
+        </p>
+      )}
       {draft.steps.map((item, index) => (
         <fieldset key={item.key}>
           <legend>
@@ -413,6 +458,7 @@ export function TeamTemplates({ project }: { project: Project }) {
   function start(preset?: TeamPreset, template?: TeamTemplate) {
     const initial: TeamDefinition = template?.latest.definition ?? {
       name: preset?.name ?? '',
+      ...(preset?.strategy && { strategy: preset.strategy }),
       description: preset?.description ?? '',
       maxIterations: 1,
       limits: { maxRequests: 10, timeoutMs: 300000, concurrency: 1 },
@@ -443,6 +489,7 @@ export function TeamTemplates({ project }: { project: Project }) {
   return (
     <section className="team-surface" aria-label="Equipos y plantillas">
       <h2>Equipos y plantillas</h2>
+      <TeamPolicySettings project={project} />
       <p>
         Define etapas, versiones de roles, dependencias y criterios de salida. Después prepara el
         plan desde Tareas o Trabajos.

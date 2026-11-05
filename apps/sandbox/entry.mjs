@@ -5,13 +5,15 @@ import { spawn } from 'node:child_process';
 // Trusted root supervisor. Repository processes have uid/gid 1000, no capabilities,
 // no-new-privileges and cannot signal this supervisor or read its process memory.
 const input = JSON.parse(await readFile('/control/input.json', 'utf8'));
-const prepare = spawn(process.execPath, ['/opt/ferweb/prepare.mjs'], {
-  uid: 1000,
-  gid: 1000,
-  env: {},
-  stdio: 'ignore',
-});
-if ((await new Promise((resolve) => prepare.once('exit', resolve))) !== 0) process.exit(2);
+if (input.workspaceAccess !== 'read-only') {
+  const prepare = spawn(process.execPath, ['/opt/ferweb/prepare.mjs'], {
+    uid: 1000,
+    gid: 1000,
+    env: {},
+    stdio: 'ignore',
+  });
+  if ((await new Promise((resolve) => prepare.once('exit', resolve))) !== 0) process.exit(2);
+}
 const proxy = http.createServer((req, res) => {
   const upstream = http.request(
     {

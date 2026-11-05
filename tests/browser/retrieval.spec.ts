@@ -39,8 +39,8 @@ test('repository context is indexed, searched and shown as persisted chat source
   await page.getByText('Contexto del repositorio', { exact: true }).click();
   await expect(page.getByText(/Sin índice · 0 documentos/)).toBeVisible();
   await page.getByRole('button', { name: 'Actualizar índice de contexto', exact: true }).click();
-  // Shared browser corpus includes the three prepared Codex source/test files.
-  await expect(page.getByText(/Índice actualizado · 9 documentos/)).toBeVisible();
+  // Shared corpus includes four Codex files, including the P07 read-only probe.
+  await expect(page.getByText(/Índice actualizado · 10 documentos/)).toBeVisible();
   await page.getByLabel('Pregunta para probar la recuperación').fill('autenticación cookie');
   await page.getByRole('button', { name: 'Buscar fuentes', exact: true }).click();
   await expect(page.locator('.repository-context .context-sources a').first()).toContainText(

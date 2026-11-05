@@ -269,7 +269,17 @@ export class JobQueue {
       if (count >= 2) return null;
       const row = (
         await db.query(
-          `SELECT j.* FROM jobs j JOIN projects p ON p.id=j.project_id WHERE j.state='pending' AND NOT j.cancel_requested AND p.archived_at IS NULL AND j.available_at<=clock_timestamp() AND NOT EXISTS(SELECT 1 FROM jobs busy WHERE busy.project_id=j.project_id AND busy.state='running') ORDER BY j.available_at,j.created_at,j.id LIMIT 1 FOR UPDATE OF j SKIP LOCKED`,
+          `SELECT j.* FROM jobs j JOIN projects p ON p.id=j.project_id
+           LEFT JOIN team_execution_steps candidate ON candidate.job_id=j.id
+           LEFT JOIN team_executions team ON team.id=candidate.execution_id
+           WHERE j.state='pending' AND NOT j.cancel_requested AND p.archived_at IS NULL AND j.available_at<=clock_timestamp()
+           AND (SELECT count(*) FROM jobs busy WHERE busy.project_id=j.project_id AND busy.state='running') <
+             CASE WHEN j.configuration->>'workspaceAccess'='read-only' AND team.parallelism=2 THEN LEAST(team.parallelism,p.team_parallelism) ELSE 1 END
+           AND NOT EXISTS(SELECT 1 FROM jobs busy LEFT JOIN team_execution_steps sibling ON sibling.job_id=busy.id
+             WHERE busy.project_id=j.project_id AND busy.state='running' AND
+               (candidate.execution_id IS NULL OR sibling.execution_id IS DISTINCT FROM candidate.execution_id OR
+                j.configuration->>'workspaceAccess' IS DISTINCT FROM 'read-only' OR busy.configuration->>'workspaceAccess' IS DISTINCT FROM 'read-only'))
+           ORDER BY j.available_at,j.created_at,j.id LIMIT 1 FOR UPDATE OF j SKIP LOCKED`,
         )
       ).rows[0];
       if (!row) return null;

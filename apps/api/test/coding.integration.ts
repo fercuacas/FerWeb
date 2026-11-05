@@ -21,6 +21,7 @@ import {
   teamPlanResponse,
   teamPlansResponse,
   teamExecutionResponse,
+  teamMessagesResponse,
   type TeamDefinition,
 } from '@ferweb/contracts';
 import { createPool } from '../src/database.js';
@@ -317,7 +318,7 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
         const catalog = teamTemplatesResponse.parse(await (await read(endpoint)).json());
         assert.deepEqual(
           catalog.presets.map((item) => item.id),
-          ['implement-review', 'research-answer', 'review-diff'],
+          ['implement-review', 'research-answer', 'review-diff', 'specialists-review'],
         );
         const roles = `/projects/${project}/agents`;
         const createdRole = await post(roles, { template: 'implementer' });
@@ -1314,6 +1315,413 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
         assert.equal(changedDone.execution.state, 'failed');
         assert.equal(changedDone.steps[1]!.jobId, null);
         assert.equal((await detail(changedJob)).job.attempt, 1);
+      },
+    );
+    await t.test(
+      'specialists enforce read-only sources, explicit bounded parallelism, authenticated messages and incomplete failure gathering',
+      async () => {
+        if (!worker || worker.exitCode !== null || worker.signalCode !== null) await startWorker();
+        const contexts: { project: string; roles: string[] }[] = [];
+        const runs: { project: string; id: string }[] = [];
+        const post = async (path: string, body: unknown) => {
+          const response = await request('POST', path, body, cookie);
+          assert.ok(response.ok, await response.clone().text());
+          return response.status === 204 ? null : response.json();
+        };
+        const context = async (name: string) => {
+          const { project: p } = await post('/projects', {
+            name,
+            description: 'P07 disposable fixture.',
+          });
+          await post(`/projects/${p.id}/github`, {
+            installationId: 71,
+            repositoryId: 101,
+            version: 0,
+          });
+          await post(`/projects/${p.id}/github/sync`, { version: 1 });
+          const roleIds = [];
+          for (const template of ['explorer', 'reviewer', 'planner'])
+            roleIds.push((await post(`/projects/${p.id}/agents`, { template })).role.id);
+          const ctx = { project: p.id as string, roles: roleIds as string[] };
+          contexts.push(ctx);
+          return ctx;
+        };
+        const definition = (ctx: { roles: string[] }, concurrency: 1 | 2): TeamDefinition => ({
+          name: 'P07 specialists',
+          description: 'Independent read-only roots with fan-in.',
+          strategy: 'specialists',
+          maxIterations: 1,
+          limits: { maxRequests: 10, timeoutMs: 120000, concurrency },
+          steps: ['explore', 'audit', 'summary'].map((key, index) => ({
+            key,
+            title: key,
+            role: { id: ctx.roles[index]!, version: 1 },
+            dependsOn: index === 2 ? ['explore', 'audit'] : [],
+            exitCriteria: ['Report evidence without changing sources.'],
+            requiredCapabilities: ['text', 'toolCalls'],
+            maxRequests: 2,
+          })),
+        });
+        const prepare = async (
+          ctx: { project: string; roles: string[] },
+          title: string,
+          concurrency: 1 | 2,
+        ) => {
+          const { template } = await post(`/projects/${ctx.project}/team-templates`, {
+            definition: definition(ctx, concurrency),
+          });
+          const { task: t } = await post(`/projects/${ctx.project}/tasks`, {
+            title,
+            description: 'Read the original snapshot. Do not fix the deliberately failing sum.',
+            priority: 'medium',
+            status: 'todo',
+            acceptanceCriteria: ['Independent findings and bounded gathering.'],
+          });
+          const { plan } = await post(`/projects/${ctx.project}/team-plans`, {
+            requestId: randomUUID(),
+            taskId: t.id,
+            taskVersion: t.version,
+            templateId: template.id,
+            templateVersion: 1,
+            mode: 'team',
+            executionId: 'codex-v1',
+            model: 'fixture-codex',
+          });
+          await post(`/projects/${ctx.project}/team-plans/${plan.id}/approve`, {
+            hash: plan.hash,
+            version: 1,
+          });
+          return {
+            path: `/projects/${ctx.project}/team-plans/${plan.id}/execute`,
+            body: { requestId: randomUUID(), hash: plan.hash, version: 1, commit: 'a'.repeat(40) },
+          };
+        };
+        const execute = async (
+          ctx: { project: string },
+          prepared: { path: string; body: unknown },
+        ) => {
+          const data = teamExecutionResponse.parse(await post(prepared.path, prepared.body));
+          runs.push({ project: ctx.project, id: data.execution.id });
+          return data;
+        };
+        const read = async (ctx: { project: string }, id: string) =>
+          teamExecutionResponse.parse(
+            await (
+              await request(
+                'GET',
+                `/projects/${ctx.project}/team-executions/${id}`,
+                undefined,
+                cookie,
+              )
+            ).json(),
+          );
+        const finish = (ctx: { project: string }, id: string) =>
+          waitFor(async () => {
+            const data = await read(ctx, id);
+            return ['completed', 'failed', 'cancelled'].includes(data.execution.state)
+              ? data
+              : false;
+          }, 60000);
+        try {
+          const ctx = await context('P07 scoped parallel fixture');
+          assert.equal(
+            (
+              await (
+                await request('GET', `/projects/${ctx.project}/team-policy`, undefined, cookie)
+              ).json()
+            ).parallelism,
+            1,
+          );
+          const incompatible = (
+            await post(`/projects/${ctx.project}/agents`, { template: 'implementer' })
+          ).role;
+          const bad = definition(ctx, 2);
+          bad.steps[0]!.role = { id: incompatible.id, version: 1 };
+          assert.equal(
+            (
+              await request(
+                'POST',
+                `/projects/${ctx.project}/team-templates`,
+                { definition: bad },
+                cookie,
+              )
+            ).status,
+            422,
+          );
+          assert.equal(
+            (
+              await request(
+                'POST',
+                `/projects/${ctx.project}/budgets`,
+                {
+                  requestId: randomUUID(),
+                  name: 'No public parallel budget',
+                  limits: { maxRequests: 4, timeoutMs: 120000, concurrency: 2 },
+                },
+                cookie,
+              )
+            ).status,
+            400,
+          );
+          const serial = await execute(ctx, await prepare(ctx, 'P07 default specialists', 1));
+          const serialDone = await finish(ctx, serial.execution.id);
+          assert.equal(
+            serialDone.execution.state,
+            'completed',
+            JSON.stringify({
+              code: serialDone.execution.errorCode,
+              steps: serialDone.steps.map((step) => ({
+                key: step.key,
+                state: step.state,
+                code: step.errorCode,
+                delivery: step.delivery,
+              })),
+            }),
+          );
+          const childRows = (
+            await pool.query(
+              'SELECT j.* FROM jobs j JOIN team_execution_steps s ON s.job_id=j.id WHERE s.execution_id=$1 ORDER BY s.position',
+              [serial.execution.id],
+            )
+          ).rows;
+          assert.ok(childRows[1]!.first_started_at >= childRows[0]!.finished_at);
+          assert.equal(serialDone.gathering.complete, true);
+          const prepared = await prepare(ctx, 'P07 messaging parallel', 2);
+          assert.equal((await request('POST', prepared.path, prepared.body, cookie)).status, 409);
+          const policyPath = `/projects/${ctx.project}/team-policy`;
+          assert.equal(
+            (await request('PATCH', policyPath, { parallelism: 2, version: 1 }, foreign)).status,
+            404,
+          );
+          assert.equal(
+            (await request('PATCH', policyPath, { parallelism: 2, version: 1 }, cookie)).status,
+            200,
+          );
+          const parallel = await execute(ctx, prepared);
+          assert.equal(
+            (await request('PATCH', policyPath, { parallelism: 1, version: 2 }, cookie)).status,
+            409,
+          );
+          const done = await finish(ctx, parallel.execution.id);
+          assert.equal(done.execution.state, 'completed');
+          assert.deepEqual(done.gathering.missing, []);
+          assert.equal(done.gathering.complete, true);
+          assert.match(done.gathering.summary ?? '', /Resumen de las dos entregas/);
+          const children = (
+            await pool.query(
+              'SELECT j.*,c.report,c.files,c.output_files FROM jobs j JOIN team_execution_steps s ON s.job_id=j.id JOIN coding_runs c ON c.job_id=j.id WHERE s.execution_id=$1 ORDER BY s.position',
+              [parallel.execution.id],
+            )
+          ).rows;
+          assert.ok(
+            children[0]!.first_started_at < children[1]!.finished_at &&
+              children[1]!.first_started_at < children[0]!.finished_at,
+          );
+          assert.ok(
+            children[2]!.first_started_at >= children[0]!.finished_at &&
+              children[2]!.first_started_at >= children[1]!.finished_at,
+          );
+          for (const child of children) {
+            assert.equal(child.configuration.workspaceAccess, 'read-only');
+            assert.equal(child.attempt, 1);
+            assert.deepEqual(child.report.diff, []);
+            assert.ok(
+              child.report.commands.some(
+                (command: { command: string; exitCode: number }) =>
+                  command.command.includes('readonly-probe.cjs') && command.exitCode === 0,
+              ),
+            );
+            assert.ok(
+              child.report.tests.some(
+                (test: { origin: string; exitCode: number }) =>
+                  test.origin === 'controller-readonly-verification' && test.exitCode === 0,
+              ),
+            );
+          }
+          const messagesPath = `/projects/${ctx.project}/team-executions/${parallel.execution.id}/messages`;
+          const messages = teamMessagesResponse.parse(
+            await (await request('GET', messagesPath + '?after=0', undefined, cookie)).json(),
+          );
+          const query = messages.messages.find((message) => message.kind === 'query')!;
+          const response = messages.messages.find((message) => message.kind === 'response')!;
+          assert.ok(query && response);
+          assert.equal(response.replyTo, query.id);
+          assert.equal(query.sender, 'agent');
+          assert.equal(query.verified, false);
+          assert.equal(messages.messages.filter((message) => message.kind === 'query').length, 1);
+          assert.ok(
+            messages.messages.some(
+              (message) =>
+                message.kind === 'handoff' && message.sender === 'coordinator' && message.verified,
+            ),
+          );
+          assert.ok(
+            messages.messages.some(
+              (message) =>
+                message.kind === 'completion' &&
+                message.sender === 'coordinator' &&
+                message.verified,
+            ),
+          );
+          assert.equal((await request('GET', messagesPath, undefined, foreign)).status, 404);
+          assert.equal(
+            teamMessagesResponse.parse(
+              await (
+                await request(
+                  'GET',
+                  messagesPath + '?after=' + messages.nextCursor,
+                  undefined,
+                  cookie,
+                )
+              ).json(),
+            ).messages.length,
+            0,
+          );
+          const holding = await execute(ctx, await prepare(ctx, 'P07 lease messages quota', 2));
+          const live = await waitFor(async () => {
+            const data = await read(ctx, holding.execution.id);
+            if (!data.steps[0]?.jobId || !data.steps[1]?.jobId) return false;
+            const rows = (
+              await pool.query(
+                "SELECT j.* FROM jobs j WHERE j.id=ANY($1::uuid[]) AND j.state='running'",
+                [[data.steps[0].jobId, data.steps[1].jobId]],
+              )
+            ).rows;
+            return rows.length === 2 ? { data, rows } : false;
+          });
+          const actor = live.rows.find((row) => row.id === live.data.steps[0]!.jobId)!;
+          const internal = (fence: string, message: unknown) =>
+            fetch(base + `/internal/coding/${actor.id}/messages`, {
+              method: 'POST',
+              headers: {
+                authorization: 'Bearer ' + process.env.RUNNER_SERVICE_TOKEN!,
+                'content-type': 'application/json',
+              },
+              body: JSON.stringify({ fence, message }),
+            });
+          const other = await context('P07 foreign message target');
+          const otherRun = await execute(
+            other,
+            await prepare(other, 'P07 foreign queued specialists', 1),
+          );
+          const content = {
+            requestId: randomUUID(),
+            to: otherRun.steps[0]!.id,
+            kind: 'query',
+            text: 'Wrong execution target.',
+          };
+          assert.equal((await internal(actor.fence, content)).status, 409);
+          assert.equal((await internal(randomUUID(), { ...content, to: null })).status, 404);
+          assert.equal(
+            (await internal(actor.fence, { ...content, to: null, senderJobId: randomUUID() }))
+              .status,
+            400,
+          );
+          assert.equal(
+            (await internal(actor.fence, { ...content, to: null, text: 'x'.repeat(2001) })).status,
+            400,
+          );
+          let firstMessage: unknown;
+          for (let i = 0; i < 16; i++) {
+            const message = {
+              requestId: randomUUID(),
+              to: null,
+              kind: 'completion',
+              text: 'Untrusted completion claim ' + i,
+            };
+            const sent = await internal(actor.fence, message);
+            assert.equal(sent.status, 200);
+            if (!i) firstMessage = message;
+          }
+          assert.equal((await internal(actor.fence, firstMessage)).status, 200);
+          assert.equal(
+            (
+              await internal(actor.fence, {
+                requestId: randomUUID(),
+                to: null,
+                kind: 'query',
+                text: 'Over quota',
+              })
+            ).status,
+            409,
+          );
+          assert.equal((await read(ctx, holding.execution.id)).gathering.complete, false);
+          await post(
+            `/projects/${other.project}/team-executions/${otherRun.execution.id}/cancel`,
+            {},
+          );
+          await finish(other, otherRun.execution.id);
+          await post(`/projects/${ctx.project}/team-executions/${holding.execution.id}/cancel`, {});
+          const stopped = await finish(ctx, holding.execution.id);
+          assert.equal(stopped.execution.state, 'cancelled');
+          assert.equal(stopped.gathering.complete, false);
+          assert.ok(stopped.gathering.missing.length > 0);
+          assert.equal(stopped.steps[2]!.jobId, null);
+          assert.notEqual(
+            (
+              await internal(actor.fence, {
+                requestId: randomUUID(),
+                to: null,
+                kind: 'completion',
+                text: 'Old generation',
+              })
+            ).status,
+            200,
+          );
+          const failed = await execute(ctx, await prepare(ctx, 'P07 specialist failure', 2));
+          const failedDone = await finish(ctx, failed.execution.id);
+          assert.equal(failedDone.execution.state, 'failed');
+          assert.equal(failedDone.gathering.complete, false);
+          assert.ok(failedDone.gathering.missing.includes('audit'));
+          const conflicts = teamMessagesResponse.parse(
+            await (
+              await request(
+                'GET',
+                `/projects/${ctx.project}/team-executions/${failed.execution.id}/messages?after=0`,
+                undefined,
+                cookie,
+              )
+            ).json(),
+          );
+          assert.ok(
+            conflicts.messages.some((message) => message.kind === 'conflict' && !message.verified),
+          );
+          assert.equal(failedDone.steps[2]!.jobId, null);
+          assert.equal(
+            (
+              await pool.query(
+                "SELECT count(*)::int AS n FROM jobs WHERE project_id=$1 AND state IN ('pending','running')",
+                [ctx.project],
+              )
+            ).rows[0].n,
+            0,
+          );
+          assert.equal(
+            (
+              await (
+                await request('GET', `/projects/${project}/team-policy`, undefined, cookie)
+              ).json()
+            ).parallelism,
+            1,
+          );
+        } finally {
+          for (const run of runs)
+            await request(
+              'POST',
+              `/projects/${run.project}/team-executions/${run.id}/cancel`,
+              {},
+              cookie,
+            );
+          await waitFor(
+            async () =>
+              (
+                await pool.query(
+                  "SELECT count(*)::int AS n FROM jobs WHERE project_id=ANY($1::uuid[]) AND state IN ('pending','running')",
+                  [contexts.map((ctx) => ctx.project)],
+                )
+              ).rows[0].n === 0,
+          );
+        }
       },
     );
     await t.test(

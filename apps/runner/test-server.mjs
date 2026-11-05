@@ -3,6 +3,28 @@ import { createController } from './controller.mjs';
 let sequence = 0;
 async function fakeProvider(run, value, res) {
   const teamStep = run.input.task.teamStep;
+  const readOnly = run.input.workspaceAccess === 'read-only';
+  if (
+    readOnly &&
+    run.requests > 1 &&
+    !/cancel|lease|timeout/i.test(run.input.task.title) &&
+    !JSON.stringify(value.input).includes('P07 independent specialist ' + teamStep?.key)
+  ) {
+    res.writeHead(503);
+    res.end('{"error":{"message":"readonly probe did not complete successfully"}}');
+    return;
+  }
+  if (
+    readOnly &&
+    ((/P07 specialist failure/.test(run.input.task.title) && teamStep?.key === 'audit') ||
+      (teamStep?.key === 'summary' &&
+        (teamStep.deliveries?.length !== 2 ||
+          teamStep.deliveries.some((delivery) => !delivery.verified))))
+  ) {
+    res.writeHead(503);
+    res.end('{"error":{"message":"simulated specialist failure or incomplete gathering"}}');
+    return;
+  }
   if (
     teamStep?.key === 'review' &&
     (/P06 reviewer error/.test(run.input.task.title) ||
@@ -62,8 +84,9 @@ async function fakeProvider(run, value, res) {
   let output;
   if (run.requests === 1 && exec) {
     const cancel = /cancel|lease|timeout/i.test(run.input.task.title);
-    const command =
-      teamStep?.key === 'review'
+    const command = readOnly
+      ? `node tests/readonly-probe.cjs${cancel ? ' && sleep 30' : ''}`
+      : teamStep?.key === 'review'
         ? 'node --test; node tests/isolation-probe.cjs'
         : cancel
           ? 'sleep 30'
@@ -95,7 +118,9 @@ async function fakeProvider(run, value, res) {
         content: [
           {
             type: 'output_text',
-            text: 'Corregida la suma. Se ejecutaron node --test y la comprobación de aislamiento. Revisa el diff y la verificación independiente del controlador.',
+            text: readOnly
+              ? `P07 ${teamStep.key}: resultado independiente con fuentes intactas.${teamStep.key === 'summary' ? ' Resumen de las dos entregas verificadas.' : ''} Los criterios requieren revisión humana.`
+              : 'Corregida la suma. Se ejecutaron node --test y la comprobación de aislamiento. Revisa el diff y la verificación independiente del controlador.',
             annotations: [],
           },
         ],

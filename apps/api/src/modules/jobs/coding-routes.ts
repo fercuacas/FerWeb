@@ -8,10 +8,12 @@ import {
   reviewPublishInput,
   requestAdmissionInput,
   requestUsageInput,
+  sendTeamMessageInput,
 } from '@ferweb/contracts';
 import { CodingService } from './coding-service.js';
 import { ReviewService } from './review-service.js';
 import { TeamExecutions } from '../teams/executions.js';
+import { TeamMessages } from '../teams/messages.js';
 export function codingRouter(service: CodingService) {
   const router = express.Router();
   const reviews = new ReviewService(service);
@@ -89,8 +91,19 @@ export function codingInternalRouter(service: CodingService, token: string) {
     }
     next();
   });
-  router.use(express.json({ limit: '2kb' }));
+  router.use(express.json({ limit: '16kb' }));
   const teams = new TeamExecutions(service.pool, service);
+  const messages = new TeamMessages(service.pool, service);
+  router.post('/coding/:jobId/messages', async (req, res) => {
+    const body = z.strictObject({ fence: z.uuid(), message: sendTeamMessageInput }).parse(req.body);
+    res.json(await messages.send(z.uuid().parse(req.params.jobId), body.fence, body.message));
+  });
+  router.post('/coding/:jobId/inbox', async (req, res) => {
+    const body = z
+      .strictObject({ fence: z.uuid(), after: z.number().int().min(0).max(2147483647) })
+      .parse(req.body);
+    res.json(await messages.inbox(z.uuid().parse(req.params.jobId), body.fence, body.after));
+  });
   router.post('/teams/tick', async (req, res) => {
     z.strictObject({}).parse(req.body);
     res.json(await teams.tick());

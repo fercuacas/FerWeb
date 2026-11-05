@@ -26,7 +26,7 @@ La cola tiene cinco estados: `pending` (pendiente), `running` (ejecutando), `com
 | Límite | Aplicación |
 | --- | --- |
 | Concurrencia global | Máximo dos trabajos ejecutando en la base de la instancia, aunque haya varios workers. |
-| Concurrencia por proyecto | Máximo un trabajo ejecutando; los demás permanecen en cola. |
+| Concurrencia por proyecto | Por defecto uno. P07 permite hasta dos especialistas de solo lectura del mismo equipo con configuración explícita; escritores y simulaciones mantienen exclusión. [Protocolo](codex.md#especialistas-y-mensajes-p07). |
 | Worker individual | `JOB_WORKER_CONCURRENCY`, 1–2, por defecto 2. Reducirlo no aumenta el máximo SQL global. |
 | Plazo total | 1–120 segundos desde la primera asignación; incluye validación, trabajo, reintentos y espera entre ellos. Se conserva al reiniciar. El tiempo inicial en cola no consume ese plazo. |
 | Intentos | 1–3 por trabajo. Solo fallos clasificados como transitorios, pérdida del ejecutor, fallo de arranque o apagado ordenado permiten reintento. |

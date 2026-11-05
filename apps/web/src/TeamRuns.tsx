@@ -1,4 +1,6 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
+import type { z } from 'zod';
+import type { teamMessage } from '@ferweb/contracts';
 import type { Project, TeamPlan } from '@ferweb/contracts';
 import { teamsApi } from './teams-store';
 import { jobsApi } from './jobs-store';
@@ -17,13 +19,166 @@ const names = {
   cancelled: 'Cancelado',
   skipped: 'Omitido',
 };
+export function TeamPolicySettings({ project }: { project: Project }) {
+  const query = teamsApi.useTeamPolicyQuery(project.id);
+  const [save, result] = teamsApi.useUpdateTeamPolicyMutation();
+  const [selected, setSelected] = useState<0 | 1 | 2>(0);
+  const [confirmed, setConfirmed] = useState(false);
+  const data = query.error ? undefined : query.currentData;
+  const value = selected || data?.parallelism || 1;
+  return (
+    <section className="agent-history" aria-label="Concurrencia de especialistas">
+      <h3>Concurrencia de especialistas</h3>
+      <p>
+        Por defecto, un trabajo por proyecto. El máximo global sigue siendo dos. Solo especialistas
+        del mismo equipo con fuentes de solo lectura pueden coincidir.
+      </p>
+      {query.isLoading && <p>Cargando configuración…</p>}
+      {query.error && (
+        <p role="alert">
+          {errorMessage(query.error)}{' '}
+          <button onClick={() => void query.refetch()}>Reintentar configuración</button>
+        </p>
+      )}
+      {data && (
+        <>
+          <p>
+            Configuración actual: {data.parallelism} · Versión {data.version}
+          </p>
+          {!project.archivedAt && (
+            <>
+              <label>
+                Límite del proyecto
+                <select
+                  value={value}
+                  onChange={(e) => {
+                    setSelected(Number(e.target.value) as 1 | 2);
+                    setConfirmed(false);
+                  }}
+                >
+                  <option value={1}>1 especialista</option>
+                  <option value={2}>2 especialistas</option>
+                </select>
+              </label>
+              {value === 2 && (
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={confirmed}
+                    onChange={(e) => setConfirmed(e.target.checked)}
+                  />
+                  Confirmo permitir dos especialistas simultáneos en este proyecto
+                </label>
+              )}
+              <button
+                disabled={
+                  result.isLoading || value === data.parallelism || (value === 2 && !confirmed)
+                }
+                onClick={() =>
+                  void save({
+                    project: project.id,
+                    body: { parallelism: value, version: data.version },
+                  })
+                    .unwrap()
+                    .then(() => {
+                      setSelected(0);
+                      setConfirmed(false);
+                    })
+                    .catch(() => {})
+                }
+              >
+                Guardar concurrencia del proyecto
+              </button>
+            </>
+          )}
+        </>
+      )}
+      {result.error && <p role="alert">{errorMessage(result.error)}</p>}
+    </section>
+  );
+}
+function TeamMessageFeed({
+  project,
+  id,
+  steps,
+}: {
+  project: string;
+  id: string;
+  steps: { id: string; key: string }[];
+}) {
+  const [cursor, setCursor] = useState(0);
+  const [messages, setMessages] = useState<z.infer<typeof teamMessage>[]>([]);
+  const query = teamsApi.useTeamMessagesQuery(
+    { project, id, after: cursor },
+    { pollingInterval: 1500, refetchOnFocus: true, skipPollingIfUnfocused: true },
+  );
+  useEffect(() => {
+    const data = query.currentData;
+    if (!query.error && data?.messages.length) {
+      setMessages((previous) => [
+        ...previous,
+        ...data.messages.filter((message) => !previous.some((item) => item.id === message.id)),
+      ]);
+      setCursor(data.nextCursor);
+    }
+  }, [query.currentData, query.error]);
+  const kinds = {
+    handoff: 'Entrega',
+    query: 'Consulta',
+    response: 'Respuesta',
+    completion: 'Finalización',
+    conflict: 'Conflicto',
+  };
+  const label = (step: string | null) =>
+    step ? (steps.find((item) => item.id === step)?.key ?? 'Etapa') : 'Coordinador';
+  return (
+    <section className="agent-history" aria-label="Mensajes del equipo">
+      <h4>Mensajes del equipo</h4>
+      <p>
+        Identidad asignada por el servidor. El texto de un agente no concede permisos ni acredita
+        éxito.
+      </p>
+      {query.isLoading && <p>Cargando mensajes…</p>}
+      {query.error ? (
+        <p role="alert">
+          {errorMessage(query.error)}{' '}
+          <button onClick={() => void query.refetch()}>Reintentar mensajes</button>
+        </p>
+      ) : (
+        <>
+          {!messages.length && <p>Aún no hay mensajes.</p>}
+          <ol>
+            {messages.map((message) => (
+              <li key={message.id}>
+                <strong>
+                  {message.sequence} · {kinds[message.kind]} · {label(message.senderStepId)} →{' '}
+                  {label(message.to)}
+                </strong>
+                <p>
+                  {message.sender === 'coordinator' ? 'Coordinador' : 'Agente autenticado'} ·{' '}
+                  {message.verified ? 'Procedencia técnica verificada' : 'Texto sin verificar'}
+                </p>
+                <p className="skill-text">{message.text}</p>
+              </li>
+            ))}
+          </ol>
+        </>
+      )}
+    </section>
+  );
+}
 export function TeamLauncher({ project, plan }: { project: Project; plan: TeamPlan }) {
   const query = githubApi.useGithubLinkQuery(project.id, { refetchOnFocus: true });
+  const policy = teamsApi.useTeamPolicyQuery(project.id, { refetchOnFocus: true });
   const [start, result] = teamsApi.useExecuteTeamPlanMutation();
   const [confirmed, setConfirmed] = useState('');
   const request = useRef({ commit: '', id: crypto.randomUUID() });
   const link = query.error ? undefined : query.currentData?.link;
   const commit = link?.snapshot?.commit ?? '';
+  const configured =
+    !policy.error &&
+    !!policy.currentData &&
+    plan.snapshot.limits.concurrency <= policy.currentData.parallelism;
   const ready = !!commit && !link?.revoked && !link?.stale && !link?.snapshot?.treeTruncated;
   return (
     <div className="job-form">
@@ -38,13 +193,29 @@ export function TeamLauncher({ project, plan }: { project: Project; plan: TeamPl
       {!ready && !query.isLoading && !query.error && (
         <p>Vincula y sincroniza un repositorio desde GitHub antes de ejecutar el equipo.</p>
       )}
+      {!configured && (
+        <p>
+          Configura la concurrencia solicitada desde Agentes → Equipos y plantillas antes de
+          ejecutar.
+        </p>
+      )}
+      {policy.error && (
+        <p role="alert">
+          {errorMessage(policy.error)}{' '}
+          <button onClick={() => void policy.refetch()}>Reintentar límite del proyecto</button>
+        </p>
+      )}
       {ready && (
         <>
           <p className="skill-text">Commit a congelar: {commit}</p>
           <p>
-            Se crearán {plan.snapshot.steps.length} etapas secuenciales con un presupuesto de{' '}
-            {plan.snapshot.limits.maxRequests} peticiones y {plan.snapshot.limits.timeoutMs / 1000}{' '}
-            segundos. El proveedor y los roles son los de esta copia aprobada.
+            Se crearán {plan.snapshot.steps.length} etapas{' '}
+            {plan.snapshot.template.definition.strategy === 'specialists'
+              ? 'de especialistas de solo lectura y resumen'
+              : 'secuenciales'}{' '}
+            con un presupuesto de {plan.snapshot.limits.maxRequests} peticiones y{' '}
+            {plan.snapshot.limits.timeoutMs / 1000} segundos. El proveedor y los roles son los de
+            esta copia aprobada.
           </p>
           <label>
             <input
@@ -56,7 +227,9 @@ export function TeamLauncher({ project, plan }: { project: Project; plan: TeamPl
           </label>
           <button
             className="primary-button"
-            disabled={confirmed !== commit || result.isLoading || !!project.archivedAt}
+            disabled={
+              !configured || confirmed !== commit || result.isLoading || !!project.archivedAt
+            }
             onClick={() => {
               if (request.current.commit !== commit)
                 request.current = { commit, id: crypto.randomUUID() };
@@ -69,7 +242,9 @@ export function TeamLauncher({ project, plan }: { project: Project; plan: TeamPl
                 .catch(() => {});
             }}
           >
-            Ejecutar equipo secuencial
+            {plan.snapshot.template.definition.strategy === 'specialists'
+              ? 'Ejecutar especialistas'
+              : 'Ejecutar equipo secuencial'}
           </button>
         </>
       )}
@@ -154,11 +329,31 @@ export function TeamRunDetails({ project, id }: { project: Project; id: string }
             Commit: {data.execution.commit} · Plan: {data.execution.planHash}
           </p>
           <p>
-            Una pasada secuencial · Un solo trabajo activo por proyecto · Sin reintentos automáticos
-            de código
+            Una pasada{' '}
+            {data.plan.template.definition.strategy === 'specialists'
+              ? `de especialistas · Concurrencia aprobada ${data.plan.limits.concurrency}`
+              : 'secuencial · Un solo trabajo activo por proyecto'}{' '}
+            · Sin reintentos automáticos de código
           </p>
           <ExecutionDetails option={data.plan.execution} />
           <TeamBudget project={project.id} id={data.execution.budgetId} />
+          {data.plan.template.definition.strategy === 'specialists' && (
+            <>
+              <section aria-label="Resultados reunidos">
+                <h4>Resultados reunidos</h4>
+                <p>
+                  {data.gathering.complete ? 'Recogida completa' : 'Recogida incompleta'} ·
+                  Recibidos: {data.gathering.received.join(', ') || 'ninguno'} · Ausentes:{' '}
+                  {data.gathering.missing.join(', ') || 'ninguno'} · Conflictos:{' '}
+                  {data.gathering.conflicts}
+                </p>
+                <p className="skill-text">
+                  {data.gathering.summary ?? 'Resumen aún no disponible.'}
+                </p>
+              </section>
+              <TeamMessageFeed project={project.id} id={id} steps={data.steps} />
+            </>
+          )}
           {data.execution.errorCode && (
             <p role="alert">
               Motivo: {data.execution.errorCode}. Consulta la evidencia parcial de cada etapa.

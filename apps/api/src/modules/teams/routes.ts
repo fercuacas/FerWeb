@@ -7,6 +7,7 @@ import {
   prepareTeamPlanInput,
   approveTeamPlanInput,
   executeTeamPlanInput,
+  updateTeamPolicyInput,
 } from '@ferweb/contracts';
 import { TeamService } from './service.js';
 import { TeamExecutions } from './executions.js';
@@ -17,6 +18,20 @@ export function teamRouter(service: TeamService, executions: TeamExecutions) {
     [res.locals.user.id as string, z.uuid().parse(req.params.projectId)] as const;
   const templateId = (req: express.Request) => z.uuid().parse(req.params.templateId);
   const planId = (req: express.Request) => z.uuid().parse(req.params.planId);
+  router.get('/projects/:projectId/team-policy', async (req, res) =>
+    res.json(await executions.policy(...scope(req, res))),
+  );
+  router.patch('/projects/:projectId/team-policy', async (req, res) =>
+    res.json(await executions.configure(...scope(req, res), updateTeamPolicyInput.parse(req.body))),
+  );
+  router.get('/projects/:projectId/team-executions/:executionId/messages', async (req, res) => {
+    const { after } = z
+      .strictObject({ after: z.coerce.number().int().min(0).max(2147483647).default(0) })
+      .parse(req.query);
+    res.json(
+      await executions.messages(...scope(req, res), z.uuid().parse(req.params.executionId), after),
+    );
+  });
   router.get('/projects/:projectId/team-templates', async (req, res) =>
     res.json(await service.templates(...scope(req, res))),
   );

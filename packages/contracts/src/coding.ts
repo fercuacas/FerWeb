@@ -8,6 +8,7 @@ export const codingAgentSnapshot = agentSnapshot.extend({
   materials: z.array(skillVersion).max(3).optional(),
 });
 export const codingConfiguration = z.strictObject({
+  workspaceAccess: z.literal('read-only').optional(),
   taskId: z.uuid(),
   commit: z.string().regex(/^[a-f0-9]{40}$/),
   model: z.string().min(1).max(100),
@@ -41,6 +42,7 @@ export const codingCapabilities = z.object({
 });
 export const codingCapabilitiesResponse = codingCapabilities.extend({
   execution: executionOptionSchema,
+  readOnlyExecution: executionOptionSchema,
 });
 const nullableCount = z.number().int().nonnegative().nullable();
 const command = z.object({

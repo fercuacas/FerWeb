@@ -33,6 +33,7 @@ export async function createController({ token, configuration, fakeProvider, nam
     dockerApi: apiVersion,
     cli: '0.166.0',
     profile: 'node-isolated-v1',
+    readOnlyWorkspace: 'mount-v1',
     simulated: !!fakeProvider,
     budgetAuthority: 'postgres-v1',
     policyHash: hash(
@@ -113,6 +114,54 @@ export async function createController({ token, configuration, fakeProvider, nam
     } finally {
       await docker('DELETE', `/containers/${c.Id}?force=1&v=1`).catch(() => {});
     }
+  }
+  async function seedReadOnly(run) {
+    const c = await json('POST', '/containers/create', {
+      Image: image,
+      Entrypoint: ['node', '/opt/ferweb/prepare.mjs', '--hold'],
+      User: '1000:1000',
+      WorkingDir: '/workspace',
+      NetworkDisabled: true,
+      Labels: { 'ferweb.codex.controller': namespace },
+      HostConfig: {
+        NetworkMode: 'none',
+        ReadonlyRootfs: true,
+        CapDrop: ['ALL'],
+        SecurityOpt: ['no-new-privileges:true'],
+        Memory: 134217728,
+        MemorySwap: 134217728,
+        NanoCpus: 500000000,
+        PidsLimit: 16,
+        Mounts: [
+          {
+            Type: 'volume',
+            Source: run.workspace,
+            Target: '/workspace',
+            VolumeOptions: { NoCopy: true },
+          },
+          {
+            Type: 'volume',
+            Source: volume,
+            Target: '/control',
+            ReadOnly: true,
+            VolumeOptions: { Subpath: run.key, NoCopy: true },
+          },
+        ],
+        LogConfig: { Type: 'local', Config: { 'max-size': '1m', 'max-file': '2' } },
+      },
+    });
+    run.seeder = c.Id;
+    await docker('POST', `/containers/${c.Id}/start`);
+    for (let i = 0; i < 50; i++) {
+      const logs = demux(
+        await docker('GET', `/containers/${c.Id}/logs?stdout=1&stderr=1`, undefined, 8000),
+      );
+      if (logs.split(/\r?\n/).includes('ferweb_snapshot_ready')) return;
+      const state = await json('GET', `/containers/${c.Id}/json`);
+      if (!state.State.Running) throw Error('readonly_seed_failed');
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw Error('readonly_seed_timeout');
   }
   async function exec(run, cmd, capture) {
     const e = await json('POST', `/containers/${run.container}/exec`, {
@@ -233,6 +282,8 @@ export async function createController({ token, configuration, fakeProvider, nam
       run.report.modelRequests = run.requests;
       run.report.reason = run.reason;
       run.phase = 'finished';
+      if (run.seeder)
+        await docker('DELETE', `/containers/${run.seeder}?force=1&v=1`).catch(() => {});
       await docker('DELETE', `/containers/${run.container}?force=1&v=1`).catch(() => {});
       if (run.workspace) await docker('DELETE', `/volumes/${run.workspace}`).catch(() => {});
       run.gateway?.close();
@@ -288,6 +339,40 @@ export async function createController({ token, configuration, fakeProvider, nam
           : 410,
       );
       res.end();
+      return;
+    }
+    if (['/team/messages', '/team/inbox'].includes(req.url) && req.method === 'POST') {
+      if (
+        !run.input.teamMessaging ||
+        run.input.workspaceAccess !== 'read-only' ||
+        run.finishing ||
+        Date.now() >= run.lease ||
+        Date.now() >= run.deadline
+      ) {
+        res.writeHead(403);
+        res.end('{}');
+        return;
+      }
+      const data = await body(req, 16000);
+      const operation = req.url === '/team/messages' ? 'messages' : 'inbox';
+      const response = await fetch(
+        `${run.controlOrigin}/internal/coding/${run.input.jobId}/${operation}`,
+        {
+          method: 'POST',
+          headers: { authorization: 'Bearer ' + token, 'content-type': 'application/json' },
+          body: JSON.stringify(
+            operation === 'messages'
+              ? { fence: run.input.fence, message: data }
+              : { ...data, fence: run.input.fence },
+          ),
+          signal: AbortSignal.timeout(4000),
+          redirect: 'error',
+        },
+      );
+      const text = await response.text();
+      if (text.length > 800000) throw Error('message_response_limit');
+      res.writeHead(response.status, { 'content-type': 'application/json' });
+      res.end(text);
       return;
     }
     if (
@@ -416,6 +501,8 @@ export async function createController({ token, configuration, fakeProvider, nam
     )
       throw Error('invalid_run');
     validateFiles(input.files);
+    if (input.workspaceAccess !== undefined && input.workspaceAccess !== 'read-only')
+      throw Error('invalid_profile');
     for (const [key, min, max] of [
       ['maxRequests', 1, 20],
       ['maxOutputTokens', 64, 8192],
@@ -451,6 +538,7 @@ export async function createController({ token, configuration, fakeProvider, nam
       task: input.task,
       role: input.role,
       files: input.files,
+      workspaceAccess: input.workspaceAccess,
       model: input.model,
       deadlineAt: input.deadlineAt,
     };
@@ -519,6 +607,7 @@ export async function createController({ token, configuration, fakeProvider, nam
           o: 'size=67108864,uid=1000,gid=1000,mode=0700,noexec,nosuid',
         },
       });
+      if (input.workspaceAccess === 'read-only') await seedReadOnly(run);
       const c = await json('POST', '/containers/create', {
         Image: image,
         Env: [],
@@ -546,6 +635,7 @@ export async function createController({ token, configuration, fakeProvider, nam
               Type: 'volume',
               Source: run.workspace,
               Target: '/workspace',
+              ReadOnly: input.workspaceAccess === 'read-only',
               VolumeOptions: { NoCopy: true },
             },
             {
@@ -563,6 +653,10 @@ export async function createController({ token, configuration, fakeProvider, nam
       });
       run.container = c.Id;
       await docker('POST', `/containers/${c.Id}/start`);
+      if (run.seeder) {
+        await docker('DELETE', `/containers/${run.seeder}?force=1&v=1`);
+        run.seeder = null;
+      }
       void (async () => {
         try {
           // Wait for root supervisor preparation before executing anything as uid 1000.
@@ -591,11 +685,19 @@ export async function createController({ token, configuration, fakeProvider, nam
             return;
           }
           run.phase = 'verification';
+          const readOnly = input.workspaceAccess === 'read-only';
           run.report.tests.push(
-            await exec(run, ['timeout', '--signal=KILL', '20s', 'node', '--test']),
+            await exec(
+              run,
+              readOnly
+                ? ['timeout', '--signal=KILL', '20s', 'node', '/opt/ferweb/verify-readonly.mjs']
+                : ['timeout', '--signal=KILL', '20s', 'node', '--test'],
+            ),
           );
-          run.report.tests[0].command = 'node --test';
-          run.report.tests[0].origin = 'controller-verification';
+          run.report.tests[0].command = readOnly ? 'verify-readonly-snapshot' : 'node --test';
+          run.report.tests[0].origin = readOnly
+            ? 'controller-readonly-verification'
+            : 'controller-verification';
           if (!run.finishing)
             await finish(run, run.report.tests[0].exitCode === 0 ? 'completed' : 'tests_failed');
         } catch {

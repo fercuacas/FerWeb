@@ -5,3 +5,8 @@ for (const file of input.files) {
   await mkdir(path.slice(0, path.lastIndexOf('/')), { recursive: true });
   await writeFile(path, file.content, { mode: 0o644 });
 }
+// Docker's tmpfs volume must remain mounted until the read-only consumer starts.
+if (process.argv.includes('--hold')) {
+  console.log('ferweb_snapshot_ready');
+  setInterval(() => {}, 1000);
+}

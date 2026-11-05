@@ -53,6 +53,24 @@ export function describeCoding(
   };
 }
 
+export function describeReadOnlyCoding(
+  caps: Awaited<ReturnType<RunnerClient['capabilities']>>,
+): ExecutionOption {
+  const option = describeCoding(caps);
+  const confirmed = caps.environment?.readOnlyWorkspace === 'mount-v1';
+  return {
+    ...option,
+    toolProfile: 'node-readonly-v1',
+    available: option.available && confirmed,
+    reason: option.reason ?? (confirmed ? null : 'runner_unavailable'),
+    configurationRevision: option.configurationRevision
+      ? createHash('sha256')
+          .update(option.configurationRevision + '/node-readonly-v1')
+          .digest('hex')
+      : null,
+    capabilities: { ...option.capabilities, workspaceWrite: 'unsupported' },
+  };
+}
 export async function describeChat(
   chats: ChatService,
   provider: AiProvider,

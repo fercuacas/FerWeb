@@ -268,6 +268,22 @@ Se admite un equipo activo y mil históricos por proyecto; cada plan tiene una e
 
 El worker llama `POST /internal/teams/tick` con `{}` y token de servicio; no es una ruta pública ni admite planes/comandos del cliente. El controlador sirve `GET /runs/:jobId/files` solo después de finalizar correctamente, con su token y generación. Esa ruta entrega exclusivamente la instantánea segura recogida; no acepta rutas de filesystem ni ofrece un proxy Docker.
 
+## Especialistas y mensajes (P07)
+
+`teamDefinition.strategy="specialists"` selecciona entre dos y cuatro etapas raíz independientes más un resumen final dependiente de todas. Requiere `maxIterations=1`, capacidades sin escritura y roles/materiales compatibles con `node-readonly-v1`. `limits.concurrency` puede ser uno o dos; otros workflows conservan uno. Preparar requiere `mode="team"`; la aprobación congela el descriptor de solo lectura y el máximo solicitado. `coding/capabilities` añade `readOnlyExecution`, disponible únicamente si el controlador confirma el perfil. Los hijos guardan `configuration.workspaceAccess="read-only"`, que no puede solicitarse a través del formulario/API individual de Codex.
+
+| Método bajo `/api/projects/:projectId` | Entrada / resultado |
+| --- | --- |
+| `GET /team-policy` | `{parallelism:1|2,version}`; comienza en uno. |
+| `PATCH /team-policy` | `{parallelism,version}` → configuración nueva; requiere propietario, proyecto activo y ningún equipo activo. No cambia el máximo global. |
+| `GET /team-executions/:executionId/messages?after=N` | `{messages,nextCursor,hasMore}`, páginas de cincuenta; sesión, propiedad y acceso GitHub revalidados. |
+
+`GET /team-executions/:id` añade `gathering={complete,received,missing,summary,conflicts}`. `complete=false` mientras falten entregas, si el recorrido falla/cancela o existen conflictos reportados. No equivale a aprobación de producto. Solicitar más concurrencia que la configuración actual devuelve 409 `team_parallelism_not_configured`; políticas obsoletas o cambios durante un equipo activo devuelven 409. Las versiones de la política son propias e independientes de la versión del contenido del proyecto.
+
+Rutas internas con token de servicio: `POST /internal/coding/:jobId/messages` recibe `{fence,message:{requestId,to,kind,text,replyTo?}}`; `POST /internal/coding/:jobId/inbox` recibe `{fence,after}`. `to` es el UUID de una etapa del mismo equipo o `null` para el coordinador. Las respuestas requieren consulta original y destinatarios coherentes. Cuerpo máximo de 16 KiB; hasta 2.000 caracteres y 8 kB de texto, 16 mensajes por hijo, 80 de agentes y veinte del coordinador. El mismo UUID/cuerpo es idempotente; cambios, destinatarios ajenos, cuota o generación inválida se rechazan. No admiten campos para declarar remitente, propietario o aprobación.
+
+El código solo ve `POST http://127.0.0.1:9040/team/messages` con el objeto `message`, y `POST /team/inbox` con `{after}`. La pasarela exclusiva del hijo incorpora su identidad de control y solo habilita esas rutas a especialistas. Los mensajes devueltos identifican origen `agent|coordinator`, etapa/hijo, destino, secuencia, tipo, texto, referencia de respuesta, `verified` y fecha; nunca token/fence. El texto de agente queda sin verificar. El coordinador produce entregas y finalizaciones técnicas a partir de informes guardados, no de afirmaciones en el mensaje. [Protocolo P07](codex.md#especialistas-y-mensajes-p07)
+
 ## Revisión y PR (E9)
 
 | Método y ruta bajo `/api/projects/:projectId/coding/:jobId` | Entrada / resultado |

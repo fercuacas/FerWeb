@@ -10,7 +10,12 @@ const key = z
   .max(40)
   .regex(/^[a-z][a-z0-9-]*$(?![\s\S])/);
 const version = z.number().int().min(1).max(50);
-export const teamPresetId = z.enum(['implement-review', 'research-answer', 'review-diff']);
+export const teamPresetId = z.enum([
+  'implement-review',
+  'research-answer',
+  'review-diff',
+  'specialists-review',
+]);
 export const teamStep = z.strictObject({
   key,
   title: text.trim().min(1).max(120),
@@ -36,12 +41,37 @@ export function teamStepOrder(steps: { key: string; dependsOn: string[] }[]) {
 export const teamDefinition = z
   .strictObject({
     name: text.trim().min(1).max(120),
+    strategy: z.literal('specialists').optional(),
     description: text.trim().max(1000),
     maxIterations: z.number().int().min(1).max(3),
     limits: executionBudgetLimits,
     steps: z.array(teamStep).min(1).max(6),
   })
   .superRefine((value, ctx) => {
+    if (value.strategy === 'specialists') {
+      const roots = value.steps.slice(0, -1),
+        summary = value.steps.at(-1)!;
+      if (
+        roots.length < 2 ||
+        roots.length > 4 ||
+        roots.some((step) => step.dependsOn.length) ||
+        summary.dependsOn.length !== roots.length ||
+        roots.some((step) => !summary.dependsOn.includes(step.key)) ||
+        value.maxIterations !== 1 ||
+        value.steps.some((step) => step.requiredCapabilities.includes('workspaceWrite'))
+      )
+        ctx.addIssue({
+          code: 'custom',
+          message:
+            'Especialistas requiere entre dos y cuatro etapas independientes de solo lectura y un resumen dependiente de todas, en una pasada.',
+          path: ['steps'],
+        });
+    } else if (value.limits.concurrency !== 1)
+      ctx.addIssue({
+        code: 'custom',
+        message: 'La ejecución secuencial conserva concurrencia uno.',
+        path: ['limits', 'concurrency'],
+      });
     const keys = value.steps.map((step) => step.key);
     if (new Set(keys).size !== keys.length)
       ctx.addIssue({
@@ -77,6 +107,7 @@ export const teamDefinition = z
       });
   });
 export const teamPreset = z.object({
+  strategy: z.literal('specialists').optional(),
   id: teamPresetId,
   name: z.string(),
   description: z.string(),
@@ -226,6 +257,13 @@ export const teamExecution = z.object({
   finishedAt: z.iso.datetime().nullable(),
 });
 export const teamExecutionResponse = z.object({
+  gathering: z.object({
+    complete: z.boolean(),
+    received: z.array(z.string()),
+    missing: z.array(z.string()),
+    summary: z.string().nullable(),
+    conflicts: z.number().int().nonnegative(),
+  }),
   execution: teamExecution,
   plan: teamPlanSnapshot,
   steps: z.array(
@@ -248,5 +286,41 @@ export const teamExecutionResponse = z.object({
       createdAt: z.iso.datetime(),
     }),
   ),
+});
+export const teamPolicy = z.object({
+  parallelism: z.union([z.literal(1), z.literal(2)]),
+  version: z.number().int().positive(),
+});
+export const updateTeamPolicyInput = z.strictObject({ ...teamPolicy.shape });
+export const teamMessageKind = z.enum(['handoff', 'query', 'response', 'completion', 'conflict']);
+export const sendTeamMessageInput = z
+  .strictObject({
+    requestId: z.uuid(),
+    to: z.uuid().nullable(),
+    kind: teamMessageKind,
+    text: text.trim().min(1).max(2000),
+    replyTo: z.uuid().optional(),
+  })
+  .refine(
+    (value) => value.kind !== 'response' || !!value.replyTo,
+    'Una respuesta requiere la consulta original.',
+  );
+export const teamMessage = z.object({
+  id: z.uuid(),
+  sequence: z.number().int().positive(),
+  kind: teamMessageKind,
+  text: z.string(),
+  sender: z.enum(['agent', 'coordinator']),
+  senderStepId: z.uuid().nullable(),
+  senderJobId: z.uuid().nullable(),
+  to: z.uuid().nullable(),
+  replyTo: z.uuid().nullable(),
+  verified: z.boolean(),
+  createdAt: z.iso.datetime(),
+});
+export const teamMessagesResponse = z.object({
+  messages: z.array(teamMessage),
+  nextCursor: z.number().int().nonnegative(),
+  hasMore: z.boolean(),
 });
 export const teamExecutionsResponse = z.object({ executions: z.array(teamExecution) });

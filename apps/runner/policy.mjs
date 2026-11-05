@@ -20,6 +20,12 @@ export function modelPayload(value, run) {
     'client_metadata',
   ]);
   function localTool(t) {
+    if (
+      /(^|\.)(spawn_agent|send_input|wait_agent|resume_agent|close_agent|delegate_task)$/.test(
+        t?.name ?? '',
+      )
+    )
+      return false;
     return (
       t &&
       (t.type === 'function' ||

@@ -163,7 +163,9 @@ export class TeamService {
     });
   }
   async create(owner: string, project: string, input: z.infer<typeof createTeamTemplateInput>) {
-    const { execution } = await this.coding.capabilities(owner, project);
+    const caps = await this.coding.capabilities(owner, project);
+    const execution =
+      input.definition.strategy === 'specialists' ? caps.readOnlyExecution : caps.execution;
     return this.write(owner, project, async (db) => {
       await this.resolve(db, owner, project, input.definition, execution);
       const count = (
@@ -192,7 +194,9 @@ export class TeamService {
     id: string,
     input: z.infer<typeof updateTeamTemplateInput>,
   ) {
-    const { execution } = await this.coding.capabilities(owner, project);
+    const caps = await this.coding.capabilities(owner, project);
+    const execution =
+      input.definition.strategy === 'specialists' ? caps.readOnlyExecution : caps.execution;
     return this.write(owner, project, async (db) => {
       const current = await this.templateVersion(db, owner, project, id, input.version);
       const head = (await db.query('SELECT latest_version FROM team_templates WHERE id=$1', [id]))
@@ -279,7 +283,11 @@ export class TeamService {
   async validateSnapshot(owner: string, project: string, snapshot: TeamPlan['snapshot']) {
     const task = await this.projects.getTask(owner, project, snapshot.task.id);
     if (task.version !== snapshot.task.version) throw conflict();
-    const { execution } = await this.coding.capabilities(owner, project);
+    const caps = await this.coding.capabilities(owner, project);
+    const execution =
+      snapshot.template.definition.strategy === 'specialists'
+        ? caps.readOnlyExecution
+        : caps.execution;
     if (!execution.available || canonical(execution) !== canonical(snapshot.execution))
       throw new HttpError(
         409,
@@ -319,7 +327,15 @@ export class TeamService {
     }
     const task = await this.projects.getTask(owner, project, input.taskId);
     if (task.version !== input.taskVersion) throw conflict();
-    const { execution } = await this.coding.capabilities(owner, project);
+    const selected = (await this.template(owner, project, input.templateId)).versions.find(
+      (item) => item.version === input.templateVersion,
+    );
+    if (!selected) throw missing();
+    if (selected.definition.strategy === 'specialists' && input.mode !== 'team')
+      throw new HttpError(422, 'team_mode_required', 'Especialistas requiere el equipo completo.');
+    const caps = await this.coding.capabilities(owner, project);
+    const execution =
+      selected.definition.strategy === 'specialists' ? caps.readOnlyExecution : caps.execution;
     if (
       input.model
         ? !execution.models.some((model) => model.id === input.model)
@@ -421,8 +437,12 @@ export class TeamService {
     id: string,
     input: z.infer<typeof approveTeamPlanInput>,
   ) {
-    await this.planRow(this.pool, owner, project, id);
-    const { execution } = await this.coding.capabilities(owner, project);
+    const initial = planDto(await this.planRow(this.pool, owner, project, id));
+    const caps = await this.coding.capabilities(owner, project);
+    const execution =
+      initial.snapshot.template.definition.strategy === 'specialists'
+        ? caps.readOnlyExecution
+        : caps.execution;
     return this.write(owner, project, async (db) => {
       const row = await this.planRow(db, owner, project, id);
       const plan = planDto(row);

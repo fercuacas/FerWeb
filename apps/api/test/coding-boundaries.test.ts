@@ -95,6 +95,13 @@ test('coding boundary rejects path escapes, duplicate files and remote model too
     { conversation: 'private' },
     { tools: [{ type: 'web_search' }] },
     { tools: [{ type: 'file_search' }] },
+    { tools: [{ type: 'function', name: 'spawn_agent' }] },
+    { tools: [{ type: 'custom', name: 'delegate_task' }] },
+    {
+      tools: [
+        { type: 'namespace', name: 'functions', tools: [{ type: 'function', name: 'send_input' }] },
+      ],
+    },
     { input: [{ type: 'item_reference', id: 'private' }] },
     { input: [{ role: 'user', content: [{ type: 'input_file', file_id: 'private' }] }] },
   ])
