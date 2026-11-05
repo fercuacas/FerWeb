@@ -6,10 +6,12 @@ import {
   archiveTeamTemplateInput,
   prepareTeamPlanInput,
   approveTeamPlanInput,
+  executeTeamPlanInput,
 } from '@ferweb/contracts';
 import { TeamService } from './service.js';
+import { TeamExecutions } from './executions.js';
 
-export function teamRouter(service: TeamService) {
+export function teamRouter(service: TeamService, executions: TeamExecutions) {
   const router = express.Router();
   const scope = (req: express.Request, res: express.Response) =>
     [res.locals.user.id as string, z.uuid().parse(req.params.projectId)] as const;
@@ -60,5 +62,26 @@ export function teamRouter(service: TeamService) {
       await service.approve(...scope(req, res), planId(req), approveTeamPlanInput.parse(req.body)),
     ),
   );
+  router.post('/projects/:projectId/team-plans/:planId/execute', async (req, res) => {
+    res
+      .status(202)
+      .json(
+        await executions.start(
+          ...scope(req, res),
+          planId(req),
+          executeTeamPlanInput.parse(req.body),
+        ),
+      );
+  });
+  router.get('/projects/:projectId/team-executions', async (req, res) =>
+    res.json(await executions.list(...scope(req, res))),
+  );
+  router.get('/projects/:projectId/team-executions/:executionId', async (req, res) =>
+    res.json(await executions.read(...scope(req, res), z.uuid().parse(req.params.executionId))),
+  );
+  router.post('/projects/:projectId/team-executions/:executionId/cancel', async (req, res) => {
+    z.strictObject({}).parse(req.body);
+    res.json(await executions.cancel(...scope(req, res), z.uuid().parse(req.params.executionId)));
+  });
   return router;
 }

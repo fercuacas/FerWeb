@@ -103,6 +103,7 @@ export const codingReport = z.object({
   oomKilled: z.boolean().optional(),
 });
 export const codingRunSchema = z.object({
+  teamExecutionId: z.uuid().nullable().optional(),
   jobId: z.uuid(),
   task: z.record(z.string(), z.unknown()),
   commit: z.string(),
@@ -127,3 +128,23 @@ export function codingPath(path: string) {
     )
   );
 }
+export const codingWorkspace = z
+  .array(
+    z.strictObject({
+      path: z.string().refine(codingPath),
+      content: z
+        .string()
+        .max(200000)
+        .refine(
+          (value) => !value.includes('\0') && new TextEncoder().encode(value).length <= 200000,
+        ),
+    }),
+  )
+  .max(100)
+  .superRefine((files, ctx) => {
+    if (
+      new Set(files.map((file) => file.path)).size !== files.length ||
+      files.reduce((sum, file) => sum + new TextEncoder().encode(file.content).length, 0) > 1000000
+    )
+      ctx.addIssue({ code: 'custom', message: 'Invalid workspace snapshot' });
+  });

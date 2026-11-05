@@ -2,6 +2,19 @@
 import { createController } from './controller.mjs';
 let sequence = 0;
 async function fakeProvider(run, value, res) {
+  const teamStep = run.input.task.teamStep;
+  if (
+    teamStep?.key === 'review' &&
+    (/P06 reviewer error/.test(run.input.task.title) ||
+      !teamStep.deliveries?.some((delivery) => delivery.verified && delivery.outputHash) ||
+      !run.input.files.some(
+        (file) => file.path === 'src/add.cjs' && file.content.includes('a + b'),
+      ))
+  ) {
+    res.writeHead(503);
+    res.end('{"error":{"message":"review fixture requires a verified implementation handoff"}}');
+    return;
+  }
   if (
     run.input.task.title === 'Fix addition with skill material' &&
     run.requests === 1 &&
@@ -49,9 +62,12 @@ async function fakeProvider(run, value, res) {
   let output;
   if (run.requests === 1 && exec) {
     const cancel = /cancel|lease|timeout/i.test(run.input.task.title);
-    const command = cancel
-      ? 'sleep 30'
-      : `node --test; node tests/isolation-probe.cjs; node -e "require('node:fs').writeFileSync('src/add.cjs', 'exports.add = (a, b) => a + b;\\n')"; node --test`;
+    const command =
+      teamStep?.key === 'review'
+        ? 'node --test; node tests/isolation-probe.cjs'
+        : cancel
+          ? 'sleep 30'
+          : `node --test; node tests/isolation-probe.cjs; node -e "require('node:fs').writeFileSync('src/add.cjs', 'exports.add = (a, b) => a + b;\\n')"; node --test`;
     const args =
       exec.name === 'exec_command'
         ? { cmd: command, yield_time_ms: cancel ? 1000 : 10000, max_output_tokens: 3000 }

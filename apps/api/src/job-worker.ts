@@ -37,6 +37,30 @@ try {
     ),
   );
   await executor.start();
+  // The durable coordinator never claims a jobs slot. Only its Codex children do.
+  let coordinating = false;
+  const coordinatorAbort = new AbortController();
+  const coordinator = setInterval(() => {
+    if (coordinating || !process.env.RUNNER_SERVICE_TOKEN) return;
+    coordinating = true;
+    void fetch(`${process.env.FERWEB_INTERNAL_API_URL ?? 'http://api:3001'}/internal/teams/tick`, {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer ' + process.env.RUNNER_SERVICE_TOKEN,
+        'content-type': 'application/json',
+      },
+      body: '{}',
+      redirect: 'error',
+      signal: AbortSignal.any([coordinatorAbort.signal, AbortSignal.timeout(30000)]),
+    })
+      .then(async (response) => {
+        await response.body?.cancel();
+      })
+      .catch(() => {})
+      .finally(() => {
+        coordinating = false;
+      });
+  }, 1000);
   const server = createServer((_request, response) => {
     const ready = executor.ready();
     response.writeHead(ready ? 200 : 503, { 'Content-Type': 'application/json' });
@@ -56,6 +80,8 @@ try {
   const shutdown = () => {
     if (stopping) return;
     stopping = true;
+    clearInterval(coordinator);
+    coordinatorAbort.abort();
     const timer = setTimeout(() => process.exit(1), 8000).unref();
     server.close();
     void executor

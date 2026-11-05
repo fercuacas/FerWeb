@@ -471,10 +471,10 @@ export function CodingView({
               <li key={i}>{l}</li>
             ))}
           </ul>
-          {!active && (
+          {!active && !visible?.teamExecutionId && (
             <CodingComparison key={job.id} project={project} id={job.id} onSelect={onSelect} />
           )}
-          {job.state === 'completed' && visible && (
+          {job.state === 'completed' && visible && !visible.teamExecutionId && (
             <CodingReview key={job.id} project={project} run={visible} />
           )}
         </>

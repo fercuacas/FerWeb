@@ -11,6 +11,7 @@ import {
 } from '@ferweb/contracts';
 import { CodingService } from './coding-service.js';
 import { ReviewService } from './review-service.js';
+import { TeamExecutions } from '../teams/executions.js';
 export function codingRouter(service: CodingService) {
   const router = express.Router();
   const reviews = new ReviewService(service);
@@ -89,6 +90,11 @@ export function codingInternalRouter(service: CodingService, token: string) {
     next();
   });
   router.use(express.json({ limit: '2kb' }));
+  const teams = new TeamExecutions(service.pool, service);
+  router.post('/teams/tick', async (req, res) => {
+    z.strictObject({}).parse(req.body);
+    res.json(await teams.tick());
+  });
   router.post('/coding/:jobId/admit', async (req, res) => {
     res.json(
       await service.jobs.queue.budgets.admit(

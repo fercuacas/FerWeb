@@ -7,6 +7,7 @@ import './jobs.css';
 import { CodingForm, CodingView } from './Coding';
 import { ProjectBudgets } from './Budgets';
 import { ProjectPlans } from './TeamPlans';
+import { ProjectTeamRuns } from './TeamRuns';
 
 const names = {
   pending: 'Pendiente',
@@ -480,6 +481,7 @@ export function ProjectJobs({ project }: { project: Project }) {
       {!project.archivedAt && <JobForm project={project.id} onCreated={setSelected} />}
       <ProjectBudgets key={project.id} project={project} />
       <ProjectPlans key={project.id} project={project} />
+      <ProjectTeamRuns key={`teams-${project.id}`} project={project} />
       {!project.archivedAt && <CodingForm project={project.id} onCreated={setSelected} />}
       <Failure error={result.error} />
       {result.isLoading && <p role="status">Cargando trabajos…</p>}

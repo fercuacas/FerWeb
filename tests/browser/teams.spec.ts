@@ -81,7 +81,7 @@ test('team UI versions a DAG, prepares immutable copies from Tasks and Jobs and 
   await expect(details.getByText(/Plantilla v2 · Agente único/)).toBeVisible();
   await expect(details.getByText(hash, { exact: true })).toHaveCount(0);
   await expect(details.getByRole('button', { name: 'Aprobar este plan' })).toBeDisabled();
-  await expect(details.getByText('Ejecución de equipos pendiente de P06.')).toBeVisible();
+  await expect(details.getByText('No se publican cambios automáticamente.')).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
   expect(
     await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),

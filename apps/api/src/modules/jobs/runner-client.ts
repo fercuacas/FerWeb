@@ -6,7 +6,13 @@ export class RunnerClient {
     readonly url: string,
     readonly token: string,
   ) {}
-  async request(path: string, body?: unknown, fence?: string, timeout = 4000): Promise<any> {
+  async request(
+    path: string,
+    body?: unknown,
+    fence?: string,
+    timeout = 4000,
+    responseLimit = 1500000,
+  ): Promise<any> {
     try {
       const response = await fetch(this.url + path, {
         method: body === undefined ? 'GET' : 'POST',
@@ -24,7 +30,7 @@ export class RunnerClient {
         throw new Error('runner_response');
       }
       const text = await response.text();
-      if (text.length > 1500000) throw new Error('runner_limit');
+      if (text.length > responseLimit) throw new Error('runner_limit');
       return JSON.parse(text);
     } catch {
       throw new HttpError(

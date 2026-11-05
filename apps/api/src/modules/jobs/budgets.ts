@@ -95,7 +95,7 @@ export class ExecutionBudgets {
     });
     return this.read(owner, project, id);
   }
-  private async insert(
+  async insert(
     db: PoolClient,
     project: string,
     name: string,

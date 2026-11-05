@@ -196,9 +196,11 @@ export async function createController({ token, configuration, fakeProvider, nam
       for (const abort of run.upstreams) abort.abort();
       try {
         await docker('POST', `/containers/${run.container}/pause`);
-        run.report.diff = differences(run.input.files, await collect(run));
+        const collected = await collect(run);
+        run.report.diff = differences(run.input.files, collected);
         if (JSON.stringify(run.report.diff).length > 600000) throw Error('diff_limit');
         run.report.diffComplete = true;
+        if (run.input.captureWorkspace === true) run.outputFiles = collected;
       } catch (error) {
         if (fakeProvider)
           console.error(
@@ -650,10 +652,23 @@ export async function createController({ token, configuration, fakeProvider, nam
         reply(202, { jobId: run.input.jobId });
         return;
       }
-      const match = /^\/runs\/([a-f0-9-]{36})(\/heartbeat|\/cancel|\/release)?$/.exec(req.url);
+      const match = /^\/runs\/([a-f0-9-]{36})(\/heartbeat|\/cancel|\/release|\/files)?$/.exec(
+        req.url,
+      );
       const run = match && runs.get(match[1]);
       if (!run || !safeEqual(req.headers['x-run-fence'], run.input.fence)) {
         reply(404, {});
+        return;
+      }
+      if (match[2] === '/files') {
+        if (
+          req.method !== 'GET' ||
+          run.phase !== 'finished' ||
+          run.reason !== 'completed' ||
+          !run.outputFiles
+        )
+          reply(409, {});
+        else reply(200, run.outputFiles);
         return;
       }
       if (match[2] === '/release' && req.method === 'POST') {

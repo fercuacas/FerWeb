@@ -10,15 +10,15 @@ Actualizado: **2026-11-05**. Evidencias anteriores en [history.md](history.md), 
 - E7–E9: cola PostgreSQL, simulador, Codex en contenedor separado y revisión/PR explícita con comparación de condiciones congeladas.
 - E10: estrategias de contexto versionadas, contabilidad, invalidación y adopción condicionada a evidencia real; ninguna mejora real adoptada.
 - E11: imágenes runtime y bases fijadas, CI preparada, Compose release, copia/restauración PostgreSQL+Qdrant, logs JSON/métricas protegidas, carga, README inglés y demo. [Revisión final](release-review.md), [operación](deployment.md).
-- P01–P05: diagnóstico, roles/skills versionados por proyecto, presupuestos compartidos y preparación/aprobación de planes de equipo inmutables. [Codex](codex.md)
+- P01–P06: diagnóstico, roles/skills versionados, presupuestos compartidos, planes aprobados y equipos secuenciales duraderos con entregas e historial. [Codex](codex.md)
 
 ## Verificado
 
-- P05, `npm run docker:check` pasó con **10 Python, 13 básicas, 78 pruebas/subcasos de integración, 15 Chromium**, tipos, compilación, formato y smoke. Registro privado `.local/p05-docker-check.log`.
+- P06, `npm run docker:check` pasó con **10 Python, 13 básicas, 80 pruebas/subcasos de integración, 16 Chromium**, tipos, compilación, formato y smoke. Registro privado `.local/p06-docker-check.log`.
 - E11, `npm run release:check`: 246 fuentes públicas sin datos/dependencias previos, Chromium CRUD/autorización, trabajo simulado idempotente, proxy streaming/cancelación, reinicio y salud.
 - Recuperación: hashes/recuentos de **32 tablas** y vector Qdrant con procedencia; rechazo de checksum alterado/sobrescritura; pausa/reanudación automática.
 - Carga: **800 operaciones, ocho clientes, 10,79 s, cero errores, p95 16,91 ms**; condiciones/límites en [carga](load-testing.md). Informe privado `.local/release-verification.json` con imágenes probadas.
-- Instancia local: siete servicios saludables, migración **014**, volumen `ferweb_postgres_data`, web `http://127.0.0.1:5173`.
+- Instancia local: siete servicios saludables, migración **015**, volumen `ferweb_postgres_data`, web `http://127.0.0.1:5173`.
 
 ## Límites y siguiente paso
 
@@ -30,4 +30,4 @@ Reconstrucción cacheada valida capas/configuración web, no igualdad bit a bit 
 
 Para desplegar quedan host/HTTPS, copias cifradas externas, aceptación con App y modelos, monitorización y pruebas prolongadas. [Mantenimiento](development.md)
 
-P05 prepara y aprueba; la ejecución de equipos corresponde a P06, siguiente entrega del [plan de agentes](plans/ecc-codex-prompts/progress.md).
+P06 ejecuta una pasada secuencial sin reintentar código; revisión/publicación agregada pendiente. P07 es la siguiente entrega del [plan de agentes](plans/ecc-codex-prompts/progress.md).

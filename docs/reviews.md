@@ -2,6 +2,8 @@
 
 ## Recorrido desde la web
 
+Esta publicación y repetición individual corresponde a trabajos Codex independientes. Los hijos de equipos P06 muestran sus informes y diff, pero no permiten publicar ni repetirse por separado; requieren la futura revisión agregada del equipo. [Equipo secuencial](codex.md#equipo-secuencial-duradero-p06)
+
 En un proyecto propio, vincula y sincroniza el repositorio, crea una tarea y abre **Trabajos → Nueva tarea con Codex**. La ejecución conserva tarea, criterios, archivos y commit inicial. El visor muestra diff por archivo, comandos, salidas y códigos de pruebas, uso disponible y limitaciones. Los resultados del agente y la verificación del controlador conservan su origen; superar pruebas no acredita por sí solo los criterios.
 
 Cuando termine como completada, en **Revisión y pull request**:

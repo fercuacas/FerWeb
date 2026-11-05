@@ -4,6 +4,7 @@ import {
   jobConfiguration,
   anyJobConfiguration,
   codingReport,
+  codingWorkspace,
   type JobConfiguration,
 } from '@ferweb/contracts';
 import type { z } from 'zod';
@@ -388,6 +389,7 @@ export class JobQueue {
     signal: string | null,
     confirmed: boolean | null,
     report?: z.infer<typeof codingReport>,
+    outputFiles?: z.infer<typeof codingWorkspace>,
   ) {
     return this.tx(async (db) => {
       const row = await this.row(db, claim.id);
@@ -396,6 +398,11 @@ export class JobQueue {
         await db.query('UPDATE coding_runs SET report=$2 WHERE job_id=$1', [
           claim.id,
           JSON.stringify(codingReport.parse(report)),
+        ]);
+      if (outputFiles && reason === 'completed')
+        await db.query('UPDATE coding_runs SET output_files=$2 WHERE job_id=$1', [
+          claim.id,
+          JSON.stringify(codingWorkspace.parse(outputFiles)),
         ]);
       const cancelled =
           row.cancel_requested || row.archived || row.budget_cancelled || reason === 'cancelled',

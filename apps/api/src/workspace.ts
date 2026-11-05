@@ -34,6 +34,7 @@ import { SkillLibrary } from './modules/skills/library.js';
 import { skillRouter } from './modules/skills/routes.js';
 import { TeamService } from './modules/teams/service.js';
 import { teamRouter } from './modules/teams/routes.js';
+import { TeamExecutions } from './modules/teams/executions.js';
 
 export interface WorkspaceOptions {
   pool: Pool;
@@ -121,7 +122,9 @@ export function createWorkspaceRouter({
   router.use(createJobRouter(new JobService(pool)));
   router.use(agentRouter(new AgentCatalog(pool)));
   router.use(skillRouter(new SkillLibrary(pool)));
-  router.use(teamRouter(new TeamService(pool, codingService)));
+  router.use(
+    teamRouter(new TeamService(pool, codingService), new TeamExecutions(pool, codingService)),
+  );
   router.use(codingRouter(codingService));
   router.get('/projects', async (_request, response) => {
     response.json({ projects: await projects.list(owner(response)) });

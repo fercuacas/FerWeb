@@ -4,6 +4,8 @@ Este documento describe `simulation-v1`. E8 amplía la misma cola con `codex-v1`
 
 P04 añade un presupuesto padre para las ejecuciones Codex, con reservas y admisiones de modelo en la misma base PostgreSQL. Sus límites, plazo compartido, atribución y cobertura se consultan en Trabajos. [Presupuesto compartido](codex.md#presupuesto-compartido-p04)
 
+P06 añade equipos secuenciales duraderos: el padre y su coordinación viven fuera de los slots de `jobs`; solo los hijos Codex consumen concurrencia. Plan, etapas, entregas, cancelación e historial se consultan en **Trabajos → Equipos en segundo plano**. [Protocolo P06](codex.md#equipo-secuencial-duradero-p06)
+
 En un proyecto, abrir **Trabajos**, desplegar **Nuevo trabajo simulado**, elegir pasos, fallos y límites y pulsar **Encolar simulación**. La API devuelve 202 con un UUID de trabajo y la cabecera `X-FerWeb-Job`. El worker lo ejecuta en segundo plano; cerrar la página o reiniciar la API no elimina el trabajo. La web consulta estado, eventos y resultado guardados y permite cancelar.
 
 El simulador E7 habilita exclusivamente `simulation-v1`. No ejecuta código del repositorio, shell aportada por el usuario, modelos, comandos de Codex ni llamadas a GitHub. El chat E4 y el laboratorio E6 conservan su ciclo de vida anterior: **todavía no se han migrado a esta cola ni adquieren reanudación automáticamente**. Esos adaptadores requieren su propia política de efectos, permisos e idempotencia.

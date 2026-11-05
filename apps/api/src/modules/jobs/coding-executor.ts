@@ -1,5 +1,5 @@
 import { setTimeout as delay } from 'node:timers/promises';
-import { codingReport } from '@ferweb/contracts';
+import { codingReport, codingWorkspace } from '@ferweb/contracts';
 import type { z } from 'zod';
 import { JobQueue, JobControlError, type Claim } from './queue.js';
 import { RunnerClient } from './runner-client.js';
@@ -17,6 +17,8 @@ export function codingExecutor(
     };
     const done = (async () => {
       let report: z.infer<typeof codingReport> | undefined;
+      let outputFiles: z.infer<typeof codingWorkspace> | undefined;
+      let captureWorkspace = false;
       let reason = 'executor_lost',
         lastPhase = '',
         authorizedAt = 0,
@@ -38,6 +40,7 @@ export function codingExecutor(
       const path = '/runs/' + claim.id;
       try {
         const bundle = await input(false);
+        captureWorkspace = bundle.captureWorkspace === true;
         const lease = await queue.heartbeat(claim);
         await runner.request(
           '/runs',
@@ -56,6 +59,10 @@ export function codingExecutor(
           report = codingReport.parse(status.report);
           if (status.done) {
             reason = status.reason;
+            if (captureWorkspace && reason === 'completed')
+              outputFiles = codingWorkspace.parse(
+                await runner.request(path + '/files', undefined, claim.fence, 4000, 2000000),
+              );
             break;
           }
           await runner.request(path + '/heartbeat', renewal, claim.fence);
@@ -92,6 +99,7 @@ export function codingExecutor(
           null,
           report?.terminationConfirmed ?? null,
           report,
+          outputFiles,
         );
         if (saved) await runner.request(path + '/release', {}, claim.fence).catch(() => {});
         console.log(

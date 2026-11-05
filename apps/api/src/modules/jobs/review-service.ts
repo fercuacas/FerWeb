@@ -124,6 +124,13 @@ export class ReviewService {
     return this.read(owner, project, id);
   }
   async publish(owner: string, project: string, id: string, version: number) {
+    const team = await this.coding.read(owner, project, id);
+    if (team.teamExecutionId)
+      throw new HttpError(
+        409,
+        'team_managed_step',
+        'La publicación del resultado de equipo requiere revisión agregada.',
+      );
     const run = await this.run(owner, project, id),
       tree = this.ready(run);
     // Remote access/permissions are checked on every explicit attempt, including retries.

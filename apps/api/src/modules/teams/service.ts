@@ -9,6 +9,7 @@ import {
   classifyPlanTask,
   teamStepOrder,
   type TeamDefinition,
+  type TeamPlan,
   type ExecutionOption,
   type createTeamTemplateInput,
   type updateTeamTemplateInput,
@@ -43,9 +44,9 @@ function planDto(row: QueryResultRow) {
   return teamPlan.parse({
     id: row.id,
     hash: row.hash,
-    state: row.approved_at ? 'approved' : 'prepared',
+    state: row.execution_id ? 'executed' : row.approved_at ? 'approved' : 'prepared',
     createdAt: row.created_at.toISOString(),
-    executionId: null,
+    executionId: row.execution_id ?? null,
     snapshot: row.snapshot,
     approval: row.approved_at
       ? { hash: row.approval_hash, version: 1, approvedAt: row.approved_at.toISOString() }
@@ -235,7 +236,7 @@ export class TeamService {
     await this.projects.get(owner, project);
     const rows = (
       await this.pool.query(
-        `SELECT r.id,r.hash,r.created_at,r.approved_at,r.approval_hash,r.task_id,
+        `SELECT r.id,r.hash,r.created_at,r.approved_at,r.approval_hash,r.task_id,r.execution_id,
        r.snapshot->'task'->>'title' AS title,r.snapshot->'template'->'definition'->>'name' AS template_name,
        (r.snapshot->'template'->>'version')::int AS template_version
        FROM prepared_team_plans r JOIN projects p ON p.id=r.project_id
@@ -248,12 +249,12 @@ export class TeamService {
         teamPlanSummary.parse({
           id: row.id,
           hash: row.hash,
-          state: row.approved_at ? 'approved' : 'prepared',
+          state: row.execution_id ? 'executed' : row.approved_at ? 'approved' : 'prepared',
           createdAt: row.created_at.toISOString(),
           approval: row.approved_at
             ? { hash: row.approval_hash, version: 1, approvedAt: row.approved_at.toISOString() }
             : null,
-          executionId: null,
+          executionId: row.execution_id ?? null,
           taskId: row.task_id,
           title: row.title,
           templateName: row.template_name,
@@ -274,6 +275,34 @@ export class TeamService {
   }
   async readPlan(owner: string, project: string, id: string) {
     return { plan: planDto(await this.planRow(this.pool, owner, project, id)) };
+  }
+  async validateSnapshot(owner: string, project: string, snapshot: TeamPlan['snapshot']) {
+    const task = await this.projects.getTask(owner, project, snapshot.task.id);
+    if (task.version !== snapshot.task.version) throw conflict();
+    const { execution } = await this.coding.capabilities(owner, project);
+    if (!execution.available || canonical(execution) !== canonical(snapshot.execution))
+      throw new HttpError(
+        409,
+        'team_environment_changed',
+        'El ejecutor ha cambiado; prepara un plan nuevo.',
+      );
+    await this.write(owner, project, async (db) => {
+      const template = await this.templateVersion(
+        db,
+        owner,
+        project,
+        snapshot.template.id,
+        snapshot.template.version,
+      );
+      if (canonical(template) !== canonical(snapshot.template)) throw conflict();
+      const resolved = await this.resolve(db, owner, project, template.definition, execution);
+      for (const step of snapshot.steps) {
+        if (
+          canonical(resolved.find((item) => item.key === step.key)?.agent) !== canonical(step.agent)
+        )
+          throw conflict();
+      }
+    });
   }
   async prepare(owner: string, project: string, input: z.infer<typeof prepareTeamPlanInput>) {
     await this.projects.get(owner, project);

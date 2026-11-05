@@ -6,6 +6,7 @@ import { codingApi } from './coding-store';
 import { workspaceApi, errorMessage } from './workspace-store';
 import { ExecutionDetails, capabilityLabels } from './ExecutionDetails';
 import { SkillText } from './Skills';
+import { TeamLauncher, TeamRunDetails } from './TeamRuns';
 
 function PlanDetails({ project, id }: { project: Project; id: string }) {
   const query = teamsApi.useTeamPlanQuery({ project: project.id, id });
@@ -27,8 +28,13 @@ function PlanDetails({ project, id }: { project: Project; id: string }) {
             {plan.snapshot.task.title} · {plan.snapshot.template.definition.name}
           </h3>
           <p>
-            Estado: {plan.state === 'approved' ? 'Aprobado' : 'Preparado'} · Copia inmutable v
-            {plan.snapshot.version}
+            Estado:{' '}
+            {plan.state === 'executed'
+              ? 'Iniciado'
+              : plan.state === 'approved'
+                ? 'Aprobado'
+                : 'Preparado'}{' '}
+            · Copia inmutable v{plan.snapshot.version}
           </p>
           <p className="skill-text">Hash: {plan.hash}</p>
           <p>
@@ -128,7 +134,11 @@ function PlanDetails({ project, id }: { project: Project; id: string }) {
               plantilla, prepara y aprueba un plan nuevo.
             </p>
           )}
-          <p>Ejecución de equipos pendiente de P06.</p>
+          {!project.archivedAt && plan.state === 'approved' && (
+            <TeamLauncher project={project} plan={plan} />
+          )}
+          {plan.executionId && <TeamRunDetails project={project} id={plan.executionId} />}
+          <p>No se publican cambios automáticamente.</p>
         </>
       )}
       {result.error && <p role="alert">{errorMessage(result.error)}</p>}
@@ -390,7 +400,11 @@ function PlansContent({ project }: { project: Project }) {
                 <strong>{plan.title}</strong>
                 <p>
                   {plan.templateName} v{plan.templateVersion} ·{' '}
-                  {plan.state === 'approved' ? 'Aprobado' : 'Preparado'}
+                  {plan.state === 'executed'
+                    ? 'Iniciado'
+                    : plan.state === 'approved'
+                      ? 'Aprobado'
+                      : 'Preparado'}
                 </p>
                 <button aria-pressed={selected === plan.id} onClick={() => setSelected(plan.id)}>
                   Ver plan · {plan.hash.slice(0, 12)}

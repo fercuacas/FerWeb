@@ -163,12 +163,12 @@ export const teamPlanSnapshot = z.object({
 export const teamPlan = z.object({
   id: z.uuid(),
   hash: z.string().regex(/^[a-f0-9]{64}$/),
-  state: z.enum(['prepared', 'approved']),
+  state: z.enum(['prepared', 'approved', 'executed']),
   createdAt: z.iso.datetime(),
   approval: z
     .object({ hash: z.string(), version: z.literal(1), approvedAt: z.iso.datetime() })
     .nullable(),
-  executionId: z.null(),
+  executionId: z.uuid().nullable(),
   snapshot: teamPlanSnapshot,
 });
 export const teamPlanSummary = teamPlan.omit({ snapshot: true }).extend({
@@ -188,3 +188,65 @@ export type TeamTemplate = z.infer<typeof teamTemplate>;
 export type TeamTemplateVersion = z.infer<typeof teamTemplateVersion>;
 export type TeamPreset = z.infer<typeof teamPreset>;
 export type TeamPlan = z.infer<typeof teamPlan>;
+
+export const executeTeamPlanInput = z.strictObject({
+  requestId: z.uuid(),
+  hash: z.string().regex(/^[a-f0-9]{64}$/),
+  version: z.literal(1),
+  commit: z.string().regex(/^[a-f0-9]{40}$/),
+});
+export const teamDelivery = z.object({
+  jobId: z.uuid(),
+  step: z.string(),
+  result: z.string(),
+  sources: z
+    .array(z.object({ path: z.string(), hash: z.string().regex(/^[a-f0-9]{64}$/) }))
+    .max(100),
+  inputHash: z.string(),
+  outputHash: z.string().nullable(),
+  tests: z.array(
+    z.object({ command: z.string(), exitCode: z.number().nullable(), origin: z.string() }),
+  ),
+  doubts: z.array(z.string()),
+  verified: z.boolean(),
+});
+export const teamExecution = z.object({
+  id: z.uuid(),
+  projectId: z.uuid(),
+  planId: z.uuid(),
+  planHash: z.string(),
+  title: z.string(),
+  state: z.enum(['pending', 'running', 'completed', 'failed', 'cancelled']),
+  cancelRequested: z.boolean(),
+  commit: z.string(),
+  repository: z.string(),
+  budgetId: z.uuid(),
+  errorCode: z.string().nullable(),
+  createdAt: z.iso.datetime(),
+  finishedAt: z.iso.datetime().nullable(),
+});
+export const teamExecutionResponse = z.object({
+  execution: teamExecution,
+  plan: teamPlanSnapshot,
+  steps: z.array(
+    z.object({
+      id: z.uuid(),
+      position: z.number().int(),
+      key: z.string(),
+      jobId: z.uuid().nullable(),
+      state: z.enum(['pending', 'running', 'completed', 'failed', 'cancelled', 'skipped']),
+      errorCode: z.string().nullable(),
+      delivery: teamDelivery.nullable(),
+    }),
+  ),
+  events: z.array(
+    z.object({
+      sequence: z.number().int(),
+      type: z.string(),
+      message: z.string(),
+      data: z.record(z.string(), z.unknown()),
+      createdAt: z.iso.datetime(),
+    }),
+  ),
+});
+export const teamExecutionsResponse = z.object({ executions: z.array(teamExecution) });

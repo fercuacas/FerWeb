@@ -249,7 +249,24 @@ Rutas bajo `/api/projects/:projectId`, protegidas por sesión y propietario. Las
 
 `mode` es `auto`, `single` o `team`. `singleStep` es obligatorio exclusivamente para `single`. `executionId` conserva `codex-v1`; `model` debe pertenecer al catálogo, o ser `null` solo si está vacío. La falta de ejecutor permite preparar un plan bloqueado; no aprobarlo. Antes de una aprobación nueva se vuelve a consultar su descriptor y se exige igualdad con el congelado. El snapshot recoge tarea, clasificación, modo efectivo, plantilla, roles/materiales y criterios, ejecución/modelo, límites, iteraciones y máximo previsto de peticiones.
 
-El plan tiene `state=prepared|approved`, `hash` SHA-256 canónico, `approval={hash,version,approvedAt}|null` y `executionId=null`. No se actualiza su contenido: los cambios requieren otra preparación/aprobación. `requestId` repetido con la misma entrada devuelve la copia original; entrada distinta produce 409. Tarea obsoleta, hash incorrecto o archivo producen 409; elementos ajenos 404; incompatibilidad o modelo no permitido 422; DAG/campos/límites inválidos 400. Hasta mil planes por proyecto. El catálogo/historial es consultable en proyectos archivados.
+El plan tiene `state=prepared|approved|executed`, `hash` SHA-256 canónico, `approval={hash,version,approvedAt}|null` y `executionId=null|UUID`. `executed` indica asociación a un recorrido P06, no su éxito. No se actualiza el snapshot: los cambios requieren otra preparación/aprobación. `requestId` repetido con la misma entrada devuelve la copia original; entrada distinta produce 409. Tarea obsoleta, hash incorrecto o archivo producen 409; elementos ajenos 404; incompatibilidad o modelo no permitido 422; DAG/campos/límites inválidos 400. Hasta mil planes por proyecto. El catálogo/historial es consultable en proyectos archivados.
+
+## Equipos en ejecución (P06)
+
+Mismo ámbito de propietario/proyecto y protección JSON/origen que P05. [Protocolo y límites](codex.md#equipo-secuencial-duradero-p06).
+
+| Método bajo `/api/projects/:projectId` | Entrada / resultado |
+| --- | --- |
+| `POST /team-plans/:planId/execute` | `{requestId,hash,version:1,commit}` → 202 `{execution,plan,steps,events}`. Requiere aprobación y condiciones vigentes; crea padre, presupuesto y etapas. |
+| `GET /team-executions` | `{executions}` con hasta cien resúmenes recientes; no incluye entregas ni texto de roles. |
+| `GET /team-executions/:executionId` | `{execution,plan,steps,events}`, con snapshot y entregas autorizadas. Revalida acceso GitHub; 403 si se pierde. |
+| `POST /team-executions/:executionId/cancel` | `{}` → mismo detalle con cancelación solicitada; no promete parada física inmediata. Admite proyecto archivado. |
+
+El padre devuelve ID, proyecto/plan/hash, título, estado, cancelación solicitada, commit/repositorio, presupuesto, motivo nullable y fechas. Las etapas incluyen ID, posición/clave, hijo nullable, estado (`pending/running/completed/failed/cancelled/skipped`), motivo y entrega nullable. La entrega conserva hashes de entrada/salida, fuentes/hash, resumen reportado, pruebas del controlador y dudas; `verified` permite avanzar técnicamente y no acredita todos los criterios humanos. Los eventos tienen secuencia, tipo, mensaje, datos y fecha, sin token ni fence. `codingRun` añade `teamExecutionId` nullable; no expone los archivos de trabajo internos.
+
+Se admite un equipo activo y mil históricos por proyecto; cada plan tiene una ejecución. El mismo UUID y cuerpo devuelve el mismo padre; otras condiciones con ese UUID dan 409. Sin aprobación, con tarea/modelo/ejecutor/commit obsoletos o con otro equipo activo, devuelve conflicto. Hijos siguen la cola `codex-v1` y el presupuesto P04; no se crea un tipo de trabajo que bloquee sus slots. Repetir/publicar directamente un hijo devuelve 409 `team_managed_step`.
+
+El worker llama `POST /internal/teams/tick` con `{}` y token de servicio; no es una ruta pública ni admite planes/comandos del cliente. El controlador sirve `GET /runs/:jobId/files` solo después de finalizar correctamente, con su token y generación. Esa ruta entrega exclusivamente la instantánea segura recogida; no acepta rutas de filesystem ni ofrece un proxy Docker.
 
 ## Revisión y PR (E9)
 

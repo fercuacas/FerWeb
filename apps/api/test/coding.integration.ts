@@ -20,6 +20,7 @@ import {
   teamTemplatesResponse,
   teamPlanResponse,
   teamPlansResponse,
+  teamExecutionResponse,
   type TeamDefinition,
 } from '@ferweb/contracts';
 import { createPool } from '../src/database.js';
@@ -165,6 +166,97 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
         const d = await detail(id);
         return !['pending', 'running'].includes(d.job.state) ? d : false;
       });
+    async function startTeam(title: string, maxRequests = 4) {
+      const post = (path: string, body: unknown) => request('POST', path, body, cookie);
+      const roles = [];
+      for (const template of ['implementer', 'reviewer'])
+        roles.push(
+          agentMutationResponse.parse(
+            await (await post(`/projects/${project}/agents`, { template })).json(),
+          ).role,
+        );
+      const definition: TeamDefinition = {
+        name: title,
+        description: 'Durable team fixture.',
+        maxIterations: 1,
+        limits: { maxRequests: 10, timeoutMs: 120000, concurrency: 1 },
+        steps: [
+          {
+            key: 'implement',
+            title: 'Implement',
+            role: { id: roles[0]!.id, version: 1 },
+            dependsOn: [],
+            exitCriteria: ['Change and tests captured.'],
+            requiredCapabilities: ['text', 'toolCalls', 'workspaceWrite'],
+            maxRequests,
+          },
+          {
+            key: 'review',
+            title: 'Review',
+            role: { id: roles[1]!.id, version: 1 },
+            dependsOn: ['implement'],
+            exitCriteria: ['Review the actual implementation handoff.'],
+            requiredCapabilities: ['text', 'toolCalls'],
+            maxRequests: 2,
+          },
+        ],
+      };
+      const template = teamTemplateResponse
+        .pick({ template: true })
+        .parse(
+          await (await post(`/projects/${project}/team-templates`, { definition })).json(),
+        ).template;
+      const taskRow = await task(title);
+      const prepared = teamPlanResponse.parse(
+        await (
+          await post(`/projects/${project}/team-plans`, {
+            requestId: randomUUID(),
+            taskId: taskRow.id,
+            taskVersion: taskRow.version,
+            templateId: template.id,
+            templateVersion: 1,
+            mode: 'team',
+            executionId: 'codex-v1',
+            model: 'fixture-codex',
+          })
+        ).json(),
+      ).plan;
+      const approval = await post(`/projects/${project}/team-plans/${prepared.id}/approve`, {
+        hash: prepared.hash,
+        version: 1,
+      });
+      assert.equal(approval.status, 200, await approval.clone().text());
+      const body = {
+        requestId: randomUUID(),
+        hash: prepared.hash,
+        version: 1,
+        commit: 'a'.repeat(40),
+      };
+      const path = `/projects/${project}/team-plans/${prepared.id}/execute`;
+      const response = await post(path, body);
+      assert.equal(response.status, 202, await response.clone().text());
+      return {
+        data: teamExecutionResponse.parse(await response.json()),
+        body,
+        path,
+        task: taskRow,
+      };
+    }
+    async function teamDetail(id: string) {
+      const response = await request(
+        'GET',
+        `/projects/${project}/team-executions/${id}`,
+        undefined,
+        cookie,
+      );
+      assert.equal(response.status, 200, await response.clone().text());
+      return teamExecutionResponse.parse(await response.json());
+    }
+    const teamTerminal = (id: string) =>
+      waitFor(async () => {
+        const data = await teamDetail(id);
+        return ['completed', 'failed', 'cancelled'].includes(data.execution.state) ? data : false;
+      }, 60000);
     async function startWorker() {
       worker = spawn(process.execPath, ['apps/api/dist/job-worker.js'], {
         env: {
@@ -1099,6 +1191,132 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
       },
     );
     await t.test(
+      'durable sequential teams hand off verified files, survive reload and stop without replay on cancellation, failures and worker loss',
+      async () => {
+        const successful = await startTeam('P06 successful team');
+        const id = successful.data.execution.id;
+        assert.equal(
+          (await request('GET', `/projects/${project}/team-executions/${id}`, undefined, foreign))
+            .status,
+          404,
+        );
+        assert.equal(
+          (await request('POST', `/projects/${project}/team-executions/${id}/cancel`, {}, foreign))
+            .status,
+          404,
+        );
+        const duplicate = await request('POST', successful.path, successful.body, cookie);
+        assert.equal(teamExecutionResponse.parse(await duplicate.json()).execution.id, id);
+        assert.equal(
+          (
+            await request(
+              'POST',
+              successful.path,
+              { ...successful.body, commit: 'b'.repeat(40) },
+              cookie,
+            )
+          ).status,
+          409,
+        );
+        const done = await teamTerminal(id);
+        assert.equal(done.execution.state, 'completed');
+        assert.equal(done.steps.length, 2);
+        assert.ok(done.steps.every((step) => step.delivery?.verified));
+        assert.equal(done.steps[1]!.delivery!.inputHash, done.steps[0]!.delivery!.outputHash);
+        const first = (await detail(done.steps[0]!.jobId!)).job;
+        const second = (await detail(done.steps[1]!.jobId!)).job;
+        assert.ok(
+          new Date(second.firstStartedAt!).getTime() >= new Date(first.finishedAt!).getTime(),
+        );
+        assert.equal(first.attempt, 1);
+        assert.equal(second.attempt, 1);
+        assert.deepEqual((await teamDetail(id)).events, done.events);
+        assert.equal((await report(first.id)).teamExecutionId, id);
+        assert.equal(
+          (
+            await request(
+              'POST',
+              `/projects/${project}/coding/${first.id}/repeat`,
+              { requestId: randomUUID(), model: 'fixture-codex' },
+              cookie,
+            )
+          ).status,
+          409,
+        );
+        assert.equal(
+          (
+            await request(
+              'POST',
+              `/projects/${project}/coding/${first.id}/review/publish`,
+              { version: 1 },
+              cookie,
+            )
+          ).status,
+          409,
+        );
+        const budget = await coding.jobs.queue.budgets.read(
+          owner.id,
+          project,
+          done.execution.budgetId,
+        );
+        assert.equal(budget.steps.length, 2);
+        assert.ok(budget.admittedRequests > 0 && budget.admittedRequests <= 10);
+        assert.equal(budget.reservedRequests, budget.admittedRequests);
+        assert.ok(budget.steps.every((step) => step.released));
+        const cancelled = await startTeam('P06 cancel active team');
+        const live = await waitFor(async () => {
+          const data = await teamDetail(cancelled.data.execution.id);
+          const job = data.steps[0]?.jobId;
+          if (!job) return false;
+          return (await report(job)).report?.modelRequests! >= 1 ? job : false;
+        });
+        await request(
+          'POST',
+          `/projects/${project}/team-executions/${cancelled.data.execution.id}/cancel`,
+          {},
+          cookie,
+        );
+        const stopped = await teamTerminal(cancelled.data.execution.id);
+        assert.equal(stopped.execution.state, 'cancelled');
+        assert.equal(stopped.steps[1]!.jobId, null);
+        assert.equal((await detail(live)).attempts[0]?.terminationConfirmed, true);
+        const failed = await startTeam('P06 reviewer error');
+        const failedDone = await teamTerminal(failed.data.execution.id);
+        assert.equal(failedDone.execution.state, 'failed');
+        assert.equal(failedDone.steps[0]!.delivery?.verified, true);
+        assert.equal(failedDone.steps[1]!.delivery?.verified, false);
+        const capped = await startTeam('P06 budget cap', 1);
+        const cappedDone = await teamTerminal(capped.data.execution.id);
+        assert.equal(cappedDone.execution.state, 'failed');
+        assert.equal(cappedDone.steps[1]!.jobId, null);
+        const lost = await startTeam('P06 lease worker loss');
+        const lostJob = await waitFor(async () => {
+          const data = await teamDetail(lost.data.execution.id);
+          const job = data.steps[0]?.jobId;
+          return job && (await report(job)).report?.modelRequests! >= 1 ? job : false;
+        });
+        await stopWorker('SIGKILL');
+        const lostChild = await terminal(lostJob);
+        assert.equal(lostChild.job.state, 'failed');
+        assert.equal(lostChild.job.attempt, 1);
+        await startWorker();
+        const lostDone = await teamTerminal(lost.data.execution.id);
+        assert.equal(lostDone.execution.state, 'failed');
+        assert.equal(lostDone.steps[1]!.jobId, null);
+        const changed = await startTeam('P06 lease task changed');
+        const changedJob = await waitFor(async () => {
+          const data = await teamDetail(changed.data.execution.id);
+          const job = data.steps[0]?.jobId;
+          return job && (await report(job)).report?.modelRequests! >= 1 ? job : false;
+        });
+        await pool.query('UPDATE tasks SET version=version+1 WHERE id=$1', [changed.task.id]);
+        const changedDone = await teamTerminal(changed.data.execution.id);
+        assert.equal(changedDone.execution.state, 'failed');
+        assert.equal(changedDone.steps[1]!.jobId, null);
+        assert.equal((await detail(changedJob)).job.attempt, 1);
+      },
+    );
+    await t.test(
       'revoked repository permissions hide saved reports and stop active work',
       async () => {
         const run = await enqueue('Lease permission removal');
@@ -1117,6 +1335,43 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
         );
       },
     );
+    await t.test('team revocation stops active code and hides private deliveries', async () => {
+      fixture.state.denied = false;
+      await github.connect(owner.id, 71);
+      const link = (await github.read(owner.id, project)).link!;
+      await github.sync(owner.id, project, link.version);
+      const run = await startTeam('P06 lease revoked team');
+      await waitFor(async () => {
+        const data = await teamDetail(run.data.execution.id);
+        const job = data.steps[0]?.jobId;
+        return job && (await report(job)).report?.modelRequests! >= 1 ? job : false;
+      });
+      fixture.state.denied = true;
+      await waitFor(async () => {
+        const row = (
+          await pool.query('SELECT state FROM team_executions WHERE id=$1', [run.data.execution.id])
+        ).rows[0];
+        return row.state === 'failed' ? row : false;
+      });
+      assert.equal(
+        (
+          await request(
+            'GET',
+            `/projects/${project}/team-executions/${run.data.execution.id}`,
+            undefined,
+            cookie,
+          )
+        ).status,
+        403,
+      );
+      const rows = (
+        await pool.query(
+          'SELECT job_id FROM team_execution_steps WHERE execution_id=$1 ORDER BY position',
+          [run.data.execution.id],
+        )
+      ).rows;
+      assert.equal(rows[1]!.job_id, null);
+    });
   } finally {
     await stopWorker();
     if (server) await new Promise<void>((resolve) => server!.close(() => resolve()));
