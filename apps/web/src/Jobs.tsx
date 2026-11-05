@@ -6,6 +6,7 @@ import { errorMessage } from './workspace-store';
 import './jobs.css';
 import { CodingForm, CodingView } from './Coding';
 import { ProjectBudgets } from './Budgets';
+import { ProjectPlans } from './TeamPlans';
 
 const names = {
   pending: 'Pendiente',
@@ -478,6 +479,7 @@ export function ProjectJobs({ project }: { project: Project }) {
       </p>
       {!project.archivedAt && <JobForm project={project.id} onCreated={setSelected} />}
       <ProjectBudgets key={project.id} project={project} />
+      <ProjectPlans key={project.id} project={project} />
       {!project.archivedAt && <CodingForm project={project.id} onCreated={setSelected} />}
       <Failure error={result.error} />
       {result.isLoading && <p role="status">Cargando trabajos…</p>}

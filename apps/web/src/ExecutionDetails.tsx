@@ -22,7 +22,7 @@ const reasonLabels: Record<ExecutionUnavailableReason, string> = {
   no_allowed_models: 'El catálogo no tiene modelos admitidos para esta opción.',
 };
 
-const capabilityLabels: Record<keyof ExecutionOption['capabilities'], string> = {
+export const capabilityLabels: Record<keyof ExecutionOption['capabilities'], string> = {
   text: 'Texto',
   streaming: 'Streaming',
   toolCalls: 'Llamadas a herramientas',

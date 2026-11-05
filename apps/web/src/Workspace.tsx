@@ -22,6 +22,7 @@ import { ProjectConversations } from './Conversations';
 import { ProjectLaboratory } from './Laboratory';
 import { ProjectJobs } from './Jobs';
 import { AgentsPage } from './Agents';
+import { ProjectPlans } from './TeamPlans';
 
 const statusLabels = { todo: 'Por hacer', in_progress: 'En curso', done: 'Hecho' };
 const priorityLabels = { low: 'Baja', medium: 'Media', high: 'Alta', urgent: 'Urgente' };
@@ -389,6 +390,7 @@ function Board({ project }: { project: Project }) {
   }
   return (
     <>
+      <ProjectPlans key={project.id} project={project} />
       <div className="board-toolbar">
         <label className="search-field">
           <span className="sr-only">Buscar tareas</span>

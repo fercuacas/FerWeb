@@ -6,6 +6,7 @@ export * from './coding.js';
 export * from './agents.js';
 export * from './skills.js';
 export * from './usage.js';
+export * from './teams.js';
 export * from './execution.js';
 export * from './review.js';
 export * from './context-strategies.js';

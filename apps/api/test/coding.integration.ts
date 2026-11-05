@@ -16,6 +16,11 @@ import {
   skillResponse,
   skillsResponse,
   executionBudgetResponse,
+  teamTemplateResponse,
+  teamTemplatesResponse,
+  teamPlanResponse,
+  teamPlansResponse,
+  type TeamDefinition,
 } from '@ferweb/contracts';
 import { createPool } from '../src/database.js';
 import { readConfig } from '../src/config.js';
@@ -28,6 +33,7 @@ import { hashPassword } from '../src/modules/identity/passwords.js';
 import { GitHubService } from '../src/modules/github/service.js';
 import { CodingService } from '../src/modules/jobs/coding-service.js';
 import { RunnerClient } from '../src/modules/jobs/runner-client.js';
+import { TeamService } from '../src/modules/teams/service.js';
 import { githubFixture } from '../../../tests/fixtures/github.mjs';
 import { codingCorpus } from '../../../tests/fixtures/coding.mjs';
 import { skillFixtureText, skillManifestFixture } from '../../../tests/fixtures/skills.mjs';
@@ -205,6 +211,347 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
         const payload = codingCapabilitiesResponse.parse(await allowed.json());
         assert.deepEqual(payload.execution, codex);
         assert.deepEqual(payload.models, ['fixture-codex']);
+      },
+    );
+    await t.test(
+      'team templates validate scoped DAGs and preserve frozen plans, materials and hash-bound approvals',
+      async () => {
+        const endpoint = `/projects/${project}/team-templates`;
+        const plans = `/projects/${project}/team-plans`;
+        const post = (path: string, body: unknown) => request('POST', path, body, cookie);
+        const read = (path: string) => request('GET', path, undefined, cookie);
+        assert.equal((await request('GET', endpoint)).status, 401);
+        assert.equal((await request('GET', endpoint, undefined, foreign)).status, 404);
+        const catalog = teamTemplatesResponse.parse(await (await read(endpoint)).json());
+        assert.deepEqual(
+          catalog.presets.map((item) => item.id),
+          ['implement-review', 'research-answer', 'review-diff'],
+        );
+        const roles = `/projects/${project}/agents`;
+        const createdRole = await post(roles, { template: 'implementer' });
+        const role = agentMutationResponse.parse(await createdRole.json()).role;
+        const definition = {
+          name: role.latest.name,
+          purpose: role.latest.purpose,
+          instructions: role.latest.instructions,
+          outputFormat: role.latest.outputFormat,
+          requiredCapabilities: role.latest.requiredCapabilities,
+          allowedToolProfiles: role.latest.allowedToolProfiles,
+        };
+        const imported = await post(`/projects/${project}/skills`, {
+          manifest: { ...skillManifestFixture(), slug: 'team-review-fixture' },
+        });
+        const material = skillResponse.parse(await imported.json()).skill;
+        assert.equal(
+          (
+            await post(`/projects/${project}/skills/${material.id}/review`, {
+              sha256: material.sha256,
+              state: 'approved',
+            })
+          ).status,
+          200,
+        );
+        assert.equal(
+          (
+            await request(
+              'PATCH',
+              `${roles}/${role.id}`,
+              { version: 1, definition, skillIds: [material.id] },
+              cookie,
+            )
+          ).status,
+          200,
+        );
+        const reviewer = agentMutationResponse.parse(
+          await (await post(roles, { template: 'reviewer' })).json(),
+        ).role;
+        const team: TeamDefinition = {
+          name: 'Implement and review fixture',
+          description: 'Scoped two-step workflow.',
+          maxIterations: 2,
+          limits: { maxRequests: 12, timeoutMs: 120000, concurrency: 1 },
+          steps: catalog.presets[0]!.steps.map(({ specialty, ...step }, index) => ({
+            ...step,
+            role: { id: index ? reviewer.id : role.id, version: index ? 1 : 2 },
+          })),
+        };
+        for (const broken of [
+          {
+            ...team,
+            steps: team.steps.map((step) => ({
+              ...step,
+              dependsOn: [step.key === 'implement' ? 'review' : 'implement'],
+            })),
+          },
+          { ...team, steps: [{ ...team.steps[0]!, dependsOn: ['absent'] }] },
+          { ...team, steps: [team.steps[0]!, team.steps[0]!] },
+          { ...team, maxIterations: 3 },
+          { ...team, limits: { ...team.limits, concurrency: 2 } },
+          { ...team, steps: [{ ...team.steps[0]!, tool: 'shell', path: '/host' }] },
+        ])
+          assert.equal((await post(endpoint, { definition: broken })).status, 400);
+        const badRole = agentMutationResponse.parse(
+          await (
+            await post(roles, { ...definition, requiredCapabilities: ['structuredOutput'] })
+          ).json(),
+        ).role;
+        assert.equal(
+          (
+            await post(endpoint, {
+              definition: {
+                ...team,
+                steps: [{ ...team.steps[0]!, role: { id: badRole.id, version: 1 } }],
+              },
+            })
+          ).status,
+          422,
+        );
+        const other = (
+          await pool.query('INSERT INTO projects(owner_id,name) VALUES($1,$2) RETURNING id', [
+            owner.id,
+            'Foreign team scope',
+          ])
+        ).rows[0];
+        const otherRole = agentMutationResponse.parse(
+          await (await post(`/projects/${other.id}/agents`, { template: 'reviewer' })).json(),
+        ).role;
+        assert.equal(
+          (
+            await post(endpoint, {
+              definition: {
+                ...team,
+                steps: [{ ...team.steps[0]!, role: { id: otherRole.id, version: 1 } }],
+              },
+            })
+          ).status,
+          404,
+        );
+        const created = await post(endpoint, { definition: team, preset: 'implement-review' });
+        assert.equal(created.status, 201, await created.clone().text());
+        const template = teamTemplateResponse
+          .pick({ template: true })
+          .parse(await created.json()).template;
+        const taskRow = await task('Prepare team fixture');
+        const body = {
+          requestId: randomUUID(),
+          taskId: taskRow.id,
+          taskVersion: taskRow.version,
+          templateId: template.id,
+          templateVersion: 1,
+          mode: 'team' as const,
+          executionId: 'codex-v1' as const,
+          model: 'fixture-codex',
+        };
+        const counts = () =>
+          pool.query(
+            'SELECT (SELECT count(*) FROM jobs)::int AS jobs,(SELECT count(*) FROM execution_budgets)::int AS budgets',
+          );
+        const before = (await counts()).rows[0];
+        const prepared = await post(plans, body);
+        assert.equal(prepared.status, 201, await prepared.clone().text());
+        const plan = teamPlanResponse.parse(await prepared.json()).plan;
+        assert.equal(plan.state, 'prepared');
+        assert.equal(plan.approval, null);
+        assert.equal(plan.executionId, null);
+        assert.equal(plan.snapshot.plannedRequests, 12);
+        assert.deepEqual(
+          plan.snapshot.steps.map((step) => step.key),
+          ['implement', 'review'],
+        );
+        assert.equal(
+          plan.snapshot.steps[0]?.agent.materials?.[0]?.files[0]?.text,
+          skillFixtureText,
+        );
+        assert.equal(
+          teamPlanResponse.parse(await (await post(plans, body)).json()).plan.id,
+          plan.id,
+        );
+        assert.equal(
+          (await post(plans, { ...body, mode: 'single', singleStep: 'review' })).status,
+          409,
+        );
+        assert.equal(
+          (await post(plans, { ...body, requestId: randomUUID(), model: 'unlisted' })).status,
+          422,
+        );
+        assert.equal(
+          (await post(plans, { ...body, requestId: randomUUID(), taskVersion: 99 })).status,
+          409,
+        );
+        assert.equal((await request('GET', `${plans}/${plan.id}`, undefined, foreign)).status, 404);
+        assert.equal(
+          (
+            await request(
+              'POST',
+              `${plans}/${plan.id}/approve`,
+              { hash: plan.hash, version: 1 },
+              foreign,
+            )
+          ).status,
+          404,
+        );
+        assert.equal(
+          (await post(`${plans}/${plan.id}/approve`, { hash: '0'.repeat(64), version: 1 })).status,
+          409,
+        );
+        const approved = teamPlanResponse.parse(
+          await (await post(`${plans}/${plan.id}/approve`, { hash: plan.hash, version: 1 })).json(),
+        ).plan;
+        assert.equal(approved.approval?.hash, plan.hash);
+        assert.equal(approved.state, 'approved');
+        assert.deepEqual(
+          teamPlanResponse.parse(
+            await (
+              await post(`${plans}/${plan.id}/approve`, { hash: plan.hash, version: 1 })
+            ).json(),
+          ).plan,
+          approved,
+        );
+        const single = teamPlanResponse.parse(
+          await (
+            await post(plans, {
+              ...body,
+              requestId: randomUUID(),
+              mode: 'single',
+              singleStep: 'review',
+            })
+          ).json(),
+        ).plan;
+        assert.deepEqual(
+          single.snapshot.steps.map((step) => step.key),
+          ['review'],
+        );
+        assert.deepEqual(single.snapshot.steps[0]?.dependsOn, []);
+        assert.equal(single.snapshot.plannedRequests, 4);
+        const automatic = teamPlanResponse.parse(
+          await (await post(plans, { ...body, requestId: randomUUID(), mode: 'auto' })).json(),
+        ).plan;
+        assert.equal(automatic.snapshot.mode, 'single');
+        assert.equal(automatic.snapshot.classification.size, 'small');
+        assert.equal(
+          (
+            await post(plans, {
+              ...body,
+              requestId: randomUUID(),
+              mode: 'single',
+              singleStep: 'absent',
+            })
+          ).status,
+          422,
+        );
+        assert.equal(
+          (
+            await request(
+              'PATCH',
+              `${endpoint}/${template.id}`,
+              { version: 1, definition: { ...team, name: 'Changed workflow' } },
+              cookie,
+            )
+          ).status,
+          200,
+        );
+        assert.equal(
+          (
+            await request(
+              'PATCH',
+              `${endpoint}/${template.id}`,
+              { version: 1, definition: team },
+              cookie,
+            )
+          ).status,
+          409,
+        );
+        assert.equal(
+          (
+            await request(
+              'PATCH',
+              `${roles}/${role.id}`,
+              {
+                version: 2,
+                definition: { ...definition, instructions: 'Changed instructions' },
+                skillIds: [],
+              },
+              cookie,
+            )
+          ).status,
+          200,
+        );
+        await pool.query('UPDATE tasks SET description=$2,version=version+1 WHERE id=$1', [
+          taskRow.id,
+          'Changed task',
+        ]);
+        const changed = teamPlanResponse.parse(
+          await (
+            await post(plans, {
+              ...body,
+              requestId: randomUUID(),
+              taskVersion: 2,
+              templateVersion: 2,
+            })
+          ).json(),
+        ).plan;
+        assert.notEqual(changed.hash, plan.hash);
+        assert.equal(changed.approval, null);
+        assert.equal(
+          (await post(`${plans}/${changed.id}/approve`, { hash: plan.hash, version: 1 })).status,
+          409,
+        );
+        assert.deepEqual(
+          teamPlanResponse.parse(await (await read(`${plans}/${plan.id}`)).json()).plan,
+          approved,
+        );
+        assert.equal(
+          teamTemplateResponse.parse(await (await read(`${endpoint}/${template.id}`)).json())
+            .versions.length,
+          2,
+        );
+        assert.equal(teamPlansResponse.parse(await (await read(plans)).json()).plans.length, 4);
+        const blockedService = new TeamService(
+          pool,
+          new CodingService(pool, github, new RunnerClient('', '')),
+        );
+        await assert.rejects(
+          blockedService.approve(owner.id, project, changed.id, { hash: changed.hash, version: 1 }),
+          { code: 'plan_blocked' },
+        );
+        const blocked = await blockedService.prepare(owner.id, project, {
+          ...body,
+          requestId: randomUUID(),
+          taskVersion: 2,
+          templateVersion: 2,
+          model: null,
+        });
+        assert.equal(blocked.plan.snapshot.execution.reason, 'runner_unconfigured');
+        await assert.rejects(
+          blockedService.approve(owner.id, project, blocked.plan.id, {
+            hash: blocked.plan.hash,
+            version: 1,
+          }),
+          { code: 'plan_blocked' },
+        );
+        assert.deepEqual((await counts()).rows[0], before);
+        assert.equal(
+          (await post(`${endpoint}/${template.id}/archive`, { version: 2 })).status,
+          200,
+        );
+        assert.equal(
+          (
+            await post(plans, {
+              ...body,
+              requestId: randomUUID(),
+              taskVersion: 2,
+              templateVersion: 2,
+            })
+          ).status,
+          409,
+        );
+        await pool.query('UPDATE projects SET archived_at=now() WHERE id=$1', [project]);
+        assert.equal(
+          (await post(`${plans}/${changed.id}/approve`, { hash: changed.hash, version: 1 })).status,
+          409,
+        );
+        assert.equal((await read(`${plans}/${plan.id}`)).status, 200);
+        await pool.query('UPDATE projects SET archived_at=NULL WHERE id=$1', [project]);
       },
     );
     await t.test(

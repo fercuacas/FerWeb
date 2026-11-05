@@ -229,6 +229,28 @@ Los límites admiten 1–20 peticiones y 10 000–1 200 000 ms. El UUID de creac
 
 Las rutas internas `POST /internal/coding/:jobId/admit` y `/usage` exigen el token del controlador. La primera recibe generación, UUID y hash de la petición. La segunda conserva el uso reportado del proveedor para ese UUID y generación, incluido el uso parcial conocido después de cancelar. [Contratos](../packages/contracts/src/usage.ts)
 
+## Equipos y planes (P05)
+
+Rutas bajo `/api/projects/:projectId`, protegidas por sesión y propietario. Las escrituras requieren proyecto activo y el origen/cabecera JSON habituales. Contratos en [teams.ts](../packages/contracts/src/teams.ts); uso y límites en [Codex](codex.md#equipos-y-planes-p05).
+
+| Método y ruta | Entrada / resultado |
+| --- | --- |
+| `GET /team-templates` | `{templates,presets}` con últimas versiones e indicación de archivo. |
+| `POST /team-templates` | `{definition,preset?}` → 201 `{template}`; verifica roles, skills y capacidades. |
+| `GET /team-templates/:templateId` | `{template,versions}` con historial inmutable. |
+| `PATCH /team-templates/:templateId` | `{version,definition}` → `{template}` con versión nueva. Conflicto si no es la cabeza vigente. |
+| `POST /team-templates/:templateId/archive` | `{version}` → `{archived:true}`; conserva versiones y planes. |
+| `GET /team-plans` | `{plans}` con hasta cien resúmenes recientes, sin textos privados de roles/skills. |
+| `POST /team-plans` | `{requestId,taskId,taskVersion,templateId,templateVersion,mode,singleStep?,executionId,model}` → 201 `{plan}`; copia inmutable, sin encolar. |
+| `GET /team-plans/:planId` | `{plan}` con snapshot completo, hash, estado y aprobación nullable. |
+| `POST /team-plans/:planId/approve` | `{hash,version:1}` → `{plan}` aprobado, idempotente para la misma copia; no ejecuta. |
+
+`definition` contiene nombre, descripción, `maxIterations`, `limits` de P04 y `steps`. Cada paso declara `key`, título, selección de rol/versiones, `dependsOn`, `exitCriteria`, `requiredCapabilities` y `maxRequests`. Solo se permiten esos campos; claves únicas, DAG válido y peticiones de todas las iteraciones dentro del máximo del padre. Versiones de plantilla entre 1 y 50; de una a seis etapas y de una a tres iteraciones. Las referencias se resuelven dentro del proyecto.
+
+`mode` es `auto`, `single` o `team`. `singleStep` es obligatorio exclusivamente para `single`. `executionId` conserva `codex-v1`; `model` debe pertenecer al catálogo, o ser `null` solo si está vacío. La falta de ejecutor permite preparar un plan bloqueado; no aprobarlo. Antes de una aprobación nueva se vuelve a consultar su descriptor y se exige igualdad con el congelado. El snapshot recoge tarea, clasificación, modo efectivo, plantilla, roles/materiales y criterios, ejecución/modelo, límites, iteraciones y máximo previsto de peticiones.
+
+El plan tiene `state=prepared|approved`, `hash` SHA-256 canónico, `approval={hash,version,approvedAt}|null` y `executionId=null`. No se actualiza su contenido: los cambios requieren otra preparación/aprobación. `requestId` repetido con la misma entrada devuelve la copia original; entrada distinta produce 409. Tarea obsoleta, hash incorrecto o archivo producen 409; elementos ajenos 404; incompatibilidad o modelo no permitido 422; DAG/campos/límites inválidos 400. Hasta mil planes por proyecto. El catálogo/historial es consultable en proyectos archivados.
+
 ## Revisión y PR (E9)
 
 | Método y ruta bajo `/api/projects/:projectId/coding/:jobId` | Entrada / resultado |

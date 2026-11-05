@@ -105,6 +105,8 @@ export const workspaceApi = createApi({
     'Agent',
     'Skill',
     'Budget',
+    'TeamTemplate',
+    'TeamPlan',
   ],
   endpoints: (builder) => ({
     executionCapabilities: builder.query<ReturnType<typeof executionCatalogSchema.parse>, string>({

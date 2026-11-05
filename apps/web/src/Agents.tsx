@@ -10,6 +10,7 @@ import {
 } from '@ferweb/contracts';
 import { agentsApi } from './agents-store';
 import { SkillLinks, SkillsLibrary } from './Skills';
+import { TeamTemplates } from './TeamTemplates';
 import { errorMessage, workspaceApi } from './workspace-store';
 import './jobs.css';
 import './agents.css';
@@ -287,6 +288,7 @@ function ProjectAgents({ project }: { project: Project }) {
   const [selected, setSelected] = useState('');
   const [editing, setEditing] = useState<AgentRole | 'new' | null>(null);
   const [libraryOpen, setLibraryOpen] = useState(false);
+  const [teamsOpen, setTeamsOpen] = useState(false);
   function saved(id: string) {
     setSelected(id);
     setEditing(null);
@@ -315,6 +317,10 @@ function ProjectAgents({ project }: { project: Project }) {
       <details className="agent-history" onToggle={(e) => setLibraryOpen(e.currentTarget.open)}>
         <summary>Biblioteca de skills</summary>
         {libraryOpen && <SkillsLibrary project={project} />}
+      </details>
+      <details className="agent-history" onToggle={(e) => setTeamsOpen(e.currentTarget.open)}>
+        <summary>Equipos y plantillas</summary>
+        {teamsOpen && <TeamTemplates project={project} />}
       </details>
       {query.error && (
         <p role="alert">
