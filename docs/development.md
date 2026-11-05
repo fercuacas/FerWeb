@@ -28,6 +28,7 @@ Rutas desde la raíz. Las instrucciones están junto al directorio indicado; sui
 | Cola/simulador | `apps/api/src/modules/jobs/`, `apps/api/src/job-worker.ts` | [Trabajos](jobs.md) | `jobs.integration.ts`, `jobs.spec.ts` |
 | Codex/aislamiento | `coding-*` en jobs, `apps/runner/`, `apps/sandbox/`, `apps/web/src/Coding.tsx` | [Codex](codex.md) | `coding-boundaries.test.ts`, `coding.integration.ts`, `coding.spec.ts` |
 | Catálogo de agentes | `apps/api/src/modules/agents/`, `apps/web/src/Agents.tsx`, `coding-service.ts` | [Roles](codex.md#roles-versionados-por-proyecto-p02) | `coding.integration.ts`, `coding.spec.ts` |
+| Biblioteca de skills | `apps/api/src/modules/skills/`, `apps/web/src/Skills.tsx`, catálogo y cola Codex | [Biblioteca](codex.md#biblioteca-de-skills-p03) | `coding.integration.ts`, `coding.spec.ts` |
 | Revisión/PR/comparación | `review-*` y `coding-service.ts` en jobs, cliente GitHub, `apps/web/src/CodingReview.tsx` | [Revisión y PR](reviews.md) | `review.integration.ts`, `coding-boundaries.test.ts`, `coding.spec.ts` |
 | Esquemas/SQL | `packages/contracts/`, `apps/api/migrations/` | Contrato del dominio | Compilar consumidores, `migrations.test.ts`, `database.integration.ts` |
 | Arranque/salud/Docker | `scripts/`, `compose*.yaml`, Dockerfiles, `apps/api/src/health.ts` | [Docker](docker.md), README para CA | `app.test.ts`, `status.spec.ts`, smoke; Compose si cambia operación |

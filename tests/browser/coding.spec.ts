@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { skillFixtureText, skillManifestFixture } from '../fixtures/skills.mjs';
 test.afterEach(async ({ page }) => {
   await page.request.post('/api/github/disconnect', {
     headers: { Origin: new URL(process.env.FERWEB_URL!).origin, 'X-FerWeb-Request': '1' },
@@ -66,6 +67,26 @@ test('Codex task UI freezes a commit, shows a verified diff, reloads evidence an
     .getByRole('link', { name: 'Agentes' })
     .click();
   await expect(page.getByRole('heading', { name: 'Agentes · Codex aislado' })).toBeVisible();
+  await page.getByText('Biblioteca de skills', { exact: true }).click();
+  const library = page.getByRole('region', { name: 'Biblioteca de skills' });
+  await expect(library.getByText('Modo investigación', { exact: true })).toBeVisible();
+  await library.getByRole('combobox', { name: 'Dependencias' }).selectOption('blocked');
+  await expect(library.getByText('Configuración MCP de ECC', { exact: true })).toBeVisible();
+  await expect(library.getByText('Modo investigación', { exact: true })).toHaveCount(0);
+  await library.getByRole('combobox', { name: 'Dependencias' }).selectOption('');
+  await library.getByLabel('Manifiesto JSON').setInputFiles({
+    name: 'skill-manifest.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify(skillManifestFixture())),
+  });
+  await library.getByRole('button', { name: 'Importar manifiesto' }).click();
+  const skill = library.getByRole('region', { name: 'Detalle del material' });
+  await expect(skill.getByText(skillFixtureText, { exact: true })).toBeVisible();
+  await expect(skill.getByRole('button', { name: 'Aprobar versión' })).toBeDisabled();
+  await skill.getByLabel('He revisado el contenido, la licencia y los recursos declarados').check();
+  await skill.getByRole('button', { name: 'Aprobar versión' }).click();
+  await expect(skill.getByText('Aprobada · MIT')).toBeVisible();
+  await page.getByText('Biblioteca de skills', { exact: true }).click();
   await page.getByRole('button', { name: 'Nuevo rol' }).press('Enter');
   await expect(page.getByLabel('Nombre del rol')).toBeFocused();
   await page.getByLabel('Nombre del rol').fill('Agente de suma');
@@ -77,8 +98,12 @@ test('Codex task UI freezes a commit, shows a verified diff, reloads evidence an
   await expect(history.getByText('Instrucciones congeladas de prueba.')).toBeVisible();
   await page.getByRole('button', { name: 'Crear versión' }).click();
   await page.getByLabel('Instrucciones del rol').fill('Instrucciones nuevas de prueba.');
+  await page.getByRole('checkbox', { name: 'Guía de revisión de prueba · versión 1' }).check();
+  await page.getByText('Ver texto que recibirá el modelo', { exact: true }).click();
+  await expect(page.getByText(skillFixtureText, { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Guardar nueva versión' }).click();
   await expect(history.getByText('Instrucciones nuevas de prueba.')).toBeVisible();
+  await expect(history.getByText(/Guía de revisión de prueba · versión 1/)).toBeVisible();
   await page.getByLabel('Versión del historial').selectOption('1');
   await expect(history.getByText('Instrucciones congeladas de prueba.')).toBeVisible();
   await page.getByRole('link', { name: /Volver al proyecto/ }).click();
@@ -93,16 +118,23 @@ test('Codex task UI freezes a commit, shows a verified diff, reloads evidence an
     .selectOption({ label: 'Agente de suma' }, { timeout: 5000 });
   await page
     .getByRole('combobox', { name: 'Versión del agente', exact: true })
-    .selectOption('1', { timeout: 5000 });
+    .selectOption('2', { timeout: 5000 });
+  await expect(
+    page.getByText('Material para el modelo: Guía de revisión de prueba v1.'),
+  ).toBeVisible();
+  await page.getByText('Ver texto que recibirá el modelo', { exact: true }).click();
+  await expect(page.getByText(skillFixtureText, { exact: true })).toBeVisible();
+  await page.getByText('Ver texto que recibirá el modelo', { exact: true }).click();
   await page.getByRole('button', { name: 'Ejecutar tarea con Codex', exact: true }).click();
   await expect(page.getByText('Estado: Completado', { exact: true })).toBeVisible({
     timeout: 30000,
   });
   await expect(page.getByText('Snapshot final recogido.', { exact: true })).toBeVisible();
-  await page.getByText('Rol congelado · Agente de suma · versión 1', { exact: true }).click();
+  await page.getByText('Rol congelado · Agente de suma · versión 2', { exact: true }).click();
   await expect(
-    page.locator('.job-view pre').filter({ hasText: 'Instrucciones congeladas de prueba.' }),
+    page.locator('.job-view pre').filter({ hasText: 'Instrucciones nuevas de prueba.' }),
   ).toBeVisible();
+  await expect(page.locator('.job-view pre').filter({ hasText: skillFixtureText })).toBeVisible();
   await page.getByText('src/add.cjs', { exact: true }).click();
   await expect(page.locator('.job-view pre').filter({ hasText: 'diff --git' })).toContainText(
     '+exports.add = (a, b) => a + b;',
@@ -149,7 +181,7 @@ test('Codex task UI freezes a commit, shows a verified diff, reloads evidence an
   const repeatedJob = (await repeatResponse.json()).job;
   await expect(page.getByText(`Identificador: ${repeatedJob.id}`, { exact: true })).toBeVisible();
   await expect(
-    page.getByText('Rol congelado · Agente de suma · versión 1', { exact: true }),
+    page.getByText('Rol congelado · Agente de suma · versión 2', { exact: true }),
   ).toBeVisible();
   await expect(page.getByText('Estado: Completado', { exact: true })).toBeVisible({
     timeout: 30000,
@@ -219,6 +251,10 @@ test('Codex task UI freezes a commit, shows a verified diff, reloads evidence an
     .getByRole('link', { name: 'Agentes' })
     .click();
   await expect(page.getByRole('heading', { name: 'Agentes · Codex aislado' })).toBeVisible();
+  await page.getByText('Biblioteca de skills', { exact: true }).click();
+  await expect(
+    page.getByRole('button', { name: 'Ver Guía de revisión de prueba v1' }),
+  ).toBeVisible();
   expect(
     await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
   ).toBeTruthy();

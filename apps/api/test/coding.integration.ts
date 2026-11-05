@@ -12,6 +12,8 @@ import {
   agentsResponse,
   executionCatalogSchema,
   jobDetailSchema,
+  skillResponse,
+  skillsResponse,
 } from '@ferweb/contracts';
 import { createPool } from '../src/database.js';
 import { readConfig } from '../src/config.js';
@@ -26,6 +28,7 @@ import { CodingService } from '../src/modules/jobs/coding-service.js';
 import { RunnerClient } from '../src/modules/jobs/runner-client.js';
 import { githubFixture } from '../../../tests/fixtures/github.mjs';
 import { codingCorpus } from '../../../tests/fixtures/coding.mjs';
+import { skillFixtureText, skillManifestFixture } from '../../../tests/fixtures/skills.mjs';
 
 test('Codex CLI with simulated Responses: isolated real containers, immutable input, reports and cancellation', async (t) => {
   const config = readConfig(),
@@ -403,6 +406,152 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
           (await new CodingService(pool, github, runner).read(owner.id, project, job.id)).report,
           r,
         );
+      },
+    );
+    await t.test(
+      'static skills require scoped review and remain frozen in Codex input',
+      async () => {
+        const library = `/projects/${project}/skills`;
+        const post = (path: string, body: unknown) => request('POST', path, body, cookie);
+        const manifest = skillManifestFixture();
+        const [file] = manifest.files;
+        const importSkill = async (body: unknown) => {
+          const response = await post(library, body);
+          assert.equal(response.status, 201);
+          return skillResponse.parse(await response.json()).skill;
+        };
+        for (const unsafe of [
+          { ...file, path: '../escape.md' },
+          { ...file, path: 'agent/AGENTS.md' },
+          { ...file, path: 'guide.md\n' },
+          { ...file, path: 'hooks/install.sh' },
+          { ...file, type: 'symlink' },
+        ])
+          assert.equal(
+            (await post(library, { manifest: { ...manifest, files: [unsafe] } })).status,
+            400,
+          );
+        for (const broken of [
+          { ...manifest, files: [{ ...file, sha256: '0'.repeat(64) }] },
+          { ...manifest, files: [file, { ...file, path: 'GUIDES/REVIEW.md' }] },
+          { ...manifest, resources: [{ kind: 'file', name: 'missing.txt' }] },
+          { ...manifest, files: [{ ...file, contentBase64: '/w==' }] },
+        ])
+          assert.equal((await post(library, { manifest: broken })).status, 422);
+        const large = skillManifestFixture('a'.repeat(12288));
+        assert.equal(
+          (
+            await post(library, {
+              manifest: {
+                ...large,
+                files: [
+                  large.files[0],
+                  ...[1, 2, 3].map((n) => ({ ...large.files[0], path: `extra-${n}.md` })),
+                ],
+              },
+            })
+          ).status,
+          422,
+        );
+        const seeded = await importSkill({ curated: 'ecc-research' });
+        assert.equal(seeded.review, 'pending');
+        assert.equal(seeded.origin.kind, 'ecc');
+        assert.match(seeded.notice, /Copyright \(c\) 2026 Affaan Mustafa/);
+        const blocked = await importSkill({ curated: 'ecc-mcp' });
+        assert.equal(
+          (
+            await post(`${library}/${blocked.id}/review`, {
+              sha256: blocked.sha256,
+              state: 'approved',
+            })
+          ).status,
+          422,
+        );
+
+        const material = await importSkill({ manifest });
+        assert.equal(material.review, 'pending');
+        assert.equal((await importSkill({ manifest })).id, material.id);
+        const endpoint = `${library}/${material.id}`;
+        assert.equal((await request('GET', endpoint, undefined, foreign)).status, 404);
+        const otherProject = await post('/projects', { name: 'Otra biblioteca', description: '' });
+        assert.equal(otherProject.status, 201);
+        const other = (await otherProject.json()).project;
+        const otherLibrary = `/projects/${other.id}/skills`;
+        const otherImport = await post(otherLibrary, { manifest });
+        assert.equal(otherImport.status, 201);
+        const otherSkill = skillResponse.parse(await otherImport.json()).skill;
+        assert.equal(
+          (await request('GET', `${otherLibrary}/${material.id}`, undefined, cookie)).status,
+          404,
+        );
+        assert.equal(
+          (
+            await request(
+              'PATCH',
+              `/projects/${other.id}`,
+              { version: other.version, archived: true },
+              cookie,
+            )
+          ).status,
+          200,
+        );
+        assert.equal(
+          (
+            await post(`${otherLibrary}/${otherSkill.id}/review`, {
+              sha256: otherSkill.sha256,
+              state: 'approved',
+            })
+          ).status,
+          409,
+        );
+        const list = await request('GET', library, undefined, cookie);
+        const catalog = skillsResponse.parse(await list.json());
+        assert.ok(catalog.versions.some((entry) => entry.id === material.id));
+        assert.ok(!JSON.stringify(catalog).includes(skillFixtureText));
+        assert.equal(
+          (await post(`${endpoint}/review`, { sha256: '0'.repeat(64), state: 'approved' })).status,
+          409,
+        );
+
+        const agents = `/projects/${project}/agents`;
+        const definition = {
+          name: 'Material review role',
+          purpose: 'Review the task.',
+          instructions: 'Report evidence.',
+          outputFormat: 'Summary.',
+          requiredCapabilities: ['text'],
+          allowedToolProfiles: ['node-isolated-v1'],
+        };
+        const created = await post(agents, definition);
+        assert.equal(created.status, 201);
+        const role = agentMutationResponse.parse(await created.json()).role;
+        const patch = (version: number, skillIds: string[]) =>
+          request('PATCH', `${agents}/${role.id}`, { version, definition, skillIds }, cookie);
+        assert.equal((await patch(1, [otherSkill.id])).status, 404);
+        assert.equal((await patch(1, [material.id])).status, 422);
+        assert.equal(
+          (await post(`${endpoint}/review`, { sha256: material.sha256, state: 'approved' })).status,
+          200,
+        );
+        const linked = await patch(1, [material.id]);
+        assert.equal(linked.status, 200);
+        assert.equal(
+          agentMutationResponse.parse(await linked.json()).role.latest.skills?.[0]?.sha256,
+          material.sha256,
+        );
+
+        const next = await importSkill({
+          manifest: skillManifestFixture('New material that must stay out of the run.'),
+        });
+        assert.equal(next.version, 2);
+        assert.equal((await patch(2, [])).status, 200);
+        const { job } = await enqueue('Fix addition with skill material', {
+          agent: { id: role.id, version: 2 },
+        });
+        assert.equal((await terminal(job.id)).job.state, 'completed');
+        const frozen = (await report(job.id)).agent;
+        assert.equal(frozen?.materials?.[0]?.sha256, material.sha256);
+        assert.equal(frozen?.materials?.[0]?.files[0]?.text, skillFixtureText);
       },
     );
     await t.test(

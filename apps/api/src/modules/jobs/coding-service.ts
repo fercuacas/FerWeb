@@ -6,7 +6,8 @@ import {
   codingConfiguration,
   codingRunSchema,
   codingPath,
-  agentSnapshot,
+  codingAgentSnapshot,
+  skillPromptMaterial,
   supportsAgent,
   type repeatCodingInput,
 } from '@ferweb/contracts';
@@ -19,6 +20,7 @@ import { RunnerClient } from './runner-client.js';
 import { indexable } from '../retrieval/chunking.js';
 import { canonical } from './review-artifacts.js';
 import { AgentCatalog } from '../agents/catalog.js';
+import { SkillLibrary } from '../skills/library.js';
 const missing = () => new HttpError(404, 'not_found', 'No se ha encontrado el recurso.');
 const changed = () =>
   new HttpError(
@@ -36,6 +38,7 @@ export class CodingService {
   readonly projects: ProjectRepository;
   readonly jobs: JobService;
   private readonly agents: AgentCatalog;
+  private readonly skills: SkillLibrary;
   constructor(
     readonly pool: Pool,
     readonly github: GitHubService,
@@ -44,6 +47,7 @@ export class CodingService {
     this.projects = new ProjectRepository(pool);
     this.jobs = new JobService(pool);
     this.agents = new AgentCatalog(pool);
+    this.skills = new SkillLibrary(pool);
   }
   async capabilities(owner: string, project: string) {
     await this.projects.get(owner, project);
@@ -115,6 +119,17 @@ export class CodingService {
     const agent = input.agent
       ? await this.agents.select(this.pool, owner, project, input.agent)
       : null;
+    const materials = await this.skills.resolve(
+      owner,
+      project,
+      (agent?.skills ?? []).map((item) => item.id),
+    );
+    if (materials.some((item, index) => item.sha256 !== agent?.skills?.[index]?.sha256))
+      throw new HttpError(
+        409,
+        'skill_content_changed',
+        'El material ya no coincide con la versión del rol.',
+      );
     const capabilities = await this.runner.capabilities();
     if (
       !capabilities.available ||
@@ -130,7 +145,9 @@ export class CodingService {
           ? 'El modelo no está permitido para el ejecutor Codex.'
           : 'Configura Codex en el servidor y selecciona un modelo permitido.',
       );
-    if (agent && !supportsAgent(agent, describeCoding(capabilities))) throw incompatible();
+    const option = describeCoding(capabilities);
+    if (agent && ![agent, ...materials].every((item) => supportsAgent(item, option)))
+      throw incompatible();
     const { link } = await this.github.read(owner, project);
     if (
       !link ||
@@ -274,7 +291,7 @@ export class CodingService {
           link.branch,
           JSON.stringify(sourceTree),
           JSON.stringify(capabilities.environment),
-          agent ? JSON.stringify(agent) : null,
+          agent ? JSON.stringify({ ...agent, ...(materials.length && { materials }) }) : null,
         ],
       );
       await this.jobs.queue.event(db, job.id, 'queued', 'Tarea y snapshot del commit guardados.');
@@ -292,7 +309,7 @@ export class CodingService {
     if (!row) throw missing();
     await this.access(row.owner_id, row.project_id, Number(row.repository_id));
     if (checkOnly) return { authorized: true };
-    const agent = row.agent_snapshot ? agentSnapshot.parse(row.agent_snapshot) : null;
+    const agent = row.agent_snapshot ? codingAgentSnapshot.parse(row.agent_snapshot) : null;
     return {
       jobId: id,
       fence,
@@ -304,6 +321,7 @@ export class CodingService {
           purpose: agent.purpose,
           instructions: agent.instructions,
           outputFormat: agent.outputFormat,
+          ...(agent.materials?.length && { materials: agent.materials.map(skillPromptMaterial) }),
         },
       }),
       files: row.files,
@@ -357,8 +375,10 @@ export class CodingService {
       ...source.configuration,
       model: input.model,
     });
-    const agent = source.agent_snapshot ? agentSnapshot.parse(source.agent_snapshot) : null;
-    if (agent && !supportsAgent(agent, describeCoding(caps))) throw incompatible();
+    const agent = source.agent_snapshot ? codingAgentSnapshot.parse(source.agent_snapshot) : null;
+    const option = describeCoding(caps);
+    if (agent && ![agent, ...(agent.materials ?? [])].every((item) => supportsAgent(item, option)))
+      throw incompatible();
     const id = await this.jobs.queue.tx(async (db) => {
       const p = (
         await db.query('SELECT archived_at FROM projects WHERE id=$1 AND owner_id=$2 FOR UPDATE', [

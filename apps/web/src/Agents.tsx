@@ -9,6 +9,7 @@ import {
   type Project,
 } from '@ferweb/contracts';
 import { agentsApi } from './agents-store';
+import { SkillLinks, SkillsLibrary } from './Skills';
 import { errorMessage, workspaceApi } from './workspace-store';
 import './jobs.css';
 import './agents.css';
@@ -48,9 +49,18 @@ function AgentEditor({
 }) {
   const [draft, setDraft] = useState<AgentDefinition>(() => {
     if (!role) return blank;
-    const { id: _id, origin: _origin, version: _version, ...definition } = role.latest;
+    const {
+      id: _id,
+      origin: _origin,
+      version: _version,
+      skills: _skills,
+      ...definition
+    } = role.latest;
     return definition;
   });
+  const [skillIds, setSkillIds] = useState(() =>
+    (role?.latest.skills ?? []).map((item) => item.id),
+  );
   const [error, setError] = useState('');
   const [create, creating] = agentsApi.useCreateAgentMutation();
   const [update, updating] = agentsApi.useUpdateAgentMutation();
@@ -69,7 +79,7 @@ function AgentEditor({
         ? await update({
             project,
             id: role.id,
-            body: { version: role.latest.version, definition: result.data },
+            body: { version: role.latest.version, definition: result.data, skillIds },
           }).unwrap()
         : await create({ project, body: result.data }).unwrap();
       onSaved(saved.role.id);
@@ -149,6 +159,7 @@ function AgentEditor({
             </label>
           ))}
         </fieldset>
+        {role && <SkillLinks project={project} ids={skillIds} onChange={setSkillIds} />}
         <div className="project-actions">
           <button className="primary-button" type="submit">
             {role ? 'Guardar nueva versión' : 'Crear rol'}
@@ -216,6 +227,18 @@ function AgentHistory({ project, id }: { project: Project; id: string }) {
           )}
         </dd>
       </dl>
+      {!!version.skills?.length && (
+        <>
+          <h4>Material vinculado</h4>
+          <ul>
+            {version.skills.map((item) => (
+              <li key={item.id}>
+                {item.name} · versión {item.version} · <code>{item.sha256.slice(0, 12)}</code>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
       {role.archivedAt && (
         <p className="read-only-note">Rol archivado. Historial de solo lectura.</p>
       )}
@@ -263,6 +286,7 @@ function ProjectAgents({ project }: { project: Project }) {
   const [create, copying] = agentsApi.useCreateAgentMutation();
   const [selected, setSelected] = useState('');
   const [editing, setEditing] = useState<AgentRole | 'new' | null>(null);
+  const [libraryOpen, setLibraryOpen] = useState(false);
   function saved(id: string) {
     setSelected(id);
     setEditing(null);
@@ -288,6 +312,10 @@ function ProjectAgents({ project }: { project: Project }) {
       {project.archivedAt && (
         <p className="read-only-note">Proyecto archivado. El catálogo es de solo lectura.</p>
       )}
+      <details className="agent-history" onToggle={(e) => setLibraryOpen(e.currentTarget.open)}>
+        <summary>Biblioteca de skills</summary>
+        {libraryOpen && <SkillsLibrary project={project} />}
+      </details>
       {query.error && (
         <p role="alert">
           {errorMessage(query.error)}{' '}

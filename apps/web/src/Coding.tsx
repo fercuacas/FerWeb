@@ -3,6 +3,7 @@ import { skipToken } from '@reduxjs/toolkit/query';
 import { supportsAgent } from '@ferweb/contracts';
 import type { Job } from '@ferweb/contracts';
 import { agentsApi } from './agents-store';
+import { SkillPreview, SkillText } from './Skills';
 import { codingApi } from './coding-store';
 import { githubApi } from './github-store';
 import { workspaceApi, errorMessage } from './workspace-store';
@@ -45,7 +46,11 @@ export function CodingForm({
     roles.some((role) => role.id === agentId) &&
     history.currentData &&
     !history.currentData.role.archivedAt
-      ? history.currentData.versions.filter((version) => supportsAgent(version, options.execution))
+      ? history.currentData.versions.filter((version) =>
+          [version, ...(version.skills ?? [])].every((item) =>
+            supportsAgent(item, options.execution),
+          ),
+        )
       : [];
   const selectedAgent = versions.find((version) => version.version === agentVersion);
   const ready =
@@ -104,7 +109,7 @@ export function CodingForm({
           {options && <ExecutionDetails option={options.execution} />}
           {options?.execution.destination === 'openai-api' && (
             <p>
-              Al ejecutar, el contexto de la tarea y las instrucciones del rol seleccionado se
+              Al ejecutar, la tarea, las instrucciones del rol y sus materiales vinculados se
               enviarán a OpenAI mediante la API configurada.
             </p>
           )}
@@ -172,6 +177,15 @@ export function CodingForm({
                 ))}
               </select>
             </label>
+          )}
+          {!!selectedAgent?.skills?.length && (
+            <>
+              <p>
+                Material para el modelo:{' '}
+                {selectedAgent.skills.map((item) => `${item.name} v${item.version}`).join(', ')}.
+              </p>
+              <SkillPreview project={project} ids={selectedAgent.skills.map((item) => item.id)} />
+            </>
           )}
           {agents.isLoading || history.isFetching ? (
             <p role="status">Consultando roles y versiones…</p>
@@ -322,7 +336,10 @@ export function CodingView({
               <summary>
                 Rol congelado · {visible.agent.name} · versión {visible.agent.version}
               </summary>
-              <pre>{JSON.stringify(visible.agent, null, 2)}</pre>
+              <pre>{JSON.stringify({ ...visible.agent, materials: undefined }, null, 2)}</pre>
+              {visible.agent.materials?.map((skill) => (
+                <SkillText key={skill.id} skill={skill} />
+              ))}
             </details>
           )}
           <details>

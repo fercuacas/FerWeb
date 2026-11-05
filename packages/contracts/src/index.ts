@@ -4,6 +4,7 @@ export * from './laboratory.js';
 export * from './jobs.js';
 export * from './coding.js';
 export * from './agents.js';
+export * from './skills.js';
 export * from './execution.js';
 export * from './review.js';
 export * from './context-strategies.js';

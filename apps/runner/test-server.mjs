@@ -3,6 +3,17 @@ import { createController } from './controller.mjs';
 let sequence = 0;
 async function fakeProvider(run, value, res) {
   if (
+    run.input.task.title === 'Fix addition with skill material' &&
+    run.requests === 1 &&
+    (!JSON.stringify(value.input).includes('P03 frozen material marker.') ||
+      !JSON.stringify(value.input).includes('Aviso de licencia de la fixture de FerWeb.') ||
+      JSON.stringify(value.input).includes('New material that must stay out'))
+  ) {
+    res.writeHead(422);
+    res.end('{"error":{"message":"wrong frozen skill content in Codex input"}}');
+    return;
+  }
+  if (
     run.input.task.title === 'Fix addition with agent role' &&
     run.requests === 1 &&
     !JSON.stringify(value.input).includes('P02 frozen prompt marker v1.')

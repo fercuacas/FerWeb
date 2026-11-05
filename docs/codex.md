@@ -44,6 +44,16 @@ La migración 011 guarda el catálogo y el historial en PostgreSQL. Cada trabajo
 
 El catálogo y la entrada congelada se consultan con autorización de proyecto. El ejecutor recibe el propósito, las instrucciones y el formato del rol seleccionado al ejecutar. En el destino OpenAI, estos textos forman parte de la solicitud al modelo. La forma de salida es una guía textual. Una versión que requiera salida estructurada validada u otra capacidad que Codex no confirme se rechaza. Cada proyecto admite hasta 50 roles y cada rol hasta 50 versiones.
 
+## Biblioteca de skills (P03)
+
+En **Agentes → Biblioteca de skills**, importa un manifiesto JSON o incorpora una entrada del catálogo. La selección de ECC contiene siete adaptaciones de texto para FerWeb y dos referencias bloqueadas por sus dependencias de hooks o MCP. Las adaptaciones incluyen los modos desarrollo, investigación y revisión, reglas TypeScript y Python y guías React y PostgreSQL. Cada entrada conserva su origen fijado y el aviso MIT. [Commit de ECC](https://github.com/affaan-m/ECC/commit/b38be6a7f6350964d59328b52f0624e1d1d552d1)
+
+Comprueba el texto, la licencia y los recursos antes de aprobar la versión. En **Crear versión** del rol, elige hasta tres versiones aprobadas y usa **Ver texto que recibirá el modelo**. Al preparar un trabajo se comprueban las capacidades y perfiles tanto del rol como de sus materiales. Codex recibe los nombres, rutas, textos y avisos de licencia como contexto de referencia. En el destino OpenAI esos textos viajan en la solicitud de inferencia. Los archivos se guardan como datos y el sandbox conserva su política. El frontmatter se trata como texto.
+
+La migración 012 guarda los paquetes y versiones en PostgreSQL. Una importación idéntica devuelve la versión existente. Los cambios crean otra versión que requiere revisión propia. Una edición del rol crea otra versión del rol. **Rol congelado**, en el informe, muestra la selección y su texto aunque después se importe contenido nuevo o se edite el rol. Repetir una ejecución conserva el material congelado y requiere el entorno original. La imagen de sandbox de P03 cambia para incluir este contexto y las repeticiones de ejecuciones de una imagen anterior siguen sujetas a esa comprobación.
+
+El importador valida texto UTF-8, Base64 canónico, rutas relativas, recursos y SHA-256 por archivo. Cada paquete admite seis archivos `.md` o `.txt`, 12 KiB por archivo y 36 KiB en total. El contexto serializado de materiales y avisos de licencia admite hasta 24 KiB por rol. El origen de un manifiesto es informativo. La aplicación importa archivos locales elegidos por el usuario o adaptaciones incluidas en el código de FerWeb. Las referencias a servicios, scripts, hooks, MCP y ejecutores específicos son diagnósticos y bloquean la aprobación. [Manifiesto y API](api.md#biblioteca-de-skills-p03)
+
 ## Separación de componentes
 
 ```text

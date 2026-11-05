@@ -40,3 +40,26 @@
   height: 18px;
   padding: 0;
 }
+.skill-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 8px 0;
+}
+.skill-review,
+.skill-filters {
+  margin: 14px 0;
+}
+.skill-filters label,
+.skill-review label {
+  display: grid;
+  gap: 6px;
+}
+.skill-review label {
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.skill-review label input {
+  width: 18px;
+  min-height: 0;
+}

@@ -10,6 +10,7 @@ import type { z } from 'zod';
 import { HttpError } from '../../http-error.js';
 import { ProjectRepository } from '../projects/repository.js';
 import { agentTemplates, templateReference, templateRevision } from './templates.js';
+import { SkillLibrary } from '../skills/library.js';
 
 const missing = () => new HttpError(404, 'not_found', 'No se ha encontrado el recurso.');
 const archived = () => new HttpError(409, 'agent_archived', 'El rol está archivado.');
@@ -35,9 +36,11 @@ function role(row: QueryResultRow) {
 
 export class AgentCatalog {
   private readonly projects: ProjectRepository;
+  private readonly skills: SkillLibrary;
 
   constructor(private readonly pool: Pool) {
     this.projects = new ProjectRepository(pool);
+    this.skills = new SkillLibrary(pool);
   }
 
   async list(owner: string, project: string) {
@@ -133,13 +136,44 @@ export class AgentCatalog {
       const current = await this.current(db, project, id, input.version);
       if (input.version >= 50)
         throw new HttpError(422, 'agent_version_limit', 'Límite de versiones del rol alcanzado.');
+      const materials = await this.skills.resolve(
+        owner,
+        project,
+        input.skillIds ?? (snapshot(current).skills ?? []).map((item) => item.id),
+        db,
+      );
+      if (
+        !input.definition.allowedToolProfiles.some((profile) =>
+          materials.every((item) => item.allowedToolProfiles.includes(profile)),
+        )
+      )
+        throw new HttpError(
+          422,
+          'skill_incompatible',
+          'El rol y sus materiales deben compartir un perfil de herramientas.',
+        );
+      const definition = {
+        ...input.definition,
+        ...(materials.length && {
+          skills: materials.map(
+            ({ id, name, version, sha256, requiredCapabilities, allowedToolProfiles }) => ({
+              id,
+              name,
+              version,
+              sha256,
+              requiredCapabilities,
+              allowedToolProfiles,
+            }),
+          ),
+        }),
+      };
       const version = input.version + 1;
       await db.query('UPDATE agent_roles SET latest_version=$2 WHERE id=$1', [id, version]);
       await db.query(
         'INSERT INTO agent_versions(role_id,version,definition,origin) VALUES($1,$2,$3,$4)',
-        [id, version, JSON.stringify(input.definition), JSON.stringify(current.origin)],
+        [id, version, JSON.stringify(definition), JSON.stringify(current.origin)],
       );
-      return role({ ...current, version, definition: input.definition });
+      return role({ ...current, version, definition });
     });
   }
 

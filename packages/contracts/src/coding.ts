@@ -1,6 +1,11 @@
 import { z } from 'zod';
 import { executionOptionSchema } from './execution.js';
 import { agentSelection, agentSnapshot } from './agents.js';
+import { skillVersion } from './skills.js';
+
+export const codingAgentSnapshot = agentSnapshot.extend({
+  materials: z.array(skillVersion).max(3).optional(),
+});
 export const codingConfiguration = z.strictObject({
   taskId: z.uuid(),
   commit: z.string().regex(/^[a-f0-9]{40}$/),
@@ -102,7 +107,7 @@ export const codingRunSchema = z.object({
   manifest: z.array(z.object({ path: z.string(), sha: z.string(), contentHash: z.string() })),
   excluded: z.array(z.string()),
   report: codingReport.nullable(),
-  agent: agentSnapshot.nullable(),
+  agent: codingAgentSnapshot.nullable(),
 });
 export function codingPath(path: string) {
   return (

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { executionOptionSchema, type ExecutionOption } from './execution.js';
+import { skillLinks, skillReference } from './skills.js';
 
 export const agentCapability = executionOptionSchema.shape.capabilities.keyof();
 export const agentToolProfile = executionOptionSchema.shape.toolProfile;
@@ -33,6 +34,7 @@ const agentOrigin = z.discriminatedUnion('kind', [
 export const agentSnapshot = agentDefinition.extend({
   ...agentSelection.shape,
   origin: agentOrigin,
+  skills: z.array(skillReference).max(3).optional(),
 });
 export const agentRole = z.object({
   id: z.uuid(),
@@ -50,7 +52,11 @@ export const createAgentInput = z.union([
   agentDefinition,
   z.strictObject({ template: agentTemplateId }),
 ]);
-export const updateAgentInput = z.strictObject({ version, definition: agentDefinition });
+export const updateAgentInput = z.strictObject({
+  version,
+  definition: agentDefinition,
+  skillIds: skillLinks.optional(),
+});
 export const archiveAgentInput = z.strictObject({ version });
 export type AgentDefinition = z.infer<typeof agentDefinition>;
 export type AgentRole = z.infer<typeof agentRole>;

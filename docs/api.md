@@ -167,12 +167,50 @@ Rutas autenticadas bajo `/api/projects/:projectId/agents`.
 | `GET /` | `{ roles, templates }` con la versión actual de cada rol del proyecto. |
 | `POST /` | Definición completa o `{ template }` con el identificador de una plantilla. Devuelve 201 con `{ role }`. |
 | `GET /:agentId` | `{ role, versions }` con las versiones inmutables, de la última a la primera. |
-| `PATCH /:agentId` | `{ version, definition }`. La versión indicada debe ser la última. Devuelve `{ role }` con la versión siguiente. |
+| `PATCH /:agentId` | `{ version, definition, skillIds? }`. La versión indicada debe ser la última. Omitir `skillIds` conserva los vínculos. Devuelve `{ role }` con la versión siguiente. |
 | `POST /:agentId/archive` | `{ version }` de la última versión. Devuelve `{ role }` con la fecha de archivo y mantiene el historial. |
 
 La definición incluye `name`, `purpose`, `instructions`, `outputFormat`, `requiredCapabilities` y `allowedToolProfiles`. La procedencia la asigna el servidor. Las escrituras sobre proyectos o roles archivados y las ediciones concurrentes devuelven 409. Los recursos ajenos devuelven 404.
 
 `POST /projects/:projectId/coding` admite opcionalmente `agent: { id, version }`. Devuelve 422 con `agent_incompatible` si el perfil de herramientas o las capacidades de la versión no encajan. El detalle de la ejecución devuelve `agent` con la versión congelada o `null` para trabajos sin rol. [Uso y límites](codex.md#roles-versionados-por-proyecto-p02)
+
+## Biblioteca de skills (P03)
+
+Rutas autenticadas bajo `/api/projects/:projectId/skills`.
+
+| Método y sufijo | Entrada y resultado |
+| --- | --- |
+| `GET /` | `{ versions, curated }` con metadatos, recursos, compatibilidad y estados. |
+| `POST /` | `{ manifest }` o `{ curated }` con el identificador de una entrada incluida. Devuelve 201 y `{ skill }`. |
+| `GET /:skillId` | `{ skill }` con los metadatos, aviso de licencia y texto de una versión. |
+| `POST /:skillId/review` | `{ sha256, state }` con el hash del paquete y el estado terminal `approved` o `rejected`. Devuelve `{ skill }`. |
+
+Ejemplo de archivo JSON para importar desde la web. El SHA-256 se calcula sobre los bytes UTF-8 antes de codificarlos en Base64.
+
+```json
+{
+  "format": 1,
+  "slug": "guia-revision",
+  "name": "Guía de revisión",
+  "description": "Revisión básica de cambios",
+  "purpose": "review",
+  "technologies": ["typescript"],
+  "license": "LicenseRef-Project",
+  "notice": "Material de ejemplo para uso en este proyecto.",
+  "source": "Guía interna del proyecto",
+  "requiredCapabilities": ["text"],
+  "allowedToolProfiles": ["node-isolated-v1"],
+  "resources": [{ "kind": "file", "name": "guia.md" }],
+  "files": [{
+    "path": "guia.md",
+    "type": "file",
+    "sha256": "39e93df4e7dedc90e6e07f8c3edde0d05737966a3cbca67a990a098dcb6c8ea5",
+    "contentBase64": "UmV2aXNhIGVsIGRpZmYuCg=="
+  }]
+}
+```
+
+El UUID identifica una versión concreta. La API devuelve 404 para recursos ajenos, 409 para hash de revisión obsoleto, estados terminales incompatibles o proyectos archivados y 422 para contenido inválido o dependencias bloqueadas. Solo una versión aprobada del mismo proyecto puede vincularse a un rol. `GET /coding/:jobId` incluye el texto congelado bajo `agent.materials` cuando se usó material. [Contratos](../packages/contracts/src/skills.ts)
 
 ## Revisión y PR (E9)
 
