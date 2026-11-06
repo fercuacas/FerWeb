@@ -3,6 +3,16 @@ import { createController } from './controller.mjs';
 let sequence = 0;
 async function fakeProvider(run, value, res) {
   if (
+    run.input.task.title === 'P10 bounded context' &&
+    !JSON.stringify(value.input).includes(
+      run.requests === 1 ? 'P10 map marker' : 'P10 source-only detail',
+    )
+  ) {
+    res.writeHead(422);
+    res.end('{"error":{"message":"initial or expanded context missing from Codex input"}}');
+    return;
+  }
+  if (
     run.input.task.title === 'P09 memory reuse' &&
     run.requests === 1 &&
     (!JSON.stringify(value.input).includes('P09 untrusted handoff marker.') ||
@@ -100,13 +110,15 @@ async function fakeProvider(run, value, res) {
   let output;
   if (run.requests === 1 && exec) {
     const cancel = /cancel|lease|timeout/i.test(run.input.task.title);
-    const command = readOnly
+    let command = readOnly
       ? `node tests/readonly-probe.cjs${cancel ? ' && sleep 30' : ''}`
       : teamStep?.key === 'review'
         ? 'node --test; node tests/isolation-probe.cjs'
         : cancel
           ? 'sleep 30'
           : `node --test; node tests/isolation-probe.cjs; node -e "require('node:fs').writeFileSync('src/add.cjs', 'exports.add = (a, b) => a + b${/P08 reproduced target/.test(run.input.task.title) ? ' + 1' : ''};\\n')"; node --test`;
+    if (run.input.task.title === 'P10 bounded context')
+      command = 'node tools/context-expand-probe.cjs && (' + command + ')';
     const args =
       exec.name === 'exec_command'
         ? { cmd: command, yield_time_ms: cancel ? 1000 : 10000, max_output_tokens: 3000 }

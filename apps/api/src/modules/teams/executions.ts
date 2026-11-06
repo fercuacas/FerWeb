@@ -129,6 +129,8 @@ export class TeamExecutions {
   }
   async read(owner: string, project: string, id: string) {
     const row = await this.owned(owner, project, id);
+    for (const item of row.snapshot.plan.contexts ?? [])
+      await this.coding.contextPacks!.read(owner, project, item.receipt.id);
     if (row.snapshot.plan.memory?.length)
       await this.coding.memory.selections(owner, project, row.snapshot.plan.memory, 'history');
     // Reports and deliveries carry repository text; revalidate access before returning them.
@@ -141,10 +143,13 @@ export class TeamExecutions {
       );
     const steps = (
       await this.pool.query(
-        'SELECT s.*,j.state,j.error_code FROM team_execution_steps s LEFT JOIN jobs j ON j.id=s.job_id WHERE s.execution_id=$1 ORDER BY s.position',
+        'SELECT s.*,j.state,j.error_code,c.context_receipt_id FROM team_execution_steps s LEFT JOIN jobs j ON j.id=s.job_id LEFT JOIN coding_runs c ON c.job_id=s.job_id WHERE s.execution_id=$1 ORDER BY s.position',
         [id],
       )
     ).rows;
+    for (const step of steps)
+      if (step.context_receipt_id)
+        await this.coding.contextPacks!.read(owner, project, step.context_receipt_id);
     const events = (
       await this.pool.query(
         'SELECT * FROM team_execution_events WHERE execution_id=$1 ORDER BY sequence',
@@ -530,7 +535,11 @@ export class TeamExecutions {
       run.project_id,
       {
         requestId: current.request_id,
-        ...(snapshot.memory?.length && { memory: snapshot.memory }),
+        ...(snapshot.contexts?.length
+          ? { contextReceipt: snapshot.contexts.find((c) => c.step === current.step_key)!.receipt }
+          : snapshot.memory?.length
+            ? { memory: snapshot.memory }
+            : {}),
         taskId: snapshot.task.id,
         taskVersion: snapshot.task.version,
         commit: run.commit_sha,

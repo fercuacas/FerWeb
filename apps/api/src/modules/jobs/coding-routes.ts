@@ -9,11 +9,13 @@ import {
   requestAdmissionInput,
   requestUsageInput,
   sendTeamMessageInput,
+  contextExpansionInput,
 } from '@ferweb/contracts';
 import { CodingService } from './coding-service.js';
 import { ReviewService } from './review-service.js';
 import { TeamExecutions } from '../teams/executions.js';
 import { TeamMessages } from '../teams/messages.js';
+import { HttpError } from '../../http-error.js';
 export function codingRouter(service: CodingService) {
   const router = express.Router();
   const reviews = new ReviewService(service);
@@ -92,6 +94,20 @@ export function codingInternalRouter(service: CodingService, token: string) {
     next();
   });
   router.use(express.json({ limit: '16kb' }));
+  router.post('/coding/:jobId/context', async (req, res) => {
+    const body = z
+      .strictObject({ fence: z.uuid(), request: contextExpansionInput })
+      .parse(req.body);
+    if (!service.contextPacks)
+      throw new HttpError(503, 'context_unavailable', 'No está preparado el servicio de contexto.');
+    res.json(
+      await service.contextPacks.expandJob(
+        z.uuid().parse(req.params.jobId),
+        body.fence,
+        body.request,
+      ),
+    );
+  });
   const teams = new TeamExecutions(service.pool, service);
   const messages = new TeamMessages(service.pool, service);
   router.post('/coding/:jobId/messages', async (req, res) => {

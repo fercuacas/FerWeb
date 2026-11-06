@@ -25,8 +25,13 @@ export function contextTotals(run: LabRun) {
         ? 0
         : null,
     providerCachedTokens: cacheReads,
-    auxiliaryCalls: metrics.operations.filter((o) => o.kind === 'summary' || o.kind === 'retrieval')
-      .length,
+    auxiliaryCalls: metrics.operations.filter(
+      (o) =>
+        o.kind === 'summary' ||
+        o.kind === 'retrieval' ||
+        o.kind === 'memory_lookup' ||
+        o.kind === 'source_lookup',
+    ).length,
     summaryCalls: generation.filter((o) => o.kind === 'summary').length,
     generationCalls: generation.length,
     retries: metrics.operations.filter((o) => o.attempt > 1).length,
@@ -82,6 +87,53 @@ export function contextReport(batch: LabBatch) {
           : null;
       return {
         target: i,
+        expectedPathCoverage: (() => {
+          const values = runs
+            .filter((r) => r.status === 'completed')
+            .flatMap((r) => {
+              const expected = [
+                ...new Set(
+                  batch.conditions.cases
+                    .find((c) => c.id === r.caseId)
+                    ?.criteria.flatMap((c) => c.expectedPaths ?? []) ?? [],
+                ),
+              ];
+              return expected.length
+                ? [
+                    expected.filter((p) => r.contextMetrics?.sources.some((s) => s.path === p))
+                      .length / expected.length,
+                  ]
+                : [];
+            });
+          return values.length ? values.reduce((a, b) => a + b, 0) / values.length : null;
+        })(),
+        citationValidity: (() => {
+          const audits = runs.flatMap((r) =>
+            r.contextMetrics?.citationAudit ? [r.contextMetrics.citationAudit] : [],
+          );
+          const valid = audits.reduce((n, a) => n + a.validLabels.length, 0),
+            invalid = audits.reduce((n, a) => n + a.invalidLabels.length, 0);
+          return valid + invalid ? valid / (valid + invalid) : null;
+        })(),
+        searchLatencyMs: sumKnown(
+          runs.flatMap(
+            (r) =>
+              r.contextMetrics?.operations
+                .filter((o) =>
+                  r.contextMetrics?.retrieval
+                    ? ['source_lookup', 'memory_lookup'].includes(o.kind)
+                    : o.kind === 'retrieval',
+                )
+                .map((o) => o.durationMs) ?? [],
+          ),
+        ),
+        retrievalStrategies: [
+          ...new Set(
+            runs.flatMap((r) =>
+              r.contextMetrics?.retrieval ? [r.contextMetrics.retrieval.strategy] : [],
+            ),
+          ),
+        ],
         strategy: target.contextStrategy ?? null,
         attempts: runs.length,
         completed: runs.filter((r) => r.status === 'completed').length,
@@ -127,6 +179,11 @@ export function adoptionEvidence(
   const reasons: string[] = [];
   if (!batch.conditions.contextPlan) reasons.push('not_context_experiment');
   if (batch.conditions.contextPlan?.simulated) reasons.push('simulated_evidence');
+  if (
+    batch.conditions.contextPlan?.memoryComplete === false ||
+    batch.runs.some((r) => r.contextMetrics?.memoryComplete === false)
+  )
+    reasons.push('memory_selection_incomplete');
   if (!batch.conditions.contextPlan?.providerConfigurationRevision)
     reasons.push('unknown_provider_configuration');
   if (batch.status !== 'completed') reasons.push('batch_not_completed');

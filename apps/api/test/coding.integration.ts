@@ -5,6 +5,7 @@ import { once } from 'node:events';
 import { networkInterfaces } from 'node:os';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
+import { readFile } from 'node:fs/promises';
 import {
   codingCapabilitiesResponse,
   codingRunSchema,
@@ -39,6 +40,7 @@ import { RunnerClient } from '../src/modules/jobs/runner-client.js';
 import { TeamService } from '../src/modules/teams/service.js';
 import { githubFixture } from '../../../tests/fixtures/github.mjs';
 import { codingCorpus } from '../../../tests/fixtures/coding.mjs';
+import { addSource } from '../../../tests/fixtures/retrieval.mjs';
 import { skillFixtureText, skillManifestFixture } from '../../../tests/fixtures/skills.mjs';
 import { differences } from '../../runner/files.mjs';
 
@@ -164,12 +166,12 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
       assert.equal(r.status, 200);
       return codingRunSchema.parse(await r.json());
     }
-    const terminal = (id: string) =>
+    const terminal = (id: string, timeout = 40000) =>
       waitFor(async () => {
         const d = await detail(id);
         return !['pending', 'running'].includes(d.job.state) ? d : false;
-      });
-    async function startTeam(title: string, maxRequests = 4) {
+      }, timeout);
+    async function startTeam(title: string, maxRequests = 4, withContext = false) {
       const post = (path: string, body: unknown) => request('POST', path, body, cookie);
       const roles = [];
       for (const template of ['implementer', 'reviewer'])
@@ -221,6 +223,15 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
             mode: 'team',
             executionId: 'codex-v1',
             model: 'fixture-codex',
+            ...(withContext && {
+              context: {
+                profile: 'lean',
+                mode: 'suggested',
+                explicitSkillIds: [],
+                excludedSkillIds: [],
+                includeMemory: false,
+              },
+            }),
           })
         ).json(),
       ).plan;
@@ -2277,6 +2288,158 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
         await github.connect(owner.id, 71);
         const link = (await github.read(owner.id, project)).link!;
         await github.sync(owner.id, project, link.version);
+      },
+    );
+    await t.test(
+      'context receipts deliver bounded initial references and audit real CLI demand expansions',
+      async () => {
+        if (!worker || worker.exitCode !== null || worker.signalCode !== null) await startWorker();
+        addSource(
+          fixture,
+          'docs/p10-contract.md',
+          '# Addition contract\nP10 expanded contract marker. Preserve the public sum interface and test the implementation.\nP10 source-only detail: addition accepts exactly two operands.',
+        );
+        addSource(
+          fixture,
+          'tools/context-expand-probe.cjs',
+          await readFile(
+            new URL('../../../tests/fixtures/context-expand-probe.cjs', import.meta.url),
+            'utf8',
+          ),
+        );
+        const link = (await github.read(owner.id, project)).link!;
+        await github.sync(owner.id, project, link.version);
+        const packs = coding.contextPacks!;
+        await packs.retrieval.index(owner.id, project, true);
+        const previousMap = await packs.map(owner.id, project);
+        await packs.saveMap(owner.id, project, {
+          version: previousMap?.version ?? 0,
+          markdown:
+            '# P10 map marker\nPurpose: correct addition.\nModule: src/add.cjs.\nEntry: exports.add.\nTests: tests/add.test.cjs.\nUse a directed contract expansion when needed.',
+          paths: [],
+        });
+        const taskRow = await task('P10 bounded context');
+        const prepared = await packs.prepare(owner.id, project, {
+          requestId: randomUUID(),
+          taskId: taskRow.id,
+          taskVersion: taskRow.version,
+          profile: 'lean',
+          mode: 'manual',
+          explicitSkillIds: [],
+          excludedSkillIds: [],
+          memory: [],
+          includeMemory: false,
+          query: 'src/add.cjs',
+          model: 'fixture-codex',
+        });
+        assert.ok(
+          !prepared.receipt.snapshot.payload.sources.some((s) => s.path === 'docs/p10-contract.md'),
+        );
+        const input = {
+          requestId: randomUUID(),
+          taskId: taskRow.id,
+          taskVersion: taskRow.version,
+          commit: 'a'.repeat(40),
+          model: 'fixture-codex',
+          timeoutMs: 60000,
+          maxRequests: 8,
+          maxOutputTokens: 1024,
+          contextReceipt: { id: prepared.receipt.id, hash: prepared.receipt.hash },
+        };
+        const response = await request('POST', `/projects/${project}/coding`, input, cookie);
+        assert.equal(response.status, 202, await response.clone().text());
+        const job = jobDetailSchema.parse(await response.json()).job;
+        // Wait beyond the job's 60s deadline so a cold CLI start reaches a terminal result.
+        const done = await terminal(job.id, 80000);
+        assert.equal(done.job.state, 'completed', JSON.stringify(done));
+        const evidence = await report(job.id);
+        assert.ok(evidence.contextReceipt);
+        const receipt = await packs.read(owner.id, project, evidence.contextReceipt.id);
+        assert.equal(receipt.phase, 'final');
+        assert.equal(receipt.expansions.length, 2);
+        assert.ok(receipt.expansions.every((e) => e.status === 'completed'));
+        assert.deepEqual(
+          receipt.expansions.flatMap((e) => e.sources).map((s) => s.path),
+          ['docs/p10-contract.md'],
+        );
+        assert.equal(receipt.expansions.filter((e) => !e.sources.length).length, 1);
+        assert.ok(receipt.bytes <= 24000);
+        assert.equal(receipt.parentId, prepared.receipt.id);
+        assert.ok(receipt.snapshot.sourceHashes[receipt.snapshot.payload.sources[0]!.id]);
+        assert.equal(typeof receipt.observedTokens.input, 'number');
+        const old = await fetch(base + '/internal/coding/' + job.id + '/context', {
+          method: 'POST',
+          headers: {
+            Authorization: 'Bearer ' + process.env.RUNNER_SERVICE_TOKEN!,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            fence: randomUUID(),
+            request: {
+              requestId: randomUUID(),
+              kind: 'test',
+              reason: 'Old generation must not read context.',
+              path: 'tests/add.test.cjs',
+            },
+          }),
+        });
+        assert.equal(old.status, 409);
+        const memory = await coding.memory.create(owner.id, project, randomUUID(), {
+          kind: 'handoff',
+          title: 'P10 context-backed handoff',
+          content: 'Result with an expanded contract source.',
+          observedAt: new Date().toISOString(),
+          status: 'active',
+          tags: [],
+          targets: [],
+          lesson: null,
+          sources: [{ kind: 'job', id: job.id }],
+        });
+        const team = await startTeam('P10 context team', 4, true),
+          teamDone = await teamTerminal(team.data.execution.id);
+        assert.equal(teamDone.execution.state, 'completed');
+        assert.equal(teamDone.plan.contexts!.length, 2);
+        const receiptIds = new Set<string>();
+        for (const step of teamDone.steps) {
+          const run = await report(step.jobId!);
+          assert.ok(run.contextReceipt);
+          receiptIds.add(run.contextReceipt.id);
+          const child = await packs.read(owner.id, project, run.contextReceipt.id);
+          assert.equal(child.snapshot.phase, 'team:' + step.key);
+          assert.equal(child.remainingExpansions, 2);
+        }
+        assert.equal(receiptIds.size, 2);
+        fixture.state.extraFiles = fixture.state.extraFiles.filter(
+          (f) => f.path !== 'docs/p10-contract.md',
+        );
+        const fresh = (await github.read(owner.id, project)).link!;
+        await github.sync(owner.id, project, fresh.version);
+        assert.equal(
+          (
+            await request(
+              'GET',
+              `/projects/${project}/context-packs/receipts/${receipt.id}`,
+              undefined,
+              cookie,
+            )
+          ).status,
+          403,
+        );
+        assert.equal(
+          (await request('GET', `/projects/${project}/coding/${job.id}`, undefined, cookie)).status,
+          403,
+        );
+        assert.equal(
+          (
+            await request(
+              'GET',
+              `/projects/${project}/memory/${memory.selection.id}`,
+              undefined,
+              cookie,
+            )
+          ).status,
+          403,
+        );
       },
     );
     await t.test(

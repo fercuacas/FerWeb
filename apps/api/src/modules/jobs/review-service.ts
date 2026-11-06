@@ -39,9 +39,15 @@ export class ReviewService {
     return this.coding.pool;
   }
   private async currentMemory(owner: string, project: string, row: QueryResultRow) {
-    if (!row.memory_snapshot?.length) return true;
+    if (!row.memory_snapshot?.length && !row.context_receipt_id) return true;
     try {
-      await this.coding.memory.selections(owner, project, row.memory_snapshot);
+      if (
+        row.context_receipt_id &&
+        !(await this.coding.contextPacks!.read(owner, project, row.context_receipt_id)).valid
+      )
+        return false;
+      if (row.memory_snapshot?.length)
+        await this.coding.memory.selections(owner, project, row.memory_snapshot);
       return true;
     } catch (error) {
       if (error instanceof HttpError) return false;
@@ -49,16 +55,29 @@ export class ReviewService {
     }
   }
   private dimensions(owner: string, project: string, id: string) {
-    return dimensionReviews(this.pool, project, id, async (refs) => {
-      await this.coding.memory.selections(owner, project, refs, 'history');
-      try {
-        await this.coding.memory.selections(owner, project, refs);
-        return true;
-      } catch (error) {
-        if (error instanceof HttpError) return false;
-        throw error;
-      }
-    });
+    return dimensionReviews(
+      this.pool,
+      project,
+      id,
+      async (refs) => {
+        await this.coding.memory.selections(owner, project, refs, 'history');
+        try {
+          await this.coding.memory.selections(owner, project, refs);
+          return true;
+        } catch (error) {
+          if (error instanceof HttpError) return false;
+          throw error;
+        }
+      },
+      async (ids) => {
+        let valid = true;
+        for (const id of new Set(ids)) {
+          const receipt = await this.coding.contextPacks!.read(owner, project, id);
+          valid &&= receipt.valid;
+        }
+        return valid;
+      },
+    );
   }
   private async run(owner: string, project: string, id: string) {
     await this.coding.read(owner, project, id);
@@ -320,6 +339,10 @@ export class ReviewService {
   }
   async comparisons(owner: string, project: string, id: string) {
     const baseline = await this.run(owner, project, id);
+    if (baseline.context_receipt_id)
+      baseline.contextFingerprint = (
+        await this.coding.contextPacks!.read(owner, project, baseline.context_receipt_id)
+      ).finalHash;
     const rows = (
       await this.pool.query(
         `SELECT c.*,j.configuration,j.state,r.job_id AS review_id,to_jsonb(r) AS review FROM coding_runs c JOIN jobs j ON j.id=c.job_id LEFT JOIN coding_reviews r ON r.job_id=c.job_id WHERE c.task_id=$1 AND c.owner_id=$2 AND j.project_id=$3 AND c.repository_id=$4 ORDER BY c.created_at DESC,c.job_id LIMIT 21`,
@@ -327,9 +350,14 @@ export class ReviewService {
       )
     ).rows;
     for (const row of rows.slice(0, 20))
-      if (row.memory_snapshot.length) {
+      if (row.memory_snapshot.length || row.context_receipt_id) {
         try {
-          await this.coding.memory.selections(owner, project, row.memory_snapshot, 'history');
+          if (row.memory_snapshot.length)
+            await this.coding.memory.selections(owner, project, row.memory_snapshot, 'history');
+          if (row.context_receipt_id)
+            row.contextFingerprint = (
+              await this.coding.contextPacks!.read(owner, project, row.context_receipt_id)
+            ).finalHash;
         } catch (error) {
           if (!(error instanceof HttpError)) throw error;
           row.report = null;
@@ -366,6 +394,7 @@ export class ReviewService {
         toolsAndLimits: row.environment,
         agent: row.agent_snapshot,
         configuration,
+        contextFingerprint: row.contextFingerprint ?? null,
       };
     };
     const original = conditions(baseline);

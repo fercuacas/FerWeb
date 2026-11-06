@@ -6,11 +6,14 @@ import { chatApi } from './chat-store';
 import { errorMessage } from './workspace-store';
 import { Sources } from './RepositoryContext';
 const strategies = ['wide-v1', 'retrieval-v1', 'summary-v1', 'reuse-v1'] as const;
+const p10Strategies = ['retrieval-v1', 'hybrid-v1', 'hybrid-memory-v1'] as const;
 const names: Record<string, string> = {
   'wide-v1': 'Referencia amplia',
   'retrieval-v1': 'Fragmentos relevantes',
   'summary-v1': 'Recuperación + resumen',
   'reuse-v1': 'Resumen + reutilización',
+  'hybrid-v1': 'Recuperación híbrida',
+  'hybrid-memory-v1': 'Híbrida + memoria vigente',
 };
 const known = (v: number | null | undefined, s = '') =>
   v === null || v === undefined ? 'Desconocido' : `${Number(v.toPrecision(6))}${s}`;
@@ -37,6 +40,8 @@ export function ContextExperimentForm({
     [tariff, setTariff] = useState(''),
     [external, setExternal] = useState(false),
     [limit, setLimit] = useState(512);
+  const [suite, setSuite] = useState<'legacy' | 'p10'>('legacy');
+  const activeStrategies = suite === 'p10' ? p10Strategies : strategies;
   const catalog = chatApi.useAiModelsQuery({ projectId: project, provider }),
     [create, result] = labApi.useLabCreateBatchMutation(),
     request = useRef(crypto.randomUUID());
@@ -60,8 +65,8 @@ export function ContextExperimentForm({
               environment:
                 'Comparación pareada de estrategias; condiciones observadas en el informe.',
               allowExternal: external,
-              contextExperiment: 'ferweb-context-v1',
-              targets: strategies.map((contextStrategy) => ({
+              contextExperiment: suite === 'p10' ? 'ferweb-context-p10-v1' : 'ferweb-context-v1',
+              targets: activeStrategies.map((contextStrategy) => ({
                 provider,
                 model: model || catalog.currentData?.models[0]?.id || '',
                 configuration: { maxOutputTokens: limit },
@@ -79,10 +84,20 @@ export function ContextExperimentForm({
             .catch(() => {});
         }}
       >
+        <label>
+          Protocolo de comparación
+          <select value={suite} onChange={(e) => setSuite(e.target.value as typeof suite)}>
+            <option value="legacy">E10 · Amplio, recuperación, resumen y reutilización</option>
+            <option value="p10">P10 · Vectorial, híbrida y memoria vigente</option>
+          </select>
+        </label>
         <p>
           Usa casos existentes y un único proveedor/modelo. Congela el corpus indexado autorizado;
-          máximo cinco casos, dos repeticiones completas de cinco casos y cuarenta intentos. Incluye
-          llamadas de resumen y búsqueda. Guardar no ejecuta modelos.
+          máximo cinco casos y dos repeticiones completas.{' '}
+          {suite === 'p10'
+            ? 'Compara vectorial, híbrida e híbrida con memoria vigente; registra búsquedas y llamadas auxiliares.'
+            : 'Incluye llamadas de resumen y búsqueda.'}{' '}
+          Guardar no ejecuta modelos.
         </p>
         <fieldset disabled={result.isLoading}>
           <legend>Casos de evaluación existentes</legend>
@@ -164,7 +179,10 @@ export function ContextExperimentForm({
           />
         </label>
         <p>
-          {cases.length * 4 * repetitions} intentos; hasta dos generaciones por intento y una
+          {cases.length * activeStrategies.length * repetitions} intentos;{' '}
+          {suite === 'p10'
+            ? 'una generación por variante, búsqueda local y memoria vigente, sin resúmenes. '
+            : 'hasta dos generaciones por intento y una '}
           búsqueda de embeddings. Resúmenes limitados a 512 tokens de salida. Sin reintentos
           automáticos. Se registran fallos y consumo desconocido.
         </p>
@@ -186,7 +204,7 @@ export function ContextExperimentForm({
             !catalog.currentData?.available ||
             !cases.length ||
             cases.length > 5 ||
-            cases.length * 4 * repetitions > 40
+            cases.length * activeStrategies.length * repetitions > 40
           }
         >
           Guardar evaluación de contexto
@@ -250,9 +268,10 @@ export function ContextComparison({ project, batch }: { project: string; batch: 
     <section aria-label="Antes y después del contexto">
       <h4>Antes y después del contexto</h4>
       <p>
-        Referencia: wide-v1. Se comparan las mismas preguntas, fuentes, modelo y límites. Los tokens
-        en caché siguen siendo tokens de entrada: su descuento se muestra separado de la reducción
-        de tokens. Los costes desconocidos no se convierten en cero.
+        Referencia: {data?.report.rows[0]?.strategy ?? 'estrategia inicial'}. Se comparan las mismas
+        preguntas, fuentes, modelo y límites. Los tokens en caché siguen siendo tokens de entrada:
+        su descuento se muestra separado de la reducción de tokens. Los costes desconocidos no se
+        convierten en cero.
       </p>
       {result.isLoading && <p role="status">Cargando mediciones…</p>}
       <Failure error={result.error || policy.error || adopting.error || resetting.error} />
@@ -295,6 +314,25 @@ export function ContextComparison({ project, batch }: { project: string; batch: 
                       {r.reviewed}/{r.attempts} revisados · {r.accepted} aceptables
                       <br />
                       Calidad: {known(r.meanQuality)}
+                      {r.expectedPathCoverage !== undefined && (
+                        <>
+                          <br />
+                          Presencia de fuentes/pruebas esperadas:{' '}
+                          {known(
+                            r.expectedPathCoverage === null ? null : r.expectedPathCoverage * 100,
+                            '%',
+                          )}
+                          <br />
+                          Etiquetas de cita válidas:{' '}
+                          {known(
+                            r.citationValidity === null || r.citationValidity === undefined
+                              ? null
+                              : r.citationValidity * 100,
+                            '%',
+                          )}{' '}
+                          (valida metadatos, no cada afirmación)
+                        </>
+                      )}
                     </td>
                     <td>{known(r.generationTokens)}</td>
                     <td>
@@ -316,6 +354,14 @@ export function ContextComparison({ project, batch }: { project: string; batch: 
                       {known(r.latencyMs, ' ms')}
                       <br />
                       Referencia: {known(r.baselineLatencyMs, ' ms')}
+                      {r.searchLatencyMs !== undefined && (
+                        <>
+                          <br />
+                          Búsqueda/auxiliares: {known(r.searchLatencyMs, ' ms')}
+                          <br />
+                          {r.retrievalStrategies?.join(', ')}
+                        </>
+                      )}
                     </td>
                     <td>
                       Total: {known(r.totalCostUsd, ' USD')}

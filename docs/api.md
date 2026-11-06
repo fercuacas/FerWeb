@@ -339,6 +339,16 @@ Rutas bajo `/api/projects/:projectId/memory`; sesión, propiedad, origen y contr
 
 Las entradas de Codex y preparación de planes admiten `memory?: [{id,revision,hash}]`, máximo tres, únicas y del mismo proyecto. Se congelan las referencias y se revalidan para reutilizar. `GET coding/:id` añade `memory` con las revisiones utilizadas y autorizadas, incluidas ejecuciones antiguas con `[]`. La memoria se entrega como datos sin autoridad; el cliente no puede enviar herramientas ni un bloque libre de contexto de proyecto.
 
+## Contexto por rol P10
+
+Rutas bajo `/api/projects/:projectId/context-packs`: `GET /` devuelve mapa, política y resúmenes de recibos; `POST /map/draft {}` propone Markdown sin generación; `PUT /map {version,markdown,paths}` y `PUT /policy {version,rules}` usan control de versión. `POST /prepare` recibe tarea/version, rol opcional, modelo opcional, fase, perfil, modo, consulta, IDs explícitos/excluidos y referencias de memoria; responde 201 con `{receipt}`. `GET /receipts/:id` devuelve el recibo autorizado, su estado de vigencia y ampliaciones.
+
+Recuperación añade `GET /context/catalog`, `POST /context/catalog/export {}` y `POST /context/hybrid/search {query,path?,limit?}`. `POST /context/index` admite `lexicalOnly` opcional y sus respuestas/estado declaran `strategy`. Preparar un trabajo puede enviar `contextReceipt: {id,hash}` en lugar de referencias de memoria separadas. Preparar un plan admite configuración `context`; su snapshot añade `contexts` por etapa. `GET coding/:id` incorpora la referencia nullable al recibo de ejecución.
+
+El puente interno autenticado `POST /internal/coding/:jobId/context` recibe `{fence,request}`. `request` contiene UUID, tipo `dependency|contract|test`, razón y exactamente una ruta o consulta. Solo una generación activa y autorizada puede ampliar el contexto; el código del agente usa el proxy local del controlador. Los contratos completos y límites están en [context-packs.md](context-packs.md).
+
+El laboratorio admite `contextExperiment: ferweb-context-p10-v1`, con `retrieval-v1`, `hybrid-v1` e `hybrid-memory-v1` en ese orden. Conserva revisiones de memoria, métricas de búsqueda, etiquetas de citas y uso nullable; no adopta evidencia simulada.
+
 ## Referencias de diseño
 
 - [Node.js crypto](https://nodejs.org/api/crypto.html).

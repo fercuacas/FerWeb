@@ -24,6 +24,7 @@ import type { CodingService } from '../jobs/coding-service.js';
 import { canonical, digest } from '../jobs/review-artifacts.js';
 import { teamPresets } from './presets.js';
 import { assertReviewTarget, freezeReviewTarget } from '../jobs/dimension-reviews.js';
+import { stableId } from '../retrieval/chunking.js';
 
 const missing = () => new HttpError(404, 'not_found', 'No se ha encontrado el recurso.');
 const conflict = () =>
@@ -281,6 +282,8 @@ export class TeamService {
   }
   async readPlan(owner: string, project: string, id: string) {
     const plan = planDto(await this.planRow(this.pool, owner, project, id));
+    for (const item of plan.snapshot.contexts ?? [])
+      await this.coding.contextPacks!.read(owner, project, item.receipt.id);
     if (plan.snapshot.reviewTarget)
       await this.coding.read(owner, project, plan.snapshot.reviewTarget.jobId);
     if (plan.snapshot.memory?.length)
@@ -288,6 +291,8 @@ export class TeamService {
     return { plan };
   }
   async validateSnapshot(owner: string, project: string, snapshot: TeamPlan['snapshot']) {
+    for (const item of snapshot.contexts ?? [])
+      await this.coding.contextPacks!.assertCurrent(owner, project, item.receipt);
     if (snapshot.memory?.length)
       await this.coding.memory.selections(owner, project, snapshot.memory);
     if (snapshot.reviewTarget) {
@@ -379,6 +384,31 @@ export class TeamService {
         'team_model_invalid',
         'Selecciona un modelo permitido por el ejecutor.',
       );
+    const contexts: NonNullable<TeamPlan['snapshot']['contexts']> = [];
+    if (input.context) {
+      const keys = teamStepOrder(selected.definition.steps)!;
+      const mode = input.mode === 'auto' ? classifyPlanTask(task).recommendedMode : input.mode;
+      for (const key of keys.filter(
+        (k) => mode !== 'single' || k === (input.singleStep ?? keys[0]),
+      )) {
+        const step = selected.definition.steps.find((s) => s.key === key)!;
+        const prepared = await this.coding.contextPacks!.prepare(owner, project, {
+          ...input.context,
+          requestId: stableId(input.requestId + ':' + key),
+          taskId: task.id,
+          taskVersion: task.version,
+          agent: step.role,
+          phase: 'team:' + key,
+          ...(input.model && { model: input.model }),
+          readOnly: selected.definition.strategy === 'specialists',
+          memory: input.memory ?? [],
+        });
+        contexts.push({
+          step: key,
+          receipt: { id: prepared.receipt.id, hash: prepared.receipt.hash },
+        });
+      }
+    }
     return this.write(owner, project, async (db) => {
       const prior = (
         await db.query('SELECT * FROM prepared_team_plans WHERE project_id=$1 AND request_id=$2', [
@@ -417,6 +447,7 @@ export class TeamService {
               .map((step) => ({ ...step, dependsOn: [] }))
           : allSteps;
       const snapshot = teamPlanSnapshot.parse({
+        ...(contexts.length && { contexts }),
         ...(input.memory?.length && { memory: input.memory }),
         ...(reviewTarget && { reviewTarget }),
         version: 1,
@@ -473,6 +504,8 @@ export class TeamService {
     input: z.infer<typeof approveTeamPlanInput>,
   ) {
     const initial = planDto(await this.planRow(this.pool, owner, project, id));
+    for (const item of initial.snapshot.contexts ?? [])
+      await this.coding.contextPacks!.assertCurrent(owner, project, item.receipt);
     if (initial.snapshot.memory?.length)
       await this.coding.memory.selections(owner, project, initial.snapshot.memory);
     const caps = await this.coding.capabilities(owner, project);

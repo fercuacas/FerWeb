@@ -11,6 +11,7 @@ import {
 import { memoryApi } from './memory-store';
 import { errorMessage } from './workspace-store';
 import './memory.css';
+import { ProjectContextPacks } from './ContextPacks';
 type Entry = z.infer<typeof memoryEntry>;
 export type MemorySelection = z.infer<typeof memorySelection>;
 const poll = { pollingInterval: 4000, refetchOnFocus: true };
@@ -669,6 +670,7 @@ export function ProjectKnowledge({ project }: { project: Project }) {
   return (
     <section className="project-knowledge" aria-label="Conocimiento del proyecto">
       <h2>Conocimiento del proyecto</h2>
+      <ProjectContextPacks project={project} />
       <p>{notice}</p>
       <p>
         La base de datos conserva las revisiones. Los archivos exportados son copias de la

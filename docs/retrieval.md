@@ -1,5 +1,7 @@
 # Contexto del repositorio y fuentes (E5)
 
+P10 añade [catálogo léxico/híbrido, mapa y recibos por rol](context-packs.md) sobre estas mismas fuentes. El recorrido vectorial E5 sigue disponible.
+
 FerWeb permite indexar el snapshot autorizado del repositorio conectado y recuperar fragmentos de código, documentación, incidencias y pull requests. En **Conversaciones → Contexto del repositorio**, actualizar el índice, probar una pregunta y activar **Usar contexto del repositorio** al enviar un mensaje. Primero debe haberse sincronizado GitHub. No se indexa ni se envía contenido automáticamente al entrar en un proyecto.
 
 ## Configuración y política de datos

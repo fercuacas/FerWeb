@@ -47,7 +47,7 @@ export const labTargetInput = z.strictObject({
 });
 export const labBatchInput = z
   .strictObject({
-    contextExperiment: z.literal('ferweb-context-v1').optional(),
+    contextExperiment: z.enum(['ferweb-context-v1', 'ferweb-context-p10-v1']).optional(),
     requestId: z.uuid(),
     title: z.string().trim().min(1).max(160),
     caseIds: z.array(z.uuid()).min(1).max(5),

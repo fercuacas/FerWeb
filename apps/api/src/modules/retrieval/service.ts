@@ -1,10 +1,11 @@
 import type { Pool, PoolClient } from 'pg';
-import { type Source, sourceSchema, contextCorpus } from '@ferweb/contracts';
+import { type Source, sourceSchema, contextCorpus, hybridResponse } from '@ferweb/contracts';
 import { HttpError } from '../../http-error.js';
 import { AiClient } from '../chat/client.js';
 import { GitHubService } from '../github/service.js';
 import { VectorStore } from './vector-store.js';
 import { fragment, hash, indexable, stableId } from './chunking.js';
+import { rankSources, fuseRanks } from './ranking.js';
 
 const changed = () =>
   new HttpError(
@@ -63,6 +64,11 @@ export class RetrievalService {
       )
     ).rows[0];
     return {
+      strategy: !row
+        ? ('none' as const)
+        : row.embedding_space === 'lexical-v1'
+          ? ('lexical' as const)
+          : ('vector' as const),
       partial: row?.partial ?? false,
       available: !!row,
       stale: !row || !link || link.stale || link.revoked || link.version !== row.link_version,
@@ -73,7 +79,7 @@ export class RetrievalService {
       skipped: row?.skipped ?? [],
     };
   }
-  async index(owner: string, project: string) {
+  async index(owner: string, project: string, lexicalOnly = false) {
     const projectRow = await this.github.project(owner, project);
     if (projectRow.archived_at)
       throw new HttpError(409, 'project_archived', 'Restaura el proyecto antes de indexar.');
@@ -86,9 +92,11 @@ export class RetrievalService {
       if (!locked) throw new HttpError(409, 'index_active', 'Ya se está actualizando este índice.');
       const link = await this.current(owner, project),
         snapshot = link.snapshot;
-      const description = await this.description(),
+      const description = lexicalOnly
+          ? { space: 'lexical-v1', dimensions: 0 }
+          : await this.description(),
         store = this.store(description.space);
-      await store.ensure(description.dimensions);
+      if (!lexicalOnly) await store.ensure(description.dimensions);
       const oldIndex = (
         await this.pool.query('SELECT * FROM repository_indexes WHERE project_id=$1', [project])
       ).rows[0];
@@ -102,7 +110,8 @@ export class RetrievalService {
         )
       ).rows;
       const present = new Set<string>();
-      for (let offset = 0; offset < oldChunks.length; offset += 128) {
+      if (lexicalOnly) for (const chunk of oldChunks) present.add(chunk.id);
+      for (let offset = 0; !lexicalOnly && offset < oldChunks.length; offset += 128) {
         const response = await store.request('/points', 'POST', {
           ids: oldChunks.slice(offset, offset + 128).map((c) => c.id),
           with_payload: false,
@@ -191,7 +200,7 @@ export class RetrievalService {
             id: stableId(id + ':' + ordinal + ':' + hash(part.content)),
           })),
         };
-        for (let offset = 0; offset < document.chunks.length; offset += 16) {
+        for (let offset = 0; !lexicalOnly && offset < document.chunks.length; offset += 16) {
           const batch = document.chunks.slice(offset, offset + 16),
             embeddings = await this.ai.embeddings(batch.map((part) => part.content));
           if (
@@ -310,11 +319,16 @@ export class RetrievalService {
       // SQL is authoritative even if this bounded derived-cache cleanup fails.
       let cleanupPending = false;
       try {
-        await store.prune(
-          project,
-          documents.flatMap((d) => d.chunks.map((c) => c.id)),
-        );
-        if (oldIndex && oldIndex.embedding_space !== description.space)
+        if (!lexicalOnly)
+          await store.prune(
+            project,
+            documents.flatMap((d) => d.chunks.map((c) => c.id)),
+          );
+        if (
+          oldIndex &&
+          oldIndex.embedding_space !== 'lexical-v1' &&
+          oldIndex.embedding_space !== description.space
+        )
           await this.store(oldIndex.embedding_space).prune(project, []);
       } catch {
         cleanupPending = true;
@@ -335,6 +349,275 @@ export class RetrievalService {
         lock.release();
       }
     }
+  }
+  async catalog(owner: string, project: string, includeText = false) {
+    const stamp = await this.github.contextStamp(owner, project),
+      link = stamp.link;
+    if (link.stale || link.revoked || !link.snapshot) throw changed();
+    const index = (
+      await this.pool.query('SELECT * FROM repository_indexes WHERE project_id=$1', [project])
+    ).rows[0];
+    if (
+      !index ||
+      index.link_version !== link.version ||
+      Number(index.repository_id) !== link.repositoryId
+    )
+      throw changed();
+    const rows = (
+      await this.pool.query(
+        'SELECT c.*,d.path,d.kind,d.fingerprint,d.commit_sha,d.observed_at FROM repository_documents d LEFT JOIN repository_chunks c ON c.document_id=d.id WHERE d.project_id=$1 ORDER BY d.path,c.ordinal',
+        [project],
+      )
+    ).rows.filter((r) => r.kind !== 'file' || indexable(r.path));
+    const documents = new Map<
+      string,
+      {
+        path: string;
+        kind: string;
+        fingerprint: string;
+        commit: string;
+        chunks: {
+          id: string;
+          startLine: number;
+          endLine: number;
+          hash: string;
+          content?: string;
+        }[];
+      }
+    >();
+    for (const r of rows) {
+      let doc = documents.get(r.path);
+      if (!doc) {
+        doc = {
+          path: r.path,
+          kind: r.kind,
+          fingerprint: r.fingerprint,
+          commit: r.commit_sha,
+          chunks: [],
+        };
+        documents.set(r.path, doc);
+      }
+      if (r.id)
+        doc.chunks.push({
+          id: r.id,
+          startLine: r.start_line,
+          endLine: r.end_line,
+          hash: hash(r.content),
+          ...(includeText && { content: r.content }),
+        });
+    }
+    const after = await this.github.contextStamp(owner, project);
+    if (
+      after.permissionHash !== stamp.permissionHash ||
+      after.generation !== stamp.generation ||
+      after.link.version !== link.version
+    )
+      throw changed();
+    let embeddingIdentity: string | null = null,
+      embeddingSimulated = false;
+    if (index.embedding_space !== 'lexical-v1')
+      try {
+        const description = await this.description();
+        embeddingIdentity = hash(
+          JSON.stringify([description.space, description.configurationRevision]),
+        );
+        embeddingSimulated = description.simulated;
+      } catch (error) {
+        if (!(error instanceof HttpError && error.code === 'embedding_unavailable')) throw error;
+      }
+    const manifest = [...documents.values()];
+    return {
+      protocol: 'ferweb-catalog-v1' as const,
+      projectId: project,
+      repositoryId: link.repositoryId,
+      repository: link.fullName,
+      commit: link.snapshot.commit,
+      linkVersion: link.version,
+      embeddingSpace: index.embedding_space as string,
+      embeddingIdentity,
+      embeddingSimulated,
+      partial: index.partial as boolean,
+      documents: manifest,
+      fingerprint: hash(
+        JSON.stringify([
+          stamp.permissionHash,
+          stamp.generation,
+          link.version,
+          index.embedding_space,
+          embeddingIdentity,
+          manifest.map((d) => ({ ...d, chunks: d.chunks.map(({ content: _text, ...c }) => c) })),
+        ]),
+      ),
+    };
+  }
+  async authorizePackSources(owner: string, project: string, sources: Source[], current = false) {
+    const { link } = await this.github.read(owner, project);
+    if (!link || link.revoked || !link.snapshot)
+      throw new HttpError(
+        403,
+        'context_source_unavailable',
+        'No se puede confirmar acceso a las fuentes del contexto.',
+      );
+    for (const source of sources) {
+      const exists =
+        source.kind === 'file'
+          ? link.snapshot.tree.some(
+              (f) =>
+                f.path === source.path &&
+                f.type === 'blob' &&
+                ['100644', '100755'].includes(f.mode) &&
+                indexable(f.path),
+            )
+          : (source.kind === 'issue' ? link.snapshot.issues : link.snapshot.pullRequests).some(
+              (x) => `${source.kind === 'issue' ? 'issues' : 'pulls'}/${x.number}` === source.path,
+            );
+      if (source.projectId !== project || source.repositoryId !== link.repositoryId || !exists)
+        throw new HttpError(
+          403,
+          'context_source_unavailable',
+          'Una fuente fue retirada o no está autorizada.',
+        );
+      if (current) {
+        if (
+          link.stale ||
+          link.version !== source.linkVersion ||
+          link.snapshot.commit !== source.commit
+        )
+          throw changed();
+        const row = (
+          await this.pool.query(
+            'SELECT c.content,c.start_line,c.end_line,d.path FROM repository_chunks c JOIN repository_documents d ON d.id=c.document_id WHERE c.id=$1 AND d.project_id=$2',
+            [source.id, project],
+          )
+        ).rows[0];
+        if (
+          !row ||
+          row.content !== source.excerpt ||
+          row.path !== source.path ||
+          row.start_line !== source.startLine ||
+          row.end_line !== source.endLine
+        )
+          throw changed();
+      }
+    }
+  }
+  async hybrid(
+    owner: string,
+    project: string,
+    query: string,
+    options: {
+      limit?: number;
+      path?: string;
+      vectorOnly?: boolean;
+      observer?: (phase: 'start' | 'completed' | 'error') => Promise<void>;
+    } = {},
+  ) {
+    const start = performance.now(),
+      catalog = await this.catalog(owner, project),
+      limit = options.limit ?? 5;
+    const rows = (
+      await this.pool.query(
+        'SELECT c.*,d.path,d.kind,d.commit_sha,d.observed_at FROM repository_chunks c JOIN repository_documents d ON d.id=c.document_id WHERE d.project_id=$1 ORDER BY d.path,c.ordinal',
+        [project],
+      )
+    ).rows.filter(
+      (r) => (r.kind !== 'file' || indexable(r.path)) && (!options.path || r.path === options.path),
+    );
+    const lexical = options.vectorOnly ? [] : rankSources(query, rows).slice(0, 60);
+    let vector: { id: string; score: number }[] = [],
+      fallback: string | null = null,
+      embeddingUsed = false,
+      simulated = catalog.embeddingSimulated;
+    if (catalog.embeddingSpace === 'lexical-v1') fallback = 'lexical_index';
+    else
+      try {
+        await options.observer?.('start');
+        const embedding = await this.ai.embeddings([query]);
+        embeddingUsed = true;
+        simulated ||= embedding.simulated;
+        const space = hash(
+          JSON.stringify([
+            embedding.provider,
+            embedding.model,
+            embedding.revision,
+            embedding.dimensions,
+            'chunks-v1',
+          ]),
+        );
+        if (space !== catalog.embeddingSpace) throw changed();
+        await options.observer?.('completed');
+        vector = await this.store(space).search(
+          project,
+          String(catalog.repositoryId),
+          embedding.vectors[0]!,
+          rows.map((r) => r.id),
+        );
+      } catch (error) {
+        if (
+          !(error instanceof HttpError) ||
+          !['embedding_unavailable', 'vector_unavailable'].includes(error.code)
+        )
+          throw error;
+        fallback = error.code;
+        await options.observer?.('error');
+      }
+    if (options.vectorOnly && fallback)
+      throw new HttpError(
+        503,
+        fallback,
+        'La referencia vectorial requiere embeddings e índice disponibles.',
+      );
+    const ranked = fuseRanks(
+      lexical.map((x) => ({ id: x.row.id, exact: x.reason.some((r) => r.startsWith('exact')) })),
+      vector,
+    );
+    const seen = new Set<string>();
+    const hits = ranked
+      .flatMap((hit) => {
+        const row = rows.find((r) => r.id === hit.id);
+        if (!row) return [];
+        const key = JSON.stringify([row.path, row.start_line, row.end_line, hash(row.content)]);
+        if (seen.has(key)) return [];
+        seen.add(key);
+        const item = lexical.find((x) => x.row.id === hit.id);
+        return [
+          {
+            source: sourceSchema.parse({
+              id: row.id,
+              projectId: project,
+              repositoryId: catalog.repositoryId,
+              repository: catalog.repository,
+              path: row.path,
+              commit: row.commit_sha,
+              linkVersion: catalog.linkVersion,
+              kind: row.kind,
+              startLine: row.start_line,
+              endLine: row.end_line,
+              observedAt: row.observed_at,
+              score: vector.find((x) => x.id === hit.id)?.score ?? null,
+              excerpt: row.content,
+            }),
+            reason: [...(item?.reason ?? []), ...(hit.vectorRank ? ['vector' as const] : [])],
+            lexicalRank: hit.lexicalRank,
+            vectorRank: hit.vectorRank,
+            fusionScore: hit.score,
+          },
+        ];
+      })
+      .slice(0, limit);
+    if ((await this.catalog(owner, project)).fingerprint !== catalog.fingerprint) throw changed();
+    return hybridResponse.parse({
+      sources: hits.map((x) => x.source),
+      hits,
+      insufficient: !hits.length,
+      strategy: options.vectorOnly ? 'vector-v1' : fallback ? 'lexical-v1' : 'hybrid-rrf-v1',
+      fallback,
+      embeddingUsed,
+      simulated,
+      elapsedMs: performance.now() - start,
+      fingerprint: catalog.fingerprint,
+      partial: catalog.partial,
+    });
   }
   async optimizationSnapshot(owner: string, project: string) {
     const stamp = await this.github.contextStamp(owner, project),

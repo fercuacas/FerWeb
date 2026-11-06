@@ -28,6 +28,8 @@ import { teamEvent } from '../teams/executions.js';
 import { assertReviewTarget, gatherDimensionalReview } from './dimension-reviews.js';
 import { MemoryService } from '../memory/service.js';
 import { memoryNotice } from '../memory/codec.js';
+import { contextLimits } from '@ferweb/contracts';
+import type { ContextPackService } from '../context-packs/service.js';
 type TeamStepContext = {
   executionId: string;
   stepId: string;
@@ -50,6 +52,7 @@ const incompatible = () =>
     'La versión del rol requiere capacidades o herramientas que Codex no ofrece.',
   );
 export class CodingService {
+  contextPacks?: ContextPackService;
   readonly memory: MemoryService;
   readonly projects: ProjectRepository;
   readonly jobs: JobService;
@@ -98,6 +101,8 @@ export class CodingService {
     ).rows[0];
     if (!row) throw missing();
     await this.access(owner, project, Number(row.repository_id));
+    if (row.context_receipt_id)
+      await this.contextPacks!.read(owner, project, row.context_receipt_id);
     const memory = row.memory_snapshot.length
       ? await this.memory.selections(owner, project, row.memory_snapshot, 'history')
       : [];
@@ -109,6 +114,16 @@ export class CodingService {
           ])
         ).rows[0]?.execution_id ?? null,
       jobId: id,
+      contextReceipt: row.context_receipt_id
+        ? {
+            id: row.context_receipt_id,
+            hash: (
+              await this.pool.query('SELECT hash FROM context_pack_receipts WHERE id=$1', [
+                row.context_receipt_id,
+              ])
+            ).rows[0].hash,
+          }
+        : null,
       memory,
       task: row.task_snapshot,
       commit: row.commit_sha,
@@ -149,18 +164,38 @@ export class CodingService {
     if (p.archivedAt)
       throw new HttpError(409, 'project_archived', 'Restaura el proyecto antes de ejecutar.');
     if (input.memory?.length) await this.memory.selections(owner, project, input.memory);
+    const contextPack = input.contextReceipt
+      ? await this.contextPacks!.assertCurrent(owner, project, input.contextReceipt)
+      : null;
     const task = await this.projects.getTask(owner, project, input.taskId);
     if (task.version !== input.taskVersion) throw changed();
     const agent = input.agent
       ? await this.agents.select(this.pool, owner, project, input.agent)
       : null;
+    if (
+      contextPack &&
+      (contextPack.task.id !== task.id ||
+        contextPack.task.version !== task.version ||
+        canonical(contextPack.agent) !== canonical(input.agent ?? null) ||
+        (contextPack.model && contextPack.model !== input.model) ||
+        contextPack.phase !== (team ? 'team:' + team.stepKey : 'coding') ||
+        input.memory?.length)
+    )
+      throw changed();
     const materials = await this.skills.resolve(
       owner,
       project,
       (agent?.skills ?? []).map((item) => item.id),
     );
     if (team) {
-      if (canonical(input.memory ?? []) !== canonical(team.snapshot.memory ?? [])) throw changed();
+      const expectedContext = team.snapshot.contexts?.find((c) => c.step === team.stepKey)?.receipt;
+      if (canonical(input.contextReceipt ?? null) !== canonical(expectedContext ?? null))
+        throw changed();
+      if (
+        !input.contextReceipt &&
+        canonical(input.memory ?? []) !== canonical(team.snapshot.memory ?? [])
+      )
+        throw changed();
       if (team.snapshot.reviewTarget)
         await assertReviewTarget(this.pool, team.snapshot.reviewTarget, project);
       const expected = team.snapshot.steps.find((step) => step.key === team.stepKey);
@@ -194,6 +229,11 @@ export class CodingService {
           : 'Configura Codex en el servidor y selecciona un modelo permitido.',
       );
     const readOnly = team?.snapshot.template.definition.strategy === 'specialists';
+    if (
+      contextPack &&
+      contextPack.execution.toolProfile !== (readOnly ? 'node-readonly-v1' : 'node-isolated-v1')
+    )
+      throw changed();
     const option = readOnly ? describeReadOnlyCoding(capabilities) : describeCoding(capabilities);
     if (team && canonical(option) !== canonical(team.snapshot.execution)) throw changed();
     if (agent && ![agent, ...materials].every((item) => supportsAgent(item, option)))
@@ -259,6 +299,7 @@ export class CodingService {
     if (fresh.version !== link.version || fresh.stale || fresh.snapshot?.commit !== input.commit)
       throw changed();
     const configuration = codingConfiguration.parse({
+      ...(input.contextReceipt && { contextReceipt: input.contextReceipt }),
       ...(input.memory?.length && { memory: input.memory }),
       ...(readOnly && { workspaceAccess: 'read-only' }),
       taskId: task.id,
@@ -418,6 +459,19 @@ export class CodingService {
           JSON.stringify(input.memory ?? []),
         ],
       );
+      if (input.contextReceipt) {
+        const receiptId = await this.contextPacks!.bind(
+          db,
+          owner,
+          project,
+          input.contextReceipt,
+          job.id,
+        );
+        await db.query('UPDATE coding_runs SET context_receipt_id=$2 WHERE job_id=$1', [
+          job.id,
+          receiptId,
+        ]);
+      }
       await this.jobs.queue.event(db, job.id, 'queued', 'Tarea y snapshot del commit guardados.');
       if (team) {
         await db.query('UPDATE team_execution_steps SET job_id=$2 WHERE id=$1', [
@@ -442,12 +496,20 @@ export class CodingService {
   async executionInput(id: string, fence: string, checkOnly: boolean) {
     const row = (
       await this.pool.query(
-        "SELECT j.*,c.owner_id,c.repository_id,c.repository,c.commit_sha,c.files,c.task_snapshot,c.environment,c.agent_snapshot,c.memory_snapshot FROM jobs j JOIN coding_runs c ON c.job_id=j.id JOIN projects p ON p.id=j.project_id WHERE j.id=$1 AND j.fence=$2 AND j.state='running' AND j.lease_until>clock_timestamp() AND NOT j.cancel_requested AND p.archived_at IS NULL",
+        "SELECT j.*,c.owner_id,c.repository_id,c.repository,c.commit_sha,c.files,c.task_snapshot,c.environment,c.agent_snapshot,c.memory_snapshot,c.context_receipt_id FROM jobs j JOIN coding_runs c ON c.job_id=j.id JOIN projects p ON p.id=j.project_id WHERE j.id=$1 AND j.fence=$2 AND j.state='running' AND j.lease_until>clock_timestamp() AND NOT j.cancel_requested AND p.archived_at IS NULL",
         [id, fence],
       )
     ).rows[0];
     if (!row) throw missing();
     await this.access(row.owner_id, row.project_id, Number(row.repository_id));
+    const contextPack = row.context_receipt_id
+      ? await this.contextPacks!.jobContext(
+          row.owner_id,
+          row.project_id,
+          row.context_receipt_id,
+          true,
+        )
+      : null;
     const projectMemory = row.memory_snapshot.length
       ? await this.memory.selections(row.owner_id, row.project_id, row.memory_snapshot)
       : [];
@@ -611,6 +673,16 @@ export class CodingService {
       commit: row.commit_sha,
       task: {
         ...(teamTask ?? row.task_snapshot),
+        ...(contextPack && {
+          projectContext: {
+            receiptId: row.context_receipt_id,
+            profile: contextPack.profile,
+            initialBytes: contextPack.initialBytes,
+            totalBytes: contextLimits[contextPack.profile].totalBytes,
+            expansions: contextLimits[contextPack.profile].expansions,
+            ...contextPack.payload,
+          },
+        }),
         ...(projectMemory.length && {
           projectMemory: { notice: memoryNotice, entries: projectMemory },
         }),
@@ -675,6 +747,16 @@ export class CodingService {
     const caps = await this.runner.capabilities();
     if (source.memory_snapshot.length)
       await this.memory.selections(owner, project, source.memory_snapshot);
+    const repeatContext = source.configuration.contextReceipt;
+    if (repeatContext) {
+      const receipt = await this.contextPacks!.assertCurrent(owner, project, repeatContext);
+      if (receipt.model && receipt.model !== input.model)
+        throw new HttpError(
+          409,
+          'context_model_changed',
+          'Prepara otro recibo para cambiar el modelo.',
+        );
+    }
     if (
       !caps.available ||
       !caps.models.includes(input.model) ||
@@ -751,6 +833,13 @@ export class CodingService {
         'INSERT INTO coding_runs(job_id,task_id,task_snapshot,owner_id,repository_id,repository,commit_sha,files,manifest,excluded,base_branch,source_tree,environment,agent_snapshot,baseline_job_id,memory_snapshot) SELECT $1,task_id,task_snapshot,owner_id,repository_id,repository,commit_sha,files,manifest,excluded,base_branch,source_tree,environment,agent_snapshot,job_id,memory_snapshot FROM coding_runs WHERE job_id=$2',
         [job.id, baseline],
       );
+      if (repeatContext) {
+        const receipt = await this.contextPacks!.bind(db, owner, project, repeatContext, job.id);
+        await db.query('UPDATE coding_runs SET context_receipt_id=$2 WHERE job_id=$1', [
+          job.id,
+          receipt,
+        ]);
+      }
       await this.jobs.queue.event(
         db,
         job.id,

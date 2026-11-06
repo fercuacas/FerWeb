@@ -36,6 +36,9 @@ import { TeamService } from './modules/teams/service.js';
 import { teamRouter } from './modules/teams/routes.js';
 import { TeamExecutions } from './modules/teams/executions.js';
 import { memoryRouter } from './modules/memory/routes.js';
+import { ContextPackService } from './modules/context-packs/service.js';
+import { contextPackRouter } from './modules/context-packs/routes.js';
+import { AiClient } from './modules/chat/client.js';
 
 export interface WorkspaceOptions {
   pool: Pool;
@@ -106,6 +109,18 @@ export function createWorkspaceRouter({
   const githubService = github ?? new GitHubService(pool, null);
   const chatService = chats ?? new ChatService(pool, null);
   const codingService = coding ?? new CodingService(pool, githubService, new RunnerClient('', ''));
+  const packRetrieval =
+    retrieval ?? new RetrievalService(pool, githubService, new AiClient('', ''));
+  codingService.contextPacks = new ContextPackService(
+    pool,
+    packRetrieval,
+    codingService.memory,
+    async (owner, project, readOnly) => {
+      const caps = await codingService.capabilities(owner, project);
+      return readOnly ? caps.readOnlyExecution : caps.execution;
+    },
+  );
+  router.use(contextPackRouter(codingService.contextPacks));
   router.get('/execution/capabilities', async (_request, response) => {
     const [runner, openai, ollama] = await Promise.all([
       codingService.runner.capabilities(),
@@ -118,7 +133,7 @@ export function createWorkspaceRouter({
   });
   router.use(createGitHubRouter(githubService));
   router.use(createChatRouter(chatService));
-  if (retrieval) router.use(createRetrievalRouter(retrieval));
+  router.use(createRetrievalRouter(packRetrieval));
   if (laboratory) router.use(createLaboratoryRouter(laboratory));
   router.use(createJobRouter(new JobService(pool)));
   router.use(agentRouter(new AgentCatalog(pool)));

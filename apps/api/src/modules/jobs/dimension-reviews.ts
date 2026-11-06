@@ -271,6 +271,7 @@ export async function dimensionReviews(
   authorizeMemory?: (
     refs: NonNullable<z.infer<typeof teamPlanSnapshot>['memory']>,
   ) => Promise<boolean>,
+  authorizeContext?: (ids: string[]) => Promise<boolean>,
 ) {
   const runs = (
     await pool.query(
@@ -298,10 +299,23 @@ export async function dimensionReviews(
     }
     const steps = (
       await pool.query(
-        'SELECT s.*,j.state,c.report FROM team_execution_steps s LEFT JOIN jobs j ON j.id=s.job_id LEFT JOIN coding_runs c ON c.job_id=j.id WHERE s.execution_id=$1 ORDER BY position',
+        'SELECT s.*,j.state,c.report,c.context_receipt_id FROM team_execution_steps s LEFT JOIN jobs j ON j.id=s.job_id LEFT JOIN coding_runs c ON c.job_id=j.id WHERE s.execution_id=$1 ORDER BY position',
         [run.id],
       )
     ).rows;
+    const receiptIds = [
+      ...(snapshot.contexts ?? []).map((x) => x.receipt.id),
+      ...steps.map((s) => s.context_receipt_id).filter((x): x is string => typeof x === 'string'),
+    ];
+    if (receiptIds.length) {
+      if (!authorizeContext)
+        throw new HttpError(
+          403,
+          'context_source_unavailable',
+          'No se puede confirmar acceso al contexto de la revisión.',
+        );
+      stale = !(await authorizeContext(receiptIds)) || stale;
+    }
     result.push(gatherDimensionalReview(run, steps, stale));
   }
   return result;

@@ -195,6 +195,16 @@ export class TeamMessages {
     if (!row) throw new HttpError(404, 'not_found', 'No se ha encontrado la ejecución.');
     if (row.snapshot.plan.memory?.length)
       await this.coding.memory.selections(owner, project, row.snapshot.plan.memory, 'history');
+    for (const item of row.snapshot.plan.contexts ?? [])
+      await this.coding.contextPacks!.read(owner, project, item.receipt.id);
+    const contextRows = (
+      await this.pool.query(
+        'SELECT c.context_receipt_id FROM team_execution_steps s JOIN coding_runs c ON c.job_id=s.job_id WHERE s.execution_id=$1 AND c.context_receipt_id IS NOT NULL',
+        [execution],
+      )
+    ).rows;
+    for (const item of contextRows)
+      await this.coding.contextPacks!.read(owner, project, item.context_receipt_id);
     const { link } = await this.coding.github.read(owner, project);
     if (!link || link.revoked || link.repositoryId !== Number(row.repository_id))
       throw new HttpError(

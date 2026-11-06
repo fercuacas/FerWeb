@@ -4,11 +4,13 @@ import { agentSelection, agentSnapshot } from './agents.js';
 import { skillVersion } from './skills.js';
 import { executionBudgetLimits, executionBudgetSchema, usageAttribution } from './usage.js';
 import { memorySelections, memoryEntry } from './memory.js';
+import { contextReceiptReference } from './context-packs.js';
 
 export const codingAgentSnapshot = agentSnapshot.extend({
   materials: z.array(skillVersion).max(3).optional(),
 });
 export const codingConfiguration = z.strictObject({
+  contextReceipt: contextReceiptReference.optional(),
   memory: memorySelections.optional(),
   workspaceAccess: z.literal('read-only').optional(),
   taskId: z.uuid(),
@@ -24,6 +26,7 @@ export const codingConfiguration = z.strictObject({
   }),
 });
 export const codingInput = z.strictObject({
+  contextReceipt: contextReceiptReference.optional(),
   memory: memorySelections.optional(),
   requestId: z.uuid(),
   taskId: z.uuid(),
@@ -108,6 +111,7 @@ export const codingReport = z.object({
   oomKilled: z.boolean().optional(),
 });
 export const codingRunSchema = z.object({
+  contextReceipt: contextReceiptReference.nullable(),
   memory: z.array(memoryEntry).max(3),
   teamExecutionId: z.uuid().nullable().optional(),
   jobId: z.uuid(),

@@ -4,30 +4,24 @@ Actualizado: **2026-11-06**. Evidencias anteriores en [history.md](history.md), 
 
 ## Disponible
 
-- E1–E2: propietario/sesiones, proyectos y tareas autorizados/versionados en Docker.
-- E3: GitHub App, snapshots por commit y webhooks firmados/deduplicados.
-- E4–E6: chat OpenAI/Ollama persistente, streaming/cancelación, recuperación Qdrant y laboratorio con revisión/exportación.
-- E7–E9: cola PostgreSQL, simulador, Codex en contenedor separado y revisión/PR explícita con comparación de condiciones congeladas.
-- E10: estrategias de contexto versionadas, contabilidad, invalidación y adopción condicionada a evidencia real; ninguna mejora real adoptada.
-- E11: imágenes runtime y bases fijadas, CI preparada, Compose release, copia/restauración PostgreSQL+Qdrant, logs JSON/métricas protegidas, carga, README inglés y demo. [Revisión final](release-review.md), [operación](deployment.md).
-- P01–P09: diagnóstico, roles/skills, presupuestos, equipos/mensajes SQL y revisión por dimensiones; memoria versionada con procedencia, búsqueda e intercambio portable. [Codex](codex.md), [memoria](memory.md)
+- E1–E9: identidad/sesiones, proyectos/tareas, GitHub por commit, chat OpenAI/Ollama, Qdrant, laboratorio, cola, Codex aislado y revisión/PR explícita.
+- E10: comparación y adopción condicionada de estrategias; ninguna mejora real adoptada. [Laboratorio de contexto](context-optimization.md).
+- E11: imágenes fijadas, CI, Compose release, copias/restauración y observabilidad. [Revisión final](release-review.md), [operación](deployment.md).
+- P01–P09: capacidades, roles/skills, presupuestos, equipos/mensajes, revisiones y memoria versionada con procedencia. [Codex](codex.md), [memoria](memory.md).
+- P10: mapa Markdown, catálogo SQL/JSON, selección determinista, recuperación híbrida, recibos por fase y ampliaciones dirigidas. [Uso y límites](context-packs.md).
 
 ## Verificado
 
-- P09, `npm run docker:check` pasó con **10 Python, 14 básicas, 90 pruebas/subcasos de integración, 19 Chromium**, tipos, compilación, formato y smoke. Registro privado `.local/p09-docker-check-verified.log`.
-- E11, `npm run release:check`: 246 fuentes públicas sin datos/dependencias previos, Chromium CRUD/autorización, trabajo simulado idempotente, proxy streaming/cancelación, reinicio y salud.
-- Recuperación: hashes/recuentos de **32 tablas** y vector Qdrant con procedencia; rechazo de checksum alterado/sobrescritura; pausa/reanudación automática.
-- Carga: **800 operaciones, ocho clientes, 10,79 s, cero errores, p95 16,91 ms**; condiciones/límites en [carga](load-testing.md). Informe privado `.local/release-verification.json` con imágenes probadas.
-- Instancia local: siete servicios saludables, migración **019**, volumen `ferweb_postgres_data`, web `http://127.0.0.1:5173`.
+- P10, `npm run docker:check`: **10 Python, 17 básicas, 98 pruebas/subcasos de integración y 20 Chromium**, tipos, compilación, formato y smoke. Registro privado `.local/p10-docker-check-verified.log`.
+- Pruebas dirigidas adicionales: API **7 pruebas/subcasos**, Codex **2**, navegador **1**. Ampliaciones concurrentes/idempotentes, cupos, dos roles, correcciones, revocación, exportación y móvil verificados.
+- Instancia local: siete servicios saludables, migración **020**, autoridad `ferweb_postgres_data`, web `http://127.0.0.1:5173`.
 
 ## Límites y siguiente paso
 
-Despliegue permanente pendiente. CI conserva diagnóstico de arranque; el controlador negocia la API Docker. [Ejecuciones de CI](https://github.com/fercuacas/FerWeb/actions)
+Pruebas con SQL, Qdrant, CLI y contenedores reales; GitHub y proveedores simulados. Inferencia real, ahorro y capacidad IA/GPU por medir. Los bytes de contexto no estiman tokens; las métricas ausentes permanecen desconocidas. Las citas requieren juicio humano.
 
-Las pruebas usan proveedores y GitHub simulados con CLI, procesos, SQL y Qdrant reales. Inferencia externa, ahorro y capacidad IA/GPU por medir.
+El recibo registra el canal P10, no cada lectura de archivos del agente. Chat/índice/laboratorio siguen en proceso; Codex conserva perfil Node, kernel compartido y controlador privilegiado. [Límites](codex.md).
 
-Reconstrucción cacheada valida capas/configuración web, no igualdad bit a bit entre constructores. Chat/índice/laboratorio siguen en proceso. Codex: perfil Node, kernel compartido, repositorios controlados y controlador privilegiado; [límites](codex.md). Carga breve sin saturación/SLA.
+Despliegue permanente pendiente: host/HTTPS, copias cifradas externas, aceptación con App/modelos, monitorización y pruebas prolongadas. Global dos trabajos; por proyecto uno por defecto. [CI](https://github.com/fercuacas/FerWeb/actions).
 
-Para desplegar quedan host/HTTPS, copias cifradas externas, aceptación con App y modelos, monitorización y pruebas prolongadas. [Mantenimiento](development.md)
-
-Global dos; por proyecto uno por defecto. P08 admite dos rondas con presupuesto/plazo compartidos. P09 reutiliza memoria por selección explícita, sin otorgarle autoridad. Sigue P10 en el [plan de agentes](plans/ecc-codex-prompts/progress.md).
+Sigue P11, sin iniciarlo automáticamente. [Plan](plans/ecc-codex-prompts/progress.md).

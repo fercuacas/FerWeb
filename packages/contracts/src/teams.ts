@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { reviewTarget } from './review.js';
 import { memorySelections } from './memory.js';
+import { contextPackConfigure, contextReceiptReference } from './context-packs.js';
 import { agentCapability, agentSelection, agentTemplateId } from './agents.js';
 import { codingAgentSnapshot } from './coding.js';
 import { executionOptionSchema } from './execution.js';
@@ -156,6 +157,7 @@ export const updateTeamTemplateInput = z.strictObject({ version, definition: tea
 export const archiveTeamTemplateInput = z.strictObject({ version });
 export const prepareTeamPlanInput = z
   .strictObject({
+    context: contextPackConfigure.optional(),
     memory: memorySelections.optional(),
     requestId: z.uuid(),
     reviewTarget: z.uuid().optional(),
@@ -188,6 +190,10 @@ export function classifyPlanTask(task: { description: string; acceptanceCriteria
   >;
 }
 export const teamPlanSnapshot = z.object({
+  contexts: z
+    .array(z.object({ step: z.string(), receipt: contextReceiptReference }))
+    .max(8)
+    .optional(),
   memory: memorySelections.optional(),
   reviewTarget: reviewTarget.optional(),
   version: z.literal(1),

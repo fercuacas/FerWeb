@@ -31,7 +31,12 @@ import {
   summarize,
   exportCsv,
 } from './analysis.js';
-import { ContextEngine, strategyOrder, contextPolicyRevision } from './context-engine.js';
+import {
+  ContextEngine,
+  strategyOrder,
+  p10StrategyOrder,
+  contextPolicyRevision,
+} from './context-engine.js';
 import { contextReport, adoptionEvidence } from './context-analysis.js';
 
 const missing = () => new HttpError(404, 'not_found', 'No se ha encontrado el recurso.');
@@ -264,9 +269,11 @@ export class LaboratoryService {
   async createBatch(owner: string, project: string, input: z.infer<typeof labBatchInput>) {
     await this.project(owner, project);
     if (input.contextExperiment) {
+      const order =
+        input.contextExperiment === 'ferweb-context-p10-v1' ? p10StrategyOrder : strategyOrder;
       if (
-        input.targets.length !== 4 ||
-        input.targets.some((t, i) => t.contextStrategy !== strategyOrder[i]) ||
+        input.targets.length !== order.length ||
+        input.targets.some((t, i) => t.contextStrategy !== order[i]) ||
         input.targets.some(
           (t) =>
             digest({ ...t, contextStrategy: undefined }) !==
@@ -276,7 +283,7 @@ export class LaboratoryService {
         throw new HttpError(
           400,
           'context_conditions',
-          'Las cuatro estrategias deben compartir proveedor, modelo, configuración, tarifa y condición de caché.',
+          'Las estrategias del protocolo deben compartir proveedor, modelo, configuración, tarifa y condición de caché.',
         );
     } else if (input.targets.some((t) => t.contextStrategy))
       throw new HttpError(
@@ -365,7 +372,7 @@ export class LaboratoryService {
           'Un caso conserva fuentes distintas del corpus actual. Crea un caso actualizado.',
         );
       contextPlan = {
-        protocol: 'ferweb-context-v1',
+        protocol: input.contextExperiment,
         corpus,
         simulated: simulated || corpus.simulated,
         providerConfigurationRevision,
@@ -374,6 +381,18 @@ export class LaboratoryService {
         maxRetries: 0,
         cacheScope: 'experiment',
       };
+      if (input.contextExperiment === 'ferweb-context-p10-v1') {
+        const engine = this.contextEngine();
+        contextPlan.memoryCases = {};
+        contextPlan.memoryInventoryHash = await engine.memoryInventory(owner, project);
+        contextPlan.memoryComplete = true;
+        for (const c of cases) {
+          const found = await engine.memories(owner, project, c.question);
+          contextPlan.memoryCases[c.id] = found.entries;
+          contextPlan.memoryComplete &&= found.complete;
+        }
+        await engine.guard(owner, project, contextPlan);
+      }
     }
     const conditions = labConditionsSchema.parse({
       contextPlan,
@@ -450,6 +469,19 @@ export class LaboratoryService {
         project,
         conditions.contextPlan.corpus.sources,
         true,
+      );
+    for (const entries of Object.values(conditions.contextPlan?.memoryCases ?? {}))
+      await this.contextEngine().memory.selections(
+        owner,
+        project,
+        entries.map(({ id, revision, hash }) => ({ id, revision, hash })),
+        'history',
+      );
+    if (conditions.contextPlan?.protocol === 'ferweb-context-p10-v1')
+      await this.retrieval!.authorizePackSources(
+        owner,
+        project,
+        conditions.contextPlan.corpus.sources,
       );
     const runs = (
         await this.pool.query('SELECT * FROM lab_runs WHERE batch_id=$1 ORDER BY ordinal', [id])
@@ -654,6 +686,12 @@ export class LaboratoryService {
       )
     ).rows[0];
     if (!result.allowed) return false;
+    if (
+      batch.conditions.contextPlan?.memoryInventoryHash !== undefined &&
+      (await this.contextEngine().memoryInventory(owner, project)) !==
+        batch.conditions.contextPlan.memoryInventoryHash
+    )
+      return false;
     const sources = [
       ...batch.conditions.cases.flatMap((c) => c.sources),
       ...(batch.conditions.contextPlan?.corpus.sources ?? []),
@@ -757,6 +795,7 @@ export class LaboratoryService {
                 project,
                 scope: batch.id,
                 id: run.id,
+                caseId: c.id,
                 plan: batch.conditions.contextPlan,
                 strategy: target.contextStrategy!,
                 question: c.question,

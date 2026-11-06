@@ -1,5 +1,7 @@
 # Evaluar y adoptar estrategias de contexto (E10)
 
+El [protocolo P10](context-packs.md#comparación-e10) añade la comparación vectorial/híbrida/híbrida con memoria vigente. El protocolo anterior descrito aquí sigue disponible.
+
 E10 amplía el laboratorio existente; no modifica las instrucciones usadas para desarrollar FerWeb desde este chat. Reutiliza casos, criterios, tarifas, revisiones y exportación de E6. La migración 010 incorpora contabilidad por operación, resultados reutilizables y una política de contexto por proyecto.
 
 ## Recorrido

@@ -11,6 +11,8 @@ import {
   type memorySourceInput,
   type memorySearchInput,
   type GitHubLink,
+  contextPackSnapshot,
+  sourceSchema,
 } from '@ferweb/contracts';
 import { GitHubService } from '../github/service.js';
 import { ProjectRepository } from '../projects/repository.js';
@@ -205,6 +207,43 @@ export class MemoryService {
     if (mode === 'current') {
       ctx.tasks.set(row.task_id, task.version);
       ctx.jobs.set(row.job_id, digest(canonical(row.report)));
+    }
+    if (row.context_receipt_id) {
+      const receipt = (
+        await this.pool.query(
+          'SELECT snapshot FROM context_pack_receipts WHERE id=$1 AND project_id=$2 AND owner_id=$3',
+          [row.context_receipt_id, project, owner],
+        )
+      ).rows[0];
+      if (!receipt) throw new SourceError('source_unavailable');
+      const pack = contextPackSnapshot.parse(receipt.snapshot),
+        link = await this.link(owner, project, ctx);
+      const extra = (
+        await this.pool.query(
+          "SELECT result->'sources' AS sources FROM context_pack_expansions WHERE receipt_id=$1 AND status='completed'",
+          [row.context_receipt_id],
+        )
+      ).rows.flatMap((r) => r.sources ?? []);
+      for (const raw of [...pack.payload.map.sources, ...pack.payload.sources, ...extra]) {
+        if (++ctx.checks > 256) throw new SourceError('provenance_limit');
+        const s = sourceSchema.parse(raw);
+        const exists =
+          s.kind === 'file'
+            ? link.snapshot!.tree.some(
+                (f) =>
+                  f.path === s.path &&
+                  f.type === 'blob' &&
+                  ['100644', '100755'].includes(f.mode) &&
+                  codingPath(f.path) &&
+                  indexable(f.path),
+              )
+            : (s.kind === 'issue' ? link.snapshot!.issues : link.snapshot!.pullRequests).some(
+                (x) => `${s.kind === 'issue' ? 'issues' : 'pulls'}/${x.number}` === s.path,
+              );
+        if (s.projectId !== project || s.repositoryId !== link.repositoryId || !exists)
+          throw new SourceError('source_unavailable');
+      }
+      await this.selected(owner, project, pack.memory, mode, ctx, depth + 1);
     }
     await this.selected(
       owner,

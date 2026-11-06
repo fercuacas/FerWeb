@@ -7,6 +7,9 @@ import { workspaceApi, errorMessage } from './workspace-store';
 import { ExecutionDetails, capabilityLabels } from './ExecutionDetails';
 import { SkillText } from './Skills';
 import { TeamLauncher, TeamRunDetails } from './TeamRuns';
+import { TeamContextOptions, ContextReceiptView } from './ContextPacks';
+import type { contextPackConfigure } from '@ferweb/contracts';
+import type { z } from 'zod';
 import { MemoryPicker, type MemorySelection } from './ProjectKnowledge';
 
 export function PlanDetails({ project, id }: { project: Project; id: string }) {
@@ -38,6 +41,12 @@ export function PlanDetails({ project, id }: { project: Project; id: string }) {
             · Copia inmutable v{plan.snapshot.version}
           </p>
           <p className="skill-text">Hash: {plan.hash}</p>
+          {plan.snapshot.contexts?.map((item) => (
+            <section key={item.step}>
+              <h4>Contexto del rol: {item.step}</h4>
+              <ContextReceiptView project={project.id} id={item.receipt.id} />
+            </section>
+          ))}
           {!!plan.snapshot.memory?.length && (
             <details>
               <summary>Referencias de memoria congeladas</summary>
@@ -179,6 +188,7 @@ function PlansContent({ project }: { project: Project }) {
   const plansQuery = teamsApi.useTeamPlansQuery(project.id);
   const [prepare, preparing] = teamsApi.usePrepareTeamPlanMutation();
   const [taskId, setTask] = useState('');
+  const [context, setContext] = useState<z.infer<typeof contextPackConfigure> | null>(null);
   const [memory, setMemory] = useState<MemorySelection[]>([]),
     [memoryValid, setMemoryValid] = useState(true);
   const [templateId, setTemplate] = useState('');
@@ -235,6 +245,7 @@ function PlansContent({ project }: { project: Project }) {
           requestId: crypto.randomUUID(),
           ...(memory.length && { memory }),
           taskId: task.id,
+          ...(context && { context }),
           taskVersion: task.version,
           templateId: template.id,
           templateVersion: template.version,
@@ -284,6 +295,7 @@ function PlansContent({ project }: { project: Project }) {
       )}
       {!project.archivedAt && tasks && templates && execution && (
         <form className="job-form" aria-label="Preparar plan" onSubmit={(e) => void submit(e)}>
+          <TeamContextOptions value={context} onChange={setContext} />
           <MemoryPicker
             project={project.id}
             value={memory}

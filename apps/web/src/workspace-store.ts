@@ -110,6 +110,7 @@ export const workspaceApi = createApi({
     'TeamExecution',
     'TeamPolicy',
     'Memory',
+    'ContextPack',
   ],
   endpoints: (builder) => ({
     executionCapabilities: builder.query<ReturnType<typeof executionCatalogSchema.parse>, string>({

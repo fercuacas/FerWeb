@@ -341,6 +341,34 @@ export async function createController({ token, configuration, fakeProvider, nam
       res.end();
       return;
     }
+    if (req.url === '/context/expand' && req.method === 'POST') {
+      if (
+        !run.input.task.projectContext?.receiptId ||
+        run.finishing ||
+        Date.now() >= run.lease ||
+        Date.now() >= run.deadline
+      ) {
+        res.writeHead(403);
+        res.end('{}');
+        return;
+      }
+      const data = await body(req, 4000);
+      const response = await fetch(
+        `${run.controlOrigin}/internal/coding/${run.input.jobId}/context`,
+        {
+          method: 'POST',
+          headers: { authorization: 'Bearer ' + token, 'content-type': 'application/json' },
+          body: JSON.stringify({ fence: run.input.fence, request: data }),
+          signal: AbortSignal.timeout(Math.max(1, Math.min(60000, run.deadline - Date.now()))),
+          redirect: 'error',
+        },
+      );
+      const text = await response.text();
+      if (text.length > 100000) throw Error('context_response_limit');
+      res.writeHead(response.status, { 'content-type': 'application/json' });
+      res.end(text);
+      return;
+    }
     if (['/team/messages', '/team/inbox'].includes(req.url) && req.method === 'POST') {
       if (
         !run.input.teamMessaging ||

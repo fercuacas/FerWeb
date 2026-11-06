@@ -12,6 +12,7 @@ import { ExecutionDetails } from './ExecutionDetails';
 import { budgetsApi } from './budgets-store';
 import { attributionNames, BudgetUsage } from './Budgets';
 import { usageAttribution } from '@ferweb/contracts';
+import { ContextPreparer, ContextReceiptView, type ContextSelection } from './ContextPacks';
 import { MemoryPicker, MemoryText, type MemorySelection } from './ProjectKnowledge';
 export function CodingForm({
   project,
@@ -26,6 +27,11 @@ export function CodingForm({
   const agents = agentsApi.useAgentsQuery(project, { refetchOnFocus: true });
   const budgets = budgetsApi.useBudgetsQuery(project, { refetchOnFocus: true });
   const [budgetId, setBudgetId] = useState('');
+  const [context, setContext] = useState<ContextSelection>({
+    enabled: false,
+    reference: null,
+    valid: true,
+  });
   const [memory, setMemory] = useState<MemorySelection[]>([]),
     [memoryValid, setMemoryValid] = useState(true);
   const [attribution, setAttribution] =
@@ -67,7 +73,11 @@ export function CodingForm({
     ? []
     : (budgets.currentData?.budgets.filter((item) => !item.stopReason) ?? []);
   const budgetAvailable = !budgetId || budgetChoices.some((item) => item.id === budgetId);
+  useEffect(() => {
+    request.current = crypto.randomUUID();
+  }, [context.reference?.id, context.reference?.hash]);
   const ready =
+    (!context.enabled || (context.valid && !!context.reference)) &&
     memoryValid &&
     !!task &&
     !!link?.snapshot &&
@@ -102,7 +112,11 @@ export function CodingForm({
               maxOutputTokens,
               ...(budgetId && { budgetId }),
               attribution,
-              ...(memory.length && { memory }),
+              ...(context.reference
+                ? { contextReceipt: context.reference }
+                : memory.length
+                  ? { memory }
+                  : {}),
               ...(selectedAgent && {
                 agent: { id: selectedAgent.id, version: selectedAgent.version },
               }),
@@ -121,6 +135,17 @@ export function CodingForm({
       >
         <fieldset disabled={state.isLoading}>
           <legend>Ejecución sobre un commit fijo</legend>
+          <ContextPreparer
+            project={project}
+            taskId={task?.id ?? ''}
+            taskVersion={task?.version ?? 0}
+            agent={
+              selectedAgent ? { id: selectedAgent.id, version: selectedAgent.version } : undefined
+            }
+            model={selectedModel}
+            memory={memory}
+            onChange={setContext}
+          />
           <MemoryPicker
             project={project}
             value={memory}
@@ -415,6 +440,9 @@ export function CodingView({
                 <MemoryText key={entry.id} entry={entry} />
               ))}
             </details>
+          )}
+          {visible.contextReceipt && (
+            <ContextReceiptView project={project} id={visible.contextReceipt.id} />
           )}
           <details>
             <summary>Tarea y archivos de partida</summary>

@@ -1,8 +1,17 @@
 import { z } from 'zod';
 import { sourceSchema } from './retrieval.js';
 import { usageSchema } from './usage.js';
+import { memoryEntry } from './memory.js';
+import { hybridResponse } from './retrieval.js';
 
-export const contextStrategy = z.enum(['wide-v1', 'retrieval-v1', 'summary-v1', 'reuse-v1']);
+export const contextStrategy = z.enum([
+  'wide-v1',
+  'retrieval-v1',
+  'summary-v1',
+  'reuse-v1',
+  'hybrid-v1',
+  'hybrid-memory-v1',
+]);
 export const contextCorpus = z.object({
   fingerprint: z.string(),
   commit: z.string(),
@@ -15,7 +24,10 @@ export const contextCorpus = z.object({
 export const contextPlan = z.object({
   policyRevision: z.string(),
   providerConfigurationRevision: z.string().nullable(),
-  protocol: z.literal('ferweb-context-v1'),
+  protocol: z.enum(['ferweb-context-v1', 'ferweb-context-p10-v1']),
+  memoryCases: z.record(z.uuid(), z.array(memoryEntry).max(3)).optional(),
+  memoryInventoryHash: z.string().optional(),
+  memoryComplete: z.boolean().optional(),
   corpus: contextCorpus,
   simulated: z.boolean(),
   summaryMaxOutputTokens: z.literal(512),
@@ -26,7 +38,15 @@ export const contextOperation = z.object({
   response: z.string().max(20000).default(''),
   reportedModel: z.string().nullable().default(null),
   id: z.uuid(),
-  kind: z.enum(['validation', 'retrieval', 'summary', 'answer', 'result_cache']),
+  kind: z.enum([
+    'validation',
+    'retrieval',
+    'summary',
+    'answer',
+    'result_cache',
+    'memory_lookup',
+    'source_lookup',
+  ]),
   status: z.enum(['running', 'completed', 'error']),
   attempt: z.literal(1),
   startedAt: z.string(),
@@ -42,6 +62,16 @@ export const contextOperation = z.object({
   errorCode: z.string().nullable(),
 });
 export const contextMetrics = z.object({
+  retrieval: hybridResponse.optional(),
+  memory: z.array(memoryEntry).max(3).optional(),
+  memoryComplete: z.boolean().optional(),
+  citationAudit: z
+    .object({
+      validLabels: z.array(z.string()),
+      invalidLabels: z.array(z.string()),
+      currentMetadata: z.boolean(),
+    })
+    .optional(),
   strategy: contextStrategy,
   fingerprint: z.string(),
   simulated: z.boolean(),
@@ -98,6 +128,10 @@ export const contextComparisonResponse = z.object({
         resultCacheHits: z.number(),
         creationCostsIncluded: z.boolean(),
         estimatedCacheReadDiscountUsd: nullableMetric,
+        expectedPathCoverage: nullableMetric.optional(),
+        citationValidity: nullableMetric.optional(),
+        searchLatencyMs: nullableMetric.optional(),
+        retrievalStrategies: z.array(z.string()).optional(),
       }),
     ),
   }),
