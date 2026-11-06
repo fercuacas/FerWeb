@@ -188,11 +188,13 @@ export class TeamMessages {
     await this.coding.projects.get(owner, project);
     const row = (
       await this.pool.query(
-        'SELECT repository_id FROM team_executions WHERE id=$1 AND project_id=$2',
+        'SELECT repository_id,snapshot FROM team_executions WHERE id=$1 AND project_id=$2',
         [execution, project],
       )
     ).rows[0];
     if (!row) throw new HttpError(404, 'not_found', 'No se ha encontrado la ejecución.');
+    if (row.snapshot.plan.memory?.length)
+      await this.coding.memory.selections(owner, project, row.snapshot.plan.memory, 'history');
     const { link } = await this.coding.github.read(owner, project);
     if (!link || link.revoked || link.repositoryId !== Number(row.repository_id))
       throw new HttpError(

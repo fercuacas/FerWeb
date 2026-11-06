@@ -165,6 +165,10 @@ El preset **Revisión por dimensiones** utiliza el perfil de solo lectura de P07
 
 El controlador añade resultados de pruebas capturados mediante su reporter estructurado. La reunión valida ubicación/evidencia, conserva duplicados con procedencia y discrepancias y distingue confirmado, refutado y no verificable. Los hallazgos graves sin evidencia y los conflictos pendientes bloquean la revisión; cambiar artefactos invalida su aprobación. El recorrido E9 individual y la aprobación humana/publicación separadas se mantienen. [Uso, contrato, pruebas y límites](reviews.md#revisión-por-dimensiones-p08).
 
+## Memoria de proyecto (P09)
+
+**Conocimiento** conserva memoria operativa por proyecto en PostgreSQL, con revisiones vinculadas, búsqueda léxica, historial por fecha y fuentes autorizadas. Una entrega verificada puede guardarse expresamente y seleccionarse en otro trabajo o plan. Se congelan hasta tres referencias con ID/revisión/hash y se revalidan antes y durante la ejecución; su texto permanece como datos sin autoridad. Exportación/importación acotadas en JSON y Markdown adaptado a Memory Vault. [Uso, contratos, vigencia y límites](memory.md).
+
 ## Supervisión, cancelación e informe
 
 La pestaña Trabajos consulta eventos persistentes y resultados. Se guarda informe parcial durante la ejecución. Al cancelar se conserva la solicitud SQL, el worker pide detener al controlador, este bloquea nuevas peticiones al modelo, recoge el estado final y mata el contenedor completo, incluidos descendientes separados del shell. Se confirma la parada mediante Docker; si no puede observarse, queda desconocida. Cancelar no revierte llamadas facturables previas ni garantiza la parada/facturación remota de OpenAI.

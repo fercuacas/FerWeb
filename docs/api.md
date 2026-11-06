@@ -321,6 +321,24 @@ Condiciones y ejecuciones E10 añaden `contextPlan` y `contextMetrics` respectiv
 
 El chat aplica una política vigente solo a su mismo proveedor/modelo/configuración y con `repositoryContext=true`. Los turnos añaden `contextMetrics` nullable; `grounding=preparing` distingue candidatos de fuentes usadas hasta preparar el contexto. Sin política, conserva E4/E5. Una política invalidada devuelve conflicto manejado, no una respuesta obsoleta. Se mantiene sesión/origen/propiedad/archivo, y los datos derivados se ocultan ante revocación. Protocolo y límites: [context-optimization.md](context-optimization.md).
 
+## Memoria de proyecto P09
+
+Rutas bajo `/api/projects/:projectId/memory`; sesión, propiedad, origen y contratos estrictos. Las mutaciones se rechazan en proyectos archivados. [Semántica, procedencia y límites](memory.md).
+
+| Método/ruta | Contrato |
+| --- | --- |
+| `POST /` | `{requestId, entry}`; crea entrada y responde 201 con `{selection: {id,revision,hash}}`. |
+| `PUT /:id` | `{version, entry}`; corrección/retirada como revisión nueva; conflicto de versión 409. |
+| `GET /:id?revision=N` | `{entry}`; sin revisión usa cabeza, con revisión solicita historial autorizado. |
+| `GET /:id/history` | `{entries,complete,unavailable}`; no devuelve contenido de fuentes retiradas. |
+| `POST /search` | `{query,target?,asOf?,cursor?}`; `{entries,complete,state,issues,nextCursor,notice}`. Ventanas de veinte autorizadas antes del matching. |
+| `POST /import` | `{requestId,format: json\|markdown,content}`; 201 con `{selections}`; archivo incompleto 422 sin inserciones parciales. |
+| `POST /export` | `{selections,format}`; `{filename,mime,content,scope: selection,complete: true}`; exportación acotada, no descarga de todo el proyecto. |
+
+`entry` contiene `kind,title,content,observedAt,status,tags,targets,lesson,sources`. Las respuestas añaden identidad, autor/origen, revisión/relación/hash, fechas de vigencia, confianza y evidencia normalizada. Fuente `code`: ruta, commit, líneas, `canonical`; `task`: ID/versión; `job`: ID; `delivery`: ejecución/etapa. Hashes esperados opcionales se validan y se normalizan al guardar. Sin fuentes no hay verificación de la afirmación. Falta de fuente o revocación devuelve error seguro o búsqueda incompleta; no es un resultado vacío comprobado.
+
+Las entradas de Codex y preparación de planes admiten `memory?: [{id,revision,hash}]`, máximo tres, únicas y del mismo proyecto. Se congelan las referencias y se revalidan para reutilizar. `GET coding/:id` añade `memory` con las revisiones utilizadas y autorizadas, incluidas ejecuciones antiguas con `[]`. La memoria se entrega como datos sin autoridad; el cliente no puede enviar herramientas ni un bloque libre de contexto de proyecto.
+
 ## Referencias de diseño
 
 - [Node.js crypto](https://nodejs.org/api/crypto.html).

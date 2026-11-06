@@ -5,6 +5,7 @@ import type { Project, TeamPlan } from '@ferweb/contracts';
 import { teamsApi } from './teams-store';
 import { jobsApi } from './jobs-store';
 import { CodingView } from './Coding';
+import { SaveDeliveryMemory } from './ProjectKnowledge';
 import { errorMessage } from './workspace-store';
 import { ExecutionDetails } from './ExecutionDetails';
 import { budgetsApi } from './budgets-store';
@@ -401,6 +402,14 @@ export function TeamRunDetails({ project, id }: { project: Project; id: string }
                   <details>
                     <summary>Entrega de {step.key}</summary>
                     <p>{step.delivery.result || 'Sin resumen del agente.'}</p>
+                    {step.delivery.verified && !project.archivedAt && (
+                      <SaveDeliveryMemory
+                        project={project.id}
+                        executionId={id}
+                        stepId={step.id}
+                        content={step.delivery.result}
+                      />
+                    )}
                     <p>
                       {step.delivery.verified
                         ? 'Controlador: pruebas y recogida confirmadas.'

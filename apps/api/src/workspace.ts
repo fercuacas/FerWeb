@@ -35,6 +35,7 @@ import { skillRouter } from './modules/skills/routes.js';
 import { TeamService } from './modules/teams/service.js';
 import { teamRouter } from './modules/teams/routes.js';
 import { TeamExecutions } from './modules/teams/executions.js';
+import { memoryRouter } from './modules/memory/routes.js';
 
 export interface WorkspaceOptions {
   pool: Pool;
@@ -126,6 +127,7 @@ export function createWorkspaceRouter({
     teamRouter(new TeamService(pool, codingService), new TeamExecutions(pool, codingService)),
   );
   router.use(codingRouter(codingService));
+  router.use(memoryRouter(codingService.memory));
   router.get('/projects', async (_request, response) => {
     response.json({ projects: await projects.list(owner(response)) });
   });

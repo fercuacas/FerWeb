@@ -264,7 +264,14 @@ export function gatherDimensionalReview(
     blockers,
   });
 }
-export async function dimensionReviews(pool: Pool, project: string, id: string) {
+export async function dimensionReviews(
+  pool: Pool,
+  project: string,
+  id: string,
+  authorizeMemory?: (
+    refs: NonNullable<z.infer<typeof teamPlanSnapshot>['memory']>,
+  ) => Promise<boolean>,
+) {
   const runs = (
     await pool.query(
       "SELECT r.*,(SELECT count(*) FROM team_messages m WHERE m.execution_id=r.id AND m.kind='conflict') AS message_conflicts FROM team_executions r WHERE project_id=$1 AND snapshot->'plan'->'reviewTarget'->>'jobId'=$2 ORDER BY created_at DESC,id LIMIT 10",
@@ -275,6 +282,15 @@ export async function dimensionReviews(pool: Pool, project: string, id: string) 
   for (const run of runs) {
     const snapshot = teamPlanSnapshot.parse(run.snapshot.plan);
     let stale = false;
+    if (snapshot.memory?.length) {
+      if (!authorizeMemory)
+        throw new HttpError(
+          403,
+          'memory_source_unavailable',
+          'No se puede confirmar acceso a las fuentes de la revisión.',
+        );
+      stale = !(await authorizeMemory(snapshot.memory));
+    }
     try {
       await assertReviewTarget(pool, snapshot.reviewTarget!, project);
     } catch {

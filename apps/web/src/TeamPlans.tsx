@@ -7,6 +7,7 @@ import { workspaceApi, errorMessage } from './workspace-store';
 import { ExecutionDetails, capabilityLabels } from './ExecutionDetails';
 import { SkillText } from './Skills';
 import { TeamLauncher, TeamRunDetails } from './TeamRuns';
+import { MemoryPicker, type MemorySelection } from './ProjectKnowledge';
 
 export function PlanDetails({ project, id }: { project: Project; id: string }) {
   const query = teamsApi.useTeamPlanQuery({ project: project.id, id });
@@ -37,6 +38,13 @@ export function PlanDetails({ project, id }: { project: Project; id: string }) {
             · Copia inmutable v{plan.snapshot.version}
           </p>
           <p className="skill-text">Hash: {plan.hash}</p>
+          {!!plan.snapshot.memory?.length && (
+            <details>
+              <summary>Referencias de memoria congeladas</summary>
+              <pre className="skill-text">{JSON.stringify(plan.snapshot.memory, null, 2)}</pre>
+              <p>Sin revisar; las fuentes se comprueban de nuevo al aprobar y ejecutar.</p>
+            </details>
+          )}
           {plan.snapshot.reviewTarget && (
             <details>
               <summary>Diff congelado de la revisión</summary>
@@ -171,6 +179,8 @@ function PlansContent({ project }: { project: Project }) {
   const plansQuery = teamsApi.useTeamPlansQuery(project.id);
   const [prepare, preparing] = teamsApi.usePrepareTeamPlanMutation();
   const [taskId, setTask] = useState('');
+  const [memory, setMemory] = useState<MemorySelection[]>([]),
+    [memoryValid, setMemoryValid] = useState(true);
   const [templateId, setTemplate] = useState('');
   const templateQuery = teamsApi.useTeamTemplateQuery(
     templateId ? { project: project.id, id: templateId } : skipToken,
@@ -216,13 +226,14 @@ function PlansContent({ project }: { project: Project }) {
     : null;
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!task || !template || !execution) return;
+    if (!task || !template || !execution || !memoryValid) return;
     setError('');
     try {
       const { plan }: { plan: TeamPlan } = await prepare({
         project: project.id,
         body: {
           requestId: crypto.randomUUID(),
+          ...(memory.length && { memory }),
           taskId: task.id,
           taskVersion: task.version,
           templateId: template.id,
@@ -273,6 +284,12 @@ function PlansContent({ project }: { project: Project }) {
       )}
       {!project.archivedAt && tasks && templates && execution && (
         <form className="job-form" aria-label="Preparar plan" onSubmit={(e) => void submit(e)}>
+          <MemoryPicker
+            project={project.id}
+            value={memory}
+            onChange={setMemory}
+            onValidity={setMemoryValid}
+          />
           {!tasks.length && <p>Crea una tarea antes de preparar un plan.</p>}
           {!templates.some((item) => !item.archivedAt) && (
             <p>Crea una plantilla de equipo desde Agentes → Equipos y plantillas.</p>
@@ -418,6 +435,7 @@ function PlansContent({ project }: { project: Project }) {
             className="primary-button"
             disabled={
               preparing.isLoading ||
+              !memoryValid ||
               !task ||
               !template ||
               (!specialists && mode === 'single' && !singleStep)

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+export * from './memory.js';
 export * from './retrieval.js';
 export * from './laboratory.js';
 export * from './jobs.js';

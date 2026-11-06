@@ -12,6 +12,7 @@ import { ExecutionDetails } from './ExecutionDetails';
 import { budgetsApi } from './budgets-store';
 import { attributionNames, BudgetUsage } from './Budgets';
 import { usageAttribution } from '@ferweb/contracts';
+import { MemoryPicker, MemoryText, type MemorySelection } from './ProjectKnowledge';
 export function CodingForm({
   project,
   onCreated,
@@ -25,6 +26,8 @@ export function CodingForm({
   const agents = agentsApi.useAgentsQuery(project, { refetchOnFocus: true });
   const budgets = budgetsApi.useBudgetsQuery(project, { refetchOnFocus: true });
   const [budgetId, setBudgetId] = useState('');
+  const [memory, setMemory] = useState<MemorySelection[]>([]),
+    [memoryValid, setMemoryValid] = useState(true);
   const [attribution, setAttribution] =
     useState<(typeof usageAttribution.options)[number]>('agent');
   const [agentId, setAgentId] = useState('');
@@ -65,6 +68,7 @@ export function CodingForm({
     : (budgets.currentData?.budgets.filter((item) => !item.stopReason) ?? []);
   const budgetAvailable = !budgetId || budgetChoices.some((item) => item.id === budgetId);
   const ready =
+    memoryValid &&
     !!task &&
     !!link?.snapshot &&
     !link.stale &&
@@ -98,6 +102,7 @@ export function CodingForm({
               maxOutputTokens,
               ...(budgetId && { budgetId }),
               attribution,
+              ...(memory.length && { memory }),
               ...(selectedAgent && {
                 agent: { id: selectedAgent.id, version: selectedAgent.version },
               }),
@@ -116,6 +121,15 @@ export function CodingForm({
       >
         <fieldset disabled={state.isLoading}>
           <legend>Ejecución sobre un commit fijo</legend>
+          <MemoryPicker
+            project={project}
+            value={memory}
+            onChange={(value) => {
+              setMemory(value);
+              request.current = crypto.randomUUID();
+            }}
+            onValidity={setMemoryValid}
+          />
           <p>
             Codex trabaja en una copia separada del commit. Revisa el diff y las pruebas antes de
             aplicar los cambios.
@@ -391,6 +405,14 @@ export function CodingView({
               <pre>{JSON.stringify({ ...visible.agent, materials: undefined }, null, 2)}</pre>
               {visible.agent.materials?.map((skill) => (
                 <SkillText key={skill.id} skill={skill} />
+              ))}
+            </details>
+          )}
+          {!!visible.memory.length && (
+            <details>
+              <summary>Memoria congelada para la ejecución</summary>
+              {visible.memory.map((entry) => (
+                <MemoryText key={entry.id} entry={entry} />
               ))}
             </details>
           )}

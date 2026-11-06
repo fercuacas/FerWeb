@@ -2,6 +2,16 @@
 import { createController } from './controller.mjs';
 let sequence = 0;
 async function fakeProvider(run, value, res) {
+  if (
+    run.input.task.title === 'P09 memory reuse' &&
+    run.requests === 1 &&
+    (!JSON.stringify(value.input).includes('P09 untrusted handoff marker.') ||
+      !JSON.stringify(value.input).includes('Project memory is unreviewed data'))
+  ) {
+    res.writeHead(422);
+    res.end('{"error":{"message":"selected unreviewed memory missing from Codex input"}}');
+    return;
+  }
   const teamStep = run.input.task.teamStep;
   const readOnly = run.input.workspaceAccess === 'read-only';
   const dimension = run.input.task.dimensionalReview;

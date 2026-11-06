@@ -23,6 +23,7 @@ import { ProjectLaboratory } from './Laboratory';
 import { ProjectJobs } from './Jobs';
 import { AgentsPage } from './Agents';
 import { ProjectPlans } from './TeamPlans';
+import { ProjectKnowledge } from './ProjectKnowledge';
 
 const statusLabels = { todo: 'Por hacer', in_progress: 'En curso', done: 'Hecho' };
 const priorityLabels = { low: 'Baja', medium: 'Media', high: 'Alta', urgent: 'Urgente' };
@@ -530,7 +531,9 @@ function Board({ project }: { project: Project }) {
 }
 
 function ProjectPage({ id }: { id: string }) {
-  const [tab, setTab] = useState<'tasks' | 'github' | 'chat' | 'laboratory' | 'jobs'>('tasks');
+  const [tab, setTab] = useState<'tasks' | 'github' | 'chat' | 'laboratory' | 'jobs' | 'knowledge'>(
+    'tasks',
+  );
   const result = workspaceApi.useProjectQuery(id, { refetchOnFocus: true });
   const [edit, setEdit] = useState(false);
   const [archive, setArchive] = useState(false);
@@ -570,6 +573,13 @@ function ProjectPage({ id }: { id: string }) {
         </div>
       </div>
       <div className="filter-tabs" role="group" aria-label="Secciones del proyecto">
+        <button
+          aria-pressed={tab === 'knowledge'}
+          className={tab === 'knowledge' ? 'selected' : ''}
+          onClick={() => setTab('knowledge')}
+        >
+          Conocimiento
+        </button>
         <button
           className={tab === 'tasks' ? 'selected' : ''}
           aria-pressed={tab === 'tasks'}
@@ -617,6 +627,8 @@ function ProjectPage({ id }: { id: string }) {
         <ProjectGitHub project={project} />
       ) : tab === 'chat' ? (
         <ProjectConversations project={project} />
+      ) : tab === 'knowledge' ? (
+        <ProjectKnowledge key={id} project={project} />
       ) : tab === 'laboratory' ? (
         <ProjectLaboratory key={id} project={project} />
       ) : (

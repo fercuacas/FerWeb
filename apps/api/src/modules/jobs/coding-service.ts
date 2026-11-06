@@ -26,6 +26,8 @@ import { AgentCatalog } from '../agents/catalog.js';
 import { SkillLibrary } from '../skills/library.js';
 import { teamEvent } from '../teams/executions.js';
 import { assertReviewTarget, gatherDimensionalReview } from './dimension-reviews.js';
+import { MemoryService } from '../memory/service.js';
+import { memoryNotice } from '../memory/codec.js';
 type TeamStepContext = {
   executionId: string;
   stepId: string;
@@ -48,6 +50,7 @@ const incompatible = () =>
     'La versión del rol requiere capacidades o herramientas que Codex no ofrece.',
   );
 export class CodingService {
+  readonly memory: MemoryService;
   readonly projects: ProjectRepository;
   readonly jobs: JobService;
   private readonly agents: AgentCatalog;
@@ -57,6 +60,7 @@ export class CodingService {
     readonly github: GitHubService,
     readonly runner: RunnerClient,
   ) {
+    this.memory = new MemoryService(pool, github);
     this.projects = new ProjectRepository(pool);
     this.jobs = new JobService(pool);
     this.agents = new AgentCatalog(pool);
@@ -94,6 +98,9 @@ export class CodingService {
     ).rows[0];
     if (!row) throw missing();
     await this.access(owner, project, Number(row.repository_id));
+    const memory = row.memory_snapshot.length
+      ? await this.memory.selections(owner, project, row.memory_snapshot, 'history')
+      : [];
     return codingRunSchema.parse({
       teamExecutionId:
         (
@@ -102,6 +109,7 @@ export class CodingService {
           ])
         ).rows[0]?.execution_id ?? null,
       jobId: id,
+      memory,
       task: row.task_snapshot,
       commit: row.commit_sha,
       repository: row.repository,
@@ -140,6 +148,7 @@ export class CodingService {
     }
     if (p.archivedAt)
       throw new HttpError(409, 'project_archived', 'Restaura el proyecto antes de ejecutar.');
+    if (input.memory?.length) await this.memory.selections(owner, project, input.memory);
     const task = await this.projects.getTask(owner, project, input.taskId);
     if (task.version !== input.taskVersion) throw changed();
     const agent = input.agent
@@ -151,6 +160,7 @@ export class CodingService {
       (agent?.skills ?? []).map((item) => item.id),
     );
     if (team) {
+      if (canonical(input.memory ?? []) !== canonical(team.snapshot.memory ?? [])) throw changed();
       if (team.snapshot.reviewTarget)
         await assertReviewTarget(this.pool, team.snapshot.reviewTarget, project);
       const expected = team.snapshot.steps.find((step) => step.key === team.stepKey);
@@ -249,6 +259,7 @@ export class CodingService {
     if (fresh.version !== link.version || fresh.stale || fresh.snapshot?.commit !== input.commit)
       throw changed();
     const configuration = codingConfiguration.parse({
+      ...(input.memory?.length && { memory: input.memory }),
       ...(readOnly && { workspaceAccess: 'read-only' }),
       taskId: task.id,
       commit: input.commit,
@@ -388,7 +399,7 @@ export class CodingService {
         }),
       ]);
       await db.query(
-        'INSERT INTO coding_runs(job_id,task_id,task_snapshot,owner_id,repository_id,repository,commit_sha,files,manifest,excluded,base_branch,source_tree,environment,agent_snapshot) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)',
+        'INSERT INTO coding_runs(job_id,task_id,task_snapshot,owner_id,repository_id,repository,commit_sha,files,manifest,excluded,base_branch,source_tree,environment,agent_snapshot,memory_snapshot) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)',
         [
           job.id,
           task.id,
@@ -404,6 +415,7 @@ export class CodingService {
           JSON.stringify(sourceTree),
           JSON.stringify(capabilities.environment),
           agent ? JSON.stringify({ ...agent, ...(materials.length && { materials }) }) : null,
+          JSON.stringify(input.memory ?? []),
         ],
       );
       await this.jobs.queue.event(db, job.id, 'queued', 'Tarea y snapshot del commit guardados.');
@@ -430,12 +442,15 @@ export class CodingService {
   async executionInput(id: string, fence: string, checkOnly: boolean) {
     const row = (
       await this.pool.query(
-        "SELECT j.*,c.owner_id,c.repository_id,c.repository,c.commit_sha,c.files,c.task_snapshot,c.environment,c.agent_snapshot FROM jobs j JOIN coding_runs c ON c.job_id=j.id JOIN projects p ON p.id=j.project_id WHERE j.id=$1 AND j.fence=$2 AND j.state='running' AND j.lease_until>clock_timestamp() AND NOT j.cancel_requested AND p.archived_at IS NULL",
+        "SELECT j.*,c.owner_id,c.repository_id,c.repository,c.commit_sha,c.files,c.task_snapshot,c.environment,c.agent_snapshot,c.memory_snapshot FROM jobs j JOIN coding_runs c ON c.job_id=j.id JOIN projects p ON p.id=j.project_id WHERE j.id=$1 AND j.fence=$2 AND j.state='running' AND j.lease_until>clock_timestamp() AND NOT j.cancel_requested AND p.archived_at IS NULL",
         [id, fence],
       )
     ).rows[0];
     if (!row) throw missing();
     await this.access(row.owner_id, row.project_id, Number(row.repository_id));
+    const projectMemory = row.memory_snapshot.length
+      ? await this.memory.selections(row.owner_id, row.project_id, row.memory_snapshot)
+      : [];
     const team = (
       await this.pool.query(
         'SELECT r.*,s.position,s.iteration FROM team_execution_steps s JOIN team_executions r ON r.id=s.execution_id WHERE s.job_id=$1',
@@ -594,7 +609,12 @@ export class CodingService {
       fence,
       repository: row.repository,
       commit: row.commit_sha,
-      task: teamTask ?? row.task_snapshot,
+      task: {
+        ...(teamTask ?? row.task_snapshot),
+        ...(projectMemory.length && {
+          projectMemory: { notice: memoryNotice, entries: projectMemory },
+        }),
+      },
       ...(team && { captureWorkspace: true }),
       ...(row.configuration.workspaceAccess === 'read-only' && {
         workspaceAccess: 'read-only',
@@ -653,6 +673,8 @@ export class CodingService {
       return this.jobs.detail(owner, project, prior.id);
     }
     const caps = await this.runner.capabilities();
+    if (source.memory_snapshot.length)
+      await this.memory.selections(owner, project, source.memory_snapshot);
     if (
       !caps.available ||
       !caps.models.includes(input.model) ||
@@ -726,7 +748,7 @@ export class CodingService {
         configuration.budgetLimits,
       );
       await db.query(
-        'INSERT INTO coding_runs(job_id,task_id,task_snapshot,owner_id,repository_id,repository,commit_sha,files,manifest,excluded,base_branch,source_tree,environment,agent_snapshot,baseline_job_id) SELECT $1,task_id,task_snapshot,owner_id,repository_id,repository,commit_sha,files,manifest,excluded,base_branch,source_tree,environment,agent_snapshot,job_id FROM coding_runs WHERE job_id=$2',
+        'INSERT INTO coding_runs(job_id,task_id,task_snapshot,owner_id,repository_id,repository,commit_sha,files,manifest,excluded,base_branch,source_tree,environment,agent_snapshot,baseline_job_id,memory_snapshot) SELECT $1,task_id,task_snapshot,owner_id,repository_id,repository,commit_sha,files,manifest,excluded,base_branch,source_tree,environment,agent_snapshot,job_id,memory_snapshot FROM coding_runs WHERE job_id=$2',
         [job.id, baseline],
       );
       await this.jobs.queue.event(

@@ -38,6 +38,28 @@ export class ReviewService {
   private get pool() {
     return this.coding.pool;
   }
+  private async currentMemory(owner: string, project: string, row: QueryResultRow) {
+    if (!row.memory_snapshot?.length) return true;
+    try {
+      await this.coding.memory.selections(owner, project, row.memory_snapshot);
+      return true;
+    } catch (error) {
+      if (error instanceof HttpError) return false;
+      throw error;
+    }
+  }
+  private dimensions(owner: string, project: string, id: string) {
+    return dimensionReviews(this.pool, project, id, async (refs) => {
+      await this.coding.memory.selections(owner, project, refs, 'history');
+      try {
+        await this.coding.memory.selections(owner, project, refs);
+        return true;
+      } catch (error) {
+        if (error instanceof HttpError) return false;
+        throw error;
+      }
+    });
+  }
   private async run(owner: string, project: string, id: string) {
     await this.coding.read(owner, project, id);
     return (
@@ -70,8 +92,10 @@ export class ReviewService {
   async read(owner: string, project: string, id: string) {
     const run = await this.run(owner, project, id),
       row = (await this.pool.query('SELECT * FROM coding_reviews WHERE job_id=$1', [id])).rows[0];
-    const dimensions = await dimensionReviews(this.pool, project, id);
+    const dimensions = await this.dimensions(owner, project, id);
     const review = row ? dto(row) : null;
+    if (review?.approved && !(await this.currentMemory(owner, project, run)))
+      review.approved = false;
     if (
       review &&
       (row.report_hash !== digest(canonical(run.report)) ||
@@ -84,7 +108,9 @@ export class ReviewService {
   async save(owner: string, project: string, id: string, input: z.infer<typeof reviewInput>) {
     const run = await this.run(owner, project, id);
     this.ready(run);
-    const dimensions = await dimensionReviews(this.pool, project, id);
+    if (input.approved && !(await this.currentMemory(owner, project, run)))
+      throw conflict('La memoria utilizada ya no está vigente. Ejecuta con una selección actual.');
+    const dimensions = await this.dimensions(owner, project, id);
     if (input.approved && dimensions[0] && dimensions[0].state !== 'complete')
       throw conflict(
         'La revisión por dimensiones está incompleta o invalidada. Conserva el borrador sin aprobar.',
@@ -149,7 +175,9 @@ export class ReviewService {
       );
     const run = await this.run(owner, project, id),
       tree = this.ready(run);
-    const dimensions = await dimensionReviews(this.pool, project, id);
+    if (!(await this.currentMemory(owner, project, run)))
+      throw conflict('La memoria utilizada ya no está vigente.');
+    const dimensions = await this.dimensions(owner, project, id);
     if (dimensions[0] && dimensions[0].state !== 'complete')
       throw conflict('La revisión por dimensiones no está completa y vigente.');
     // Remote access/permissions are checked on every explicit attempt, including retries.
@@ -194,7 +222,9 @@ export class ReviewService {
     if (review.state === 'published') return this.read(owner, project, id);
     const { api, fullName } = access;
     const base = async () => {
-      const current = await dimensionReviews(this.pool, project, id);
+      if (!(await this.currentMemory(owner, project, run)))
+        throw conflict('La memoria utilizada ha cambiado.');
+      const current = await this.dimensions(owner, project, id);
       if (
         (current[0] && current[0].state !== 'complete') ||
         dimensionHash(current) !== review.dimension_hash
@@ -297,8 +327,25 @@ export class ReviewService {
       )
     ).rows;
     for (const row of rows.slice(0, 20))
+      if (row.memory_snapshot.length) {
+        try {
+          await this.coding.memory.selections(owner, project, row.memory_snapshot, 'history');
+        } catch (error) {
+          if (!(error instanceof HttpError)) throw error;
+          row.report = null;
+          row.review_id = null;
+          row.memoryUnavailable = true;
+        }
+        if (
+          row.review_id &&
+          row.review.approved &&
+          !(await this.currentMemory(owner, project, row))
+        )
+          row.review.approved = false;
+      }
+    for (const row of rows.slice(0, 20))
       if (row.review_id && row.review.approved) {
-        const dimensions = await dimensionReviews(this.pool, project, row.job_id);
+        const dimensions = await this.dimensions(owner, project, row.job_id);
         if (
           row.review.report_hash !== digest(canonical(row.report)) ||
           row.review.dimension_hash !== dimensionHash(dimensions) ||
@@ -333,6 +380,7 @@ export class ReviewService {
               canonical(current[key as keyof typeof current]),
           );
         if (!row.environment || !baseline.environment) differences.push('unrecordedEnvironment');
+        if (row.memoryUnavailable) differences.push('memorySourceUnavailable');
         return {
           jobId: row.job_id,
           state: row.state,

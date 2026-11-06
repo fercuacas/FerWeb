@@ -1,0 +1,71 @@
+.project-knowledge,
+.memory-picker {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+.project-knowledge {
+  display: grid;
+  gap: 14px;
+  max-width: 1000px;
+}
+.project-knowledge :where(h2, h3, h4, p) {
+  margin: 0;
+}
+.project-knowledge :where(label, form) {
+  display: grid;
+  gap: 7px;
+}
+.project-knowledge > div,
+.project-knowledge > section,
+.memory-picker > details {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid #d8dfce;
+  border-radius: 9px;
+  background: #fafbf7;
+}
+.project-knowledge > div {
+  display: grid;
+  gap: 10px;
+}
+:is(.project-knowledge, .memory-picker) button {
+  min-height: 40px;
+  padding: 9px 14px;
+  border: 1px solid #d8dfce;
+  border-radius: 7px;
+  background: #fff;
+  color: #35482e;
+  font: inherit;
+  text-align: left;
+}
+:is(.project-knowledge, .memory-picker) button:disabled {
+  opacity: 0.55;
+}
+:is(.project-knowledge, .memory-picker) .primary-button {
+  background: #435737;
+  color: #fff;
+}
+:is(.project-knowledge, .memory-picker) label:has(input[type='checkbox']) {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+:is(.project-knowledge, .memory-picker) input[type='checkbox'] {
+  width: 20px;
+  height: 20px;
+  min-height: 0;
+  flex-shrink: 0;
+  padding: 0;
+  margin: 0;
+  accent-color: #435737;
+}
+:is(.project-knowledge, .memory-picker) summary {
+  cursor: pointer;
+  padding-block: 8px;
+}
+:is(.project-knowledge, .memory-picker) article {
+  margin-block: 14px;
+  padding-block: 12px;
+  border-bottom: 1px solid #d8dfce;
+}

@@ -283,9 +283,13 @@ export class TeamService {
     const plan = planDto(await this.planRow(this.pool, owner, project, id));
     if (plan.snapshot.reviewTarget)
       await this.coding.read(owner, project, plan.snapshot.reviewTarget.jobId);
+    if (plan.snapshot.memory?.length)
+      await this.coding.memory.selections(owner, project, plan.snapshot.memory, 'history');
     return { plan };
   }
   async validateSnapshot(owner: string, project: string, snapshot: TeamPlan['snapshot']) {
+    if (snapshot.memory?.length)
+      await this.coding.memory.selections(owner, project, snapshot.memory);
     if (snapshot.reviewTarget) {
       await this.coding.read(owner, project, snapshot.reviewTarget.jobId);
       await assertReviewTarget(this.pool, snapshot.reviewTarget, project);
@@ -340,6 +344,7 @@ export class TeamService {
       (item) => item.version === input.templateVersion,
     );
     if (!selected) throw missing();
+    if (input.memory?.length) await this.coding.memory.selections(owner, project, input.memory);
     if (!!selected.definition.reviewMode !== !!input.reviewTarget)
       throw new HttpError(
         422,
@@ -412,6 +417,7 @@ export class TeamService {
               .map((step) => ({ ...step, dependsOn: [] }))
           : allSteps;
       const snapshot = teamPlanSnapshot.parse({
+        ...(input.memory?.length && { memory: input.memory }),
         ...(reviewTarget && { reviewTarget }),
         version: 1,
         template,
@@ -467,6 +473,8 @@ export class TeamService {
     input: z.infer<typeof approveTeamPlanInput>,
   ) {
     const initial = planDto(await this.planRow(this.pool, owner, project, id));
+    if (initial.snapshot.memory?.length)
+      await this.coding.memory.selections(owner, project, initial.snapshot.memory);
     const caps = await this.coding.capabilities(owner, project);
     const execution =
       initial.snapshot.template.definition.strategy === 'specialists'

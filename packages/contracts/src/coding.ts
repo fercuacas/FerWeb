@@ -3,11 +3,13 @@ import { executionOptionSchema } from './execution.js';
 import { agentSelection, agentSnapshot } from './agents.js';
 import { skillVersion } from './skills.js';
 import { executionBudgetLimits, executionBudgetSchema, usageAttribution } from './usage.js';
+import { memorySelections, memoryEntry } from './memory.js';
 
 export const codingAgentSnapshot = agentSnapshot.extend({
   materials: z.array(skillVersion).max(3).optional(),
 });
 export const codingConfiguration = z.strictObject({
+  memory: memorySelections.optional(),
   workspaceAccess: z.literal('read-only').optional(),
   taskId: z.uuid(),
   commit: z.string().regex(/^[a-f0-9]{40}$/),
@@ -22,6 +24,7 @@ export const codingConfiguration = z.strictObject({
   }),
 });
 export const codingInput = z.strictObject({
+  memory: memorySelections.optional(),
   requestId: z.uuid(),
   taskId: z.uuid(),
   taskVersion: z.number().int().positive(),
@@ -105,6 +108,7 @@ export const codingReport = z.object({
   oomKilled: z.boolean().optional(),
 });
 export const codingRunSchema = z.object({
+  memory: z.array(memoryEntry).max(3),
   teamExecutionId: z.uuid().nullable().optional(),
   jobId: z.uuid(),
   task: z.record(z.string(), z.unknown()),

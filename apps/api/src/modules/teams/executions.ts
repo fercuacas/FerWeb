@@ -129,6 +129,8 @@ export class TeamExecutions {
   }
   async read(owner: string, project: string, id: string) {
     const row = await this.owned(owner, project, id);
+    if (row.snapshot.plan.memory?.length)
+      await this.coding.memory.selections(owner, project, row.snapshot.plan.memory, 'history');
     // Reports and deliveries carry repository text; revalidate access before returning them.
     const { link } = await this.coding.github.read(owner, project);
     if (!link || link.revoked || link.repositoryId !== Number(row.repository_id))
@@ -528,6 +530,7 @@ export class TeamExecutions {
       run.project_id,
       {
         requestId: current.request_id,
+        ...(snapshot.memory?.length && { memory: snapshot.memory }),
         taskId: snapshot.task.id,
         taskVersion: snapshot.task.version,
         commit: run.commit_sha,
