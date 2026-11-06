@@ -4,6 +4,12 @@ let sequence = 0;
 async function fakeProvider(run, value, res) {
   const teamStep = run.input.task.teamStep;
   const readOnly = run.input.workspaceAccess === 'read-only';
+  const dimension = run.input.task.dimensionalReview;
+  if (dimension?.dimension === 'verify' && /P08 verifier failure/.test(run.input.task.title)) {
+    res.writeHead(503);
+    res.end('{"error":{"message":"simulated verifier failure"}}');
+    return;
+  }
   if (
     readOnly &&
     run.requests > 1 &&
@@ -90,7 +96,7 @@ async function fakeProvider(run, value, res) {
         ? 'node --test; node tests/isolation-probe.cjs'
         : cancel
           ? 'sleep 30'
-          : `node --test; node tests/isolation-probe.cjs; node -e "require('node:fs').writeFileSync('src/add.cjs', 'exports.add = (a, b) => a + b;\\n')"; node --test`;
+          : `node --test; node tests/isolation-probe.cjs; node -e "require('node:fs').writeFileSync('src/add.cjs', 'exports.add = (a, b) => a + b${/P08 reproduced target/.test(run.input.task.title) ? ' + 1' : ''};\\n')"; node --test`;
     const args =
       exec.name === 'exec_command'
         ? { cmd: command, yield_time_ms: cancel ? 1000 : 10000, max_output_tokens: 3000 }
@@ -118,9 +124,11 @@ async function fakeProvider(run, value, res) {
         content: [
           {
             type: 'output_text',
-            text: readOnly
-              ? `P07 ${teamStep.key}: resultado independiente con fuentes intactas.${teamStep.key === 'summary' ? ' Resumen de las dos entregas verificadas.' : ''} Los criterios requieren revisión humana.`
-              : 'Corregida la suma. Se ejecutaron node --test y la comprobación de aislamiento. Revisa el diff y la verificación independiente del controlador.',
+            text: dimension
+              ? dimensionalFixture(run, dimension)
+              : readOnly
+                ? `P07 ${teamStep.key}: resultado independiente con fuentes intactas.${teamStep.key === 'summary' ? ' Resumen de las dos entregas verificadas.' : ''} Los criterios requieren revisión humana.`
+                : 'Corregida la suma. Se ejecutaron node --test y la comprobación de aislamiento. Revisa el diff y la verificación independiente del controlador.',
             annotations: [],
           },
         ],
@@ -175,6 +183,66 @@ async function fakeProvider(run, value, res) {
   });
   event('response.completed', { response });
   res.end();
+}
+function dimensionalFixture(run, context) {
+  if (context.dimension === 'verify') {
+    if (context.controllerEvidence.length < 3) throw Error('missing independent review evidence');
+    return JSON.stringify({
+      verifications: context.findings.map((f) => {
+        const evidence = context.controllerEvidence.find((e) =>
+          e.tests.some((t) => t.origin === 'controller-review-tests'),
+        );
+        const index = evidence?.tests.findIndex((t) => t.origin === 'controller-review-tests');
+        const test = evidence?.tests[index];
+        const line = test?.output.split('\n').find((l) => {
+          try {
+            return JSON.parse(l).name === 'adds positive and negative numbers';
+          } catch {
+            return false;
+          }
+        });
+        return {
+          findingId: f.id,
+          status:
+            line && JSON.parse(line).outcome === 'failed'
+              ? 'confirmed'
+              : line && JSON.parse(line).outcome === 'passed'
+                ? 'refuted'
+                : 'unverifiable',
+          reason:
+            'Fixture checks the exact named reproduction in a controller-owned test report, independently of agent claims.',
+          proof: line ? { jobId: evidence.jobId, testIndex: index, quote: line.trim() } : null,
+        };
+      }),
+    });
+  }
+  if (
+    context.dimension === 'stack' &&
+    (/P08 invalid dimension/.test(run.input.task.title) ||
+      (/P08 corrected review/.test(run.input.task.title) && context.iteration === 1))
+  )
+    return '{"findings":[{"title":"missing required evidence"}]}';
+  const source = run.input.files.find((f) => f.path === 'src/add.cjs');
+  const common = {
+    code: 'numeric_result',
+    title:
+      context.dimension === 'stack' ? 'Duplicate with a different title' : 'Check addition result',
+    path: 'src/add.cjs',
+    side: 'after',
+    startLine: 1,
+    endLine: 1,
+    evidence: source.content.trim(),
+    trigger: 'Call add(2, 3)',
+    impact:
+      context.dimension === 'stack'
+        ? 'Wrong returned value affects callers.'
+        : 'Incorrect arithmetic result.',
+    severity: context.dimension === 'stack' ? 'medium' : 'high',
+    reproductionTest: /P08 unverified/.test(run.input.task.title)
+      ? null
+      : 'adds positive and negative numbers',
+  };
+  return JSON.stringify({ findings: context.dimension === 'security-tests' ? [] : [common] });
 }
 const controller = await createController({
   token: process.env.RUNNER_SERVICE_TOKEN,

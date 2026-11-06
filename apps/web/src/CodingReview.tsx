@@ -3,13 +3,22 @@ import type { z } from 'zod';
 import type { codingRunSchema, codingReview } from '@ferweb/contracts';
 import { codingApi } from './coding-store';
 import { errorMessage } from './workspace-store';
+import { DimensionalReviewPanel } from './DimensionalReviewPanel';
 
 type Run = z.infer<typeof codingRunSchema>;
 type Review = z.infer<typeof codingReview>;
-export function CodingReview({ project, run }: { project: string; run: Run }) {
+export function CodingReview({
+  project,
+  run,
+  publicationAvailable,
+}: {
+  project: string;
+  run: Run;
+  publicationAvailable: boolean;
+}) {
   const query = codingApi.useCodingReviewQuery(
     { project, id: run.jobId },
-    { refetchOnFocus: true },
+    { refetchOnFocus: true, pollingInterval: 1500, skipPollingIfUnfocused: true },
   );
   return (
     <section aria-label="Revisión y pull request">
@@ -19,12 +28,25 @@ export function CodingReview({ project, run }: { project: string; run: Run }) {
         <p role="alert">{errorMessage(query.error)}</p>
       ) : (
         query.currentData && (
-          <ReviewEditor
-            key={`${run.jobId}:${query.currentData.review?.version ?? 0}:${query.currentData.review?.state ?? ''}`}
-            project={project}
-            run={run}
-            review={query.currentData.review}
-          />
+          <>
+            <DimensionalReviewPanel
+              project={project}
+              run={run}
+              reviews={query.currentData.dimensions}
+            />
+            {publicationAvailable && !run.teamExecutionId && (
+              <ReviewEditor
+                key={`${run.jobId}:${query.currentData.review?.version ?? 0}:${query.currentData.review?.state ?? ''}:${query.currentData.review?.approved}:${query.currentData.dimensions[0]?.executionId}:${query.currentData.dimensions[0]?.state}`}
+                project={project}
+                run={run}
+                review={query.currentData.review}
+                blocked={
+                  !!query.currentData.dimensions[0] &&
+                  query.currentData.dimensions[0].state !== 'complete'
+                }
+              />
+            )}
+          </>
         )
       )}
     </section>
@@ -34,10 +56,12 @@ function ReviewEditor({
   project,
   run,
   review,
+  blocked,
 }: {
   project: string;
   run: Run;
   review: Review | null;
+  blocked: boolean;
 }) {
   const formId = useId();
   const [title, setTitle] = useState(review?.title ?? String(run.task.title ?? '').slice(0, 200)),
@@ -128,6 +152,7 @@ function ReviewEditor({
           <label>
             <input
               type="checkbox"
+              disabled={blocked}
               checked={approved}
               onChange={(e) => setApproved(e.target.checked)}
             />
@@ -179,7 +204,7 @@ function ReviewEditor({
       ) : (
         <button
           type="button"
-          disabled={busy || dirty || !review?.approved}
+          disabled={busy || dirty || blocked || !review?.approved}
           onClick={() => {
             if (review)
               void publish({ project, id: run.jobId, version: review.version })

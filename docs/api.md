@@ -288,13 +288,23 @@ El código solo ve `POST http://127.0.0.1:9040/team/messages` con el objeto `mes
 
 | Método y ruta bajo `/api/projects/:projectId/coding/:jobId` | Entrada / resultado |
 | --- | --- |
-| `GET /review` | `{review,baseBranch}`; revisión nullable, acceso GitHub revalidado. |
+| `GET /review` | `{review,baseBranch,dimensions}`; revisión nullable y hasta diez revisiones dimensionales, acceso GitHub revalidado. |
 | `PUT /review` | `{version,title,body,branch,approved,notes}`; versión 0 para crear, después versión vigente. No escribe en GitHub. |
 | `POST /review/publish` | `{version}`; acción explícita, aprobación e informe final vigente; crea/reconcilia rama y PR draft. Devuelve la misma revisión con resultado. |
 | `GET /comparisons` | `{baseline,runs,truncated}`; hasta veinte ejecuciones de la misma tarea/repositorio con condiciones, métricas, informes, revisión y diferencias. |
 | `POST /repeat` | `{requestId,model}`; 202 con trabajo que copia entrada/criterios/herramientas/límites congelados. Solo el modelo puede variar. |
 
 `review` incluye estado `prepared/publishing/failed/published`, versión, valoración/aprobación humana, título/cuerpo/rama, fecha del primer intento, commit publicado, número/URL de PR, `baseChanged` y código de error nullable. Nunca incluye token de intento, credenciales ni lease interno. Publicación/repetición rechazan archivo, ámbitos ajenos, condiciones obsoletas o conflictos; permisos de escritura y cabeza real se verifican en el servidor. No hay merge ni force push. Una respuesta fallida puede haber producido efectos remotos; reintentar conserva las condiciones y reconcilia el mismo resultado. Contratos en [review.ts](../packages/contracts/src/review.ts); protocolo y límites en [reviews.md](reviews.md).
+
+### Revisión por dimensiones (P08)
+
+El preset `dimensional-review` usa `strategy=specialists`, `reviewMode=dimensions-v1` y cuatro claves ordenadas: `correctness,stack,security-tests,verify`. El verificador depende de los tres revisores. Admite una o dos rondas, dentro de las veinte peticiones P04; todas conservan el mismo diff, roles, criterios, presupuesto y plazo.
+
+`POST /team-plans` acepta `reviewTarget?: UUID` exclusivamente para una plantilla de revisión. Es el trabajo cuyo diff íntegro se congela; debe pertenecer al proyecto y tarea/versiones elegidas, con parada confirmada y fuentes reconstruibles. `snapshot.reviewTarget` conserva originales/finales, diff y hashes del informe, tarea, herramientas, archivos y artefacto. Preparar requiere el origen en su versión vigente. El listado de planes incluye `reviewJobId`, nullable para planes anteriores o de otros workflows. Aprobación/ejecución/cancelación mantienen las rutas y controles de P05–P07. Las etapas de ejecución añaden `iteration` (uno para históricos).
+
+`GET /coding/:jobId/review` conserva la revisión E9 y añade `dimensions[]`: ejecución, hashes, ronda actual/máxima, estado `running/complete/incomplete/stale`, dimensiones con hijos/roles/versiones/rondas y errores, hallazgos con procedencia/discrepancias, verificaciones y bloqueos. La verificación distingue `confirmed/refuted/unverifiable`, referencia nullable al informe del controlador y origen `controller-test/unverified`; el texto del agente no puede crear esa autoridad. Duplicados se reúnen por ubicación/código/evidencia/desencadenante, conservando afirmaciones discrepantes. Hallazgos graves sin reproducción independiente válida impiden completar.
+
+`PUT /review` sigue guardando borradores sin escribir GitHub. Para `approved=true`, la última revisión dimensional debe estar completa y vigente, si existe; se congela también el hash de su resultado. Una revisión posterior o un artefacto cambiado retira la aprobación vigente y bloquea `POST /review/publish` hasta revisión humana válida. Sin análisis dimensional se conserva E9. El historial anterior no se elimina. [Semántica, evidencia y límites](reviews.md#revisión-por-dimensiones-p08).
 
 ## Estrategias de contexto (E10)
 

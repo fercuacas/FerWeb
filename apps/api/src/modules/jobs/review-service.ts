@@ -12,6 +12,7 @@ import type { z } from 'zod';
 import { HttpError } from '../../http-error.js';
 import type { CodingService } from './coding-service.js';
 import { canonical, digest, publicationTree } from './review-artifacts.js';
+import { dimensionReviews, dimensionHash } from './dimension-reviews.js';
 
 const conflict = (message: string) => new HttpError(409, 'review_conflict', message);
 function dto(row: QueryResultRow) {
@@ -69,11 +70,25 @@ export class ReviewService {
   async read(owner: string, project: string, id: string) {
     const run = await this.run(owner, project, id),
       row = (await this.pool.query('SELECT * FROM coding_reviews WHERE job_id=$1', [id])).rows[0];
-    return reviewResponse.parse({ review: row ? dto(row) : null, baseBranch: run.base_branch });
+    const dimensions = await dimensionReviews(this.pool, project, id);
+    const review = row ? dto(row) : null;
+    if (
+      review &&
+      (row.report_hash !== digest(canonical(run.report)) ||
+        row.dimension_hash !== dimensionHash(dimensions) ||
+        (dimensions[0] && dimensions[0].state !== 'complete'))
+    )
+      review.approved = false;
+    return reviewResponse.parse({ review, baseBranch: run.base_branch, dimensions });
   }
   async save(owner: string, project: string, id: string, input: z.infer<typeof reviewInput>) {
     const run = await this.run(owner, project, id);
     this.ready(run);
+    const dimensions = await dimensionReviews(this.pool, project, id);
+    if (input.approved && dimensions[0] && dimensions[0].state !== 'complete')
+      throw conflict(
+        'La revisión por dimensiones está incompleta o invalidada. Conserva el borrador sin aprobar.',
+      );
     if (
       !input.branch.endsWith(`-${id}`) ||
       input.branch.includes('//') ||
@@ -101,8 +116,8 @@ export class ReviewService {
             'El borrador cambió o ya se intentó publicar. Actualiza; los reintentos conservan sus condiciones.',
           );
         await db.query(
-          `INSERT INTO coding_reviews(job_id,project_id,repository_id,title,body,branch,approved,notes,report_hash)
-          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(job_id) DO UPDATE SET title=$4,body=$5,branch=$6,approved=$7,notes=$8,report_hash=$9,version=coding_reviews.version+1,updated_at=now()`,
+          `INSERT INTO coding_reviews(job_id,project_id,repository_id,title,body,branch,approved,notes,report_hash,dimension_hash)
+          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(job_id) DO UPDATE SET title=$4,body=$5,branch=$6,approved=$7,notes=$8,report_hash=$9,dimension_hash=$10,version=coding_reviews.version+1,updated_at=now()`,
           [
             id,
             project,
@@ -113,6 +128,7 @@ export class ReviewService {
             input.approved,
             input.notes,
             digest(canonical(run.report)),
+            dimensionHash(dimensions),
           ],
         );
       });
@@ -133,6 +149,9 @@ export class ReviewService {
       );
     const run = await this.run(owner, project, id),
       tree = this.ready(run);
+    const dimensions = await dimensionReviews(this.pool, project, id);
+    if (dimensions[0] && dimensions[0].state !== 'complete')
+      throw conflict('La revisión por dimensiones no está completa y vigente.');
     // Remote access/permissions are checked on every explicit attempt, including retries.
     const access = await this.coding.github.publicationAccess(
       owner,
@@ -159,6 +178,7 @@ export class ReviewService {
         !row ||
         row.version !== version ||
         !row.approved ||
+        row.dimension_hash !== dimensionHash(dimensions) ||
         row.report_hash !== digest(canonical(run.report))
       )
         throw conflict('Guarda y aprueba la revisión vigente antes de publicar.');
@@ -174,6 +194,12 @@ export class ReviewService {
     if (review.state === 'published') return this.read(owner, project, id);
     const { api, fullName } = access;
     const base = async () => {
+      const current = await dimensionReviews(this.pool, project, id);
+      if (
+        (current[0] && current[0].state !== 'complete') ||
+        dimensionHash(current) !== review.dimension_hash
+      )
+        throw conflict('La revisión por dimensiones ha cambiado.');
       await access.check();
       if ((await api.branchHead(access.token, fullName, run.base_branch)) !== run.commit_sha)
         throw new HttpError(
@@ -270,6 +296,16 @@ export class ReviewService {
         [baseline.task_id, owner, project, baseline.repository_id],
       )
     ).rows;
+    for (const row of rows.slice(0, 20))
+      if (row.review_id && row.review.approved) {
+        const dimensions = await dimensionReviews(this.pool, project, row.job_id);
+        if (
+          row.review.report_hash !== digest(canonical(row.report)) ||
+          row.review.dimension_hash !== dimensionHash(dimensions) ||
+          (dimensions[0] && dimensions[0].state !== 'complete')
+        )
+          row.review.approved = false;
+      }
     const conditions = (row: QueryResultRow) => {
       const { model: _model, ...configuration } = codingConfiguration.parse(row.configuration);
       return {

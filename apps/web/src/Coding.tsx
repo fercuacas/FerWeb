@@ -474,9 +474,18 @@ export function CodingView({
           {!active && !visible?.teamExecutionId && (
             <CodingComparison key={job.id} project={project} id={job.id} onSelect={onSelect} />
           )}
-          {job.state === 'completed' && visible && !visible.teamExecutionId && (
-            <CodingReview key={job.id} project={project} run={visible} />
-          )}
+          {['completed', 'failed'].includes(job.state) &&
+            report.diffComplete &&
+            report.terminationConfirmed &&
+            visible &&
+            report.diff.length > 0 && (
+              <CodingReview
+                key={job.id}
+                project={project}
+                run={visible}
+                publicationAvailable={job.state === 'completed'}
+              />
+            )}
         </>
       )}
     </section>

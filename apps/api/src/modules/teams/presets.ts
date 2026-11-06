@@ -1,6 +1,7 @@
 import type { TeamPreset } from '@ferweb/contracts';
 
 export const teamPresets: TeamPreset[] = [
+  // New presets are appended to preserve the order of existing workflows.
   {
     id: 'implement-review',
     name: 'Implementar y revisar',
@@ -97,6 +98,56 @@ export const teamPresets: TeamPreset[] = [
         specialty: 'planner',
         dependsOn: ['explore', 'audit'],
         exitCriteria: ['Reunir ambas entregas y señalar límites.'],
+        requiredCapabilities: ['text', 'toolCalls'],
+        maxRequests: 2,
+      },
+    ],
+  },
+  {
+    id: 'dimensional-review',
+    strategy: 'specialists',
+    reviewMode: 'dimensions-v1',
+    name: 'Revisión por dimensiones',
+    description:
+      'Corrección, stack y seguridad/pruebas sobre un diff congelado, con verificación independiente.',
+    steps: [
+      {
+        key: 'correctness',
+        title: 'Corrección',
+        specialty: 'reviewer',
+        dependsOn: [],
+        exitCriteria: [
+          'Hallazgos estructurados con ubicación, evidencia, desencadenante e impacto.',
+        ],
+        requiredCapabilities: ['text', 'toolCalls'],
+        maxRequests: 2,
+      },
+      {
+        key: 'stack',
+        title: 'Especialista del stack',
+        specialty: 'explorer',
+        dependsOn: [],
+        exitCriteria: ['Revisar contratos y uso del stack en el mismo diff.'],
+        requiredCapabilities: ['text', 'toolCalls'],
+        maxRequests: 2,
+      },
+      {
+        key: 'security-tests',
+        title: 'Seguridad y pruebas',
+        specialty: 'security',
+        dependsOn: [],
+        exitCriteria: ['Revisar seguridad y cobertura según el alcance del diff.'],
+        requiredCapabilities: ['text', 'toolCalls'],
+        maxRequests: 2,
+      },
+      {
+        key: 'verify',
+        title: 'Verificar hallazgos graves',
+        specialty: 'tester',
+        dependsOn: ['correctness', 'stack', 'security-tests'],
+        exitCriteria: [
+          'Contrastar los hallazgos con evidencia independiente; conservar lo no verificable.',
+        ],
         requiredCapabilities: ['text', 'toolCalls'],
         maxRequests: 2,
       },

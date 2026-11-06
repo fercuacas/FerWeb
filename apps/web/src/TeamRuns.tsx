@@ -329,7 +329,9 @@ export function TeamRunDetails({ project, id }: { project: Project; id: string }
             Commit: {data.execution.commit} · Plan: {data.execution.planHash}
           </p>
           <p>
-            Una pasada{' '}
+            {data.plan.template.definition.reviewMode
+              ? `Hasta ${data.plan.maxIterations} rondas de revisión`
+              : 'Una pasada'}{' '}
             {data.plan.template.definition.strategy === 'specialists'
               ? `de especialistas · Concurrencia aprobada ${data.plan.limits.concurrency}`
               : 'secuencial · Un solo trabajo activo por proyecto'}{' '}
@@ -375,16 +377,24 @@ export function TeamRunDetails({ project, id }: { project: Project; id: string }
             {data.steps.map((step, index) => (
               <li key={step.id}>
                 <h4>
-                  {data.plan.steps[index]?.title} · {names[step.state]}
+                  {data.plan.steps[index % data.plan.steps.length]?.title} · {names[step.state]}
+                  {data.plan.template.definition.reviewMode && ` · Ronda ${step.iteration}`}
                 </h4>
-                <p>Depende de: {data.plan.steps[index]?.dependsOn.join(', ') || 'ninguna etapa'}</p>
                 <p>
-                  Rol: {data.plan.steps[index]?.agent.name} v{data.plan.steps[index]?.agent.version}
+                  Depende de:{' '}
+                  {data.plan.steps[index % data.plan.steps.length]?.dependsOn.join(', ') ||
+                    'ninguna etapa'}
+                </p>
+                <p>
+                  Rol: {data.plan.steps[index % data.plan.steps.length]?.agent.name} v
+                  {data.plan.steps[index % data.plan.steps.length]?.agent.version}
                 </p>
                 <ul>
-                  {data.plan.steps[index]?.exitCriteria.map((criterion, i) => (
-                    <li key={i}>{criterion}</li>
-                  ))}
+                  {data.plan.steps[index % data.plan.steps.length]?.exitCriteria.map(
+                    (criterion, i) => (
+                      <li key={i}>{criterion}</li>
+                    ),
+                  )}
                 </ul>
                 {step.errorCode && <p>Motivo de la etapa: {step.errorCode}</p>}
                 {step.delivery && (

@@ -698,6 +698,27 @@ export async function createController({ token, configuration, fakeProvider, nam
           run.report.tests[0].origin = readOnly
             ? 'controller-readonly-verification'
             : 'controller-verification';
+          if (
+            !run.finishing &&
+            readOnly &&
+            input.task.dimensionalReview &&
+            input.task.dimensionalReview.dimension !== 'verify' &&
+            run.report.tests[0].exitCode === 0
+          ) {
+            const probe = await exec(run, [
+              'timeout',
+              '--signal=KILL',
+              '20s',
+              'node',
+              '--test',
+              '--test-reporter=/opt/ferweb/review-reporter.mjs',
+            ]);
+            run.report.tests.push({
+              ...probe,
+              command: 'node --test --test-reporter=/opt/ferweb/review-reporter.mjs',
+              origin: 'controller-review-tests',
+            });
+          }
           if (!run.finishing)
             await finish(run, run.report.tests[0].exitCode === 0 ? 'completed' : 'tests_failed');
         } catch {

@@ -23,6 +23,7 @@ import {
   teamExecutionResponse,
   teamMessagesResponse,
   type TeamDefinition,
+  reviewResponse,
 } from '@ferweb/contracts';
 import { createPool } from '../src/database.js';
 import { readConfig } from '../src/config.js';
@@ -39,6 +40,7 @@ import { TeamService } from '../src/modules/teams/service.js';
 import { githubFixture } from '../../../tests/fixtures/github.mjs';
 import { codingCorpus } from '../../../tests/fixtures/coding.mjs';
 import { skillFixtureText, skillManifestFixture } from '../../../tests/fixtures/skills.mjs';
+import { differences } from '../../runner/files.mjs';
 
 test('Codex CLI with simulated Responses: isolated real containers, immutable input, reports and cancellation', async (t) => {
   const config = readConfig(),
@@ -318,7 +320,13 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
         const catalog = teamTemplatesResponse.parse(await (await read(endpoint)).json());
         assert.deepEqual(
           catalog.presets.map((item) => item.id),
-          ['implement-review', 'research-answer', 'review-diff', 'specialists-review'],
+          [
+            'implement-review',
+            'research-answer',
+            'review-diff',
+            'specialists-review',
+            'dimensional-review',
+          ],
         );
         const roles = `/projects/${project}/agents`;
         const createdRole = await post(roles, { template: 'implementer' });
@@ -1722,6 +1730,349 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
               ).rows[0].n === 0,
           );
         }
+      },
+    );
+    await t.test(
+      'dimensional reviews freeze diffs, deduplicate with provenance and require independent severe verification',
+      async () => {
+        if (!worker || worker.exitCode !== null || worker.signalCode !== null) await startWorker();
+        const post = (path: string, body: unknown) => request('POST', path, body, cookie);
+        const roles = new Map<string, string>();
+        for (const template of ['reviewer', 'explorer', 'security', 'tester']) {
+          const response = await post(`/projects/${project}/agents`, { template });
+          assert.equal(response.status, 201, await response.clone().text());
+          roles.set(template, agentMutationResponse.parse(await response.json()).role.id);
+        }
+        const catalog = teamTemplatesResponse.parse(
+          await (
+            await request('GET', `/projects/${project}/team-templates`, undefined, cookie)
+          ).json(),
+        );
+        const preset = catalog.presets.find((p) => p.id === 'dimensional-review')!;
+        const definition: TeamDefinition = {
+          name: 'P08 dimensional fixture',
+          strategy: 'specialists',
+          reviewMode: 'dimensions-v1',
+          description: 'One frozen diff and a bounded review/verification round.',
+          maxIterations: 1,
+          limits: { maxRequests: 8, timeoutMs: 180000, concurrency: 1 },
+          steps: preset.steps.map(({ specialty, ...step }) => ({
+            ...step,
+            role: { id: roles.get(specialty)!, version: 1 },
+          })),
+        };
+        const template = teamTemplateResponse
+          .pick({ template: true })
+          .parse(
+            await (
+              await post(`/projects/${project}/team-templates`, { definition, preset: preset.id })
+            ).json(),
+          ).template;
+        const ownerReview = async (id: string) => {
+          const response = await request(
+            'GET',
+            `/projects/${project}/coding/${id}/review`,
+            undefined,
+            cookie,
+          );
+          assert.equal(response.status, 200, await response.clone().text());
+          return reviewResponse.parse(await response.json());
+        };
+        const templateTwo = teamTemplateResponse.pick({ template: true }).parse(
+          await (
+            await post(`/projects/${project}/team-templates`, {
+              definition: {
+                ...definition,
+                maxIterations: 2,
+                limits: { ...definition.limits, maxRequests: 16 },
+              },
+            })
+          ).json(),
+        ).template;
+        async function review(title: string, rounds = 1) {
+          const source = await enqueue(title);
+          const ended = await terminal(source.job.id);
+          assert.equal(
+            ended.job.state,
+            title.includes('reproduced target') ? 'failed' : 'completed',
+          );
+          const body = {
+            requestId: randomUUID(),
+            reviewTarget: source.job.id,
+            taskId: source.body.taskId,
+            taskVersion: source.body.taskVersion,
+            templateId: rounds === 2 ? templateTwo.id : template.id,
+            templateVersion: 1,
+            mode: 'team',
+            executionId: 'codex-v1',
+            model: 'fixture-codex',
+          };
+          assert.equal(
+            (await post(`/projects/${project}/team-plans`, { ...body, reviewTarget: undefined }))
+              .status,
+            422,
+          );
+          const prepared = await post(`/projects/${project}/team-plans`, body);
+          assert.equal(prepared.status, 201, await prepared.clone().text());
+          const plan = teamPlanResponse.parse(await prepared.json()).plan;
+          assert.ok(plan.snapshot.reviewTarget?.diffHash);
+          assert.equal(plan.snapshot.reviewTarget.jobId, source.job.id);
+          const original = await report(source.job.id);
+          assert.equal(
+            original.report!.diff[0]!.afterHash,
+            plan.snapshot.reviewTarget.diff[0]!.afterHash,
+          );
+          const approval = await post(`/projects/${project}/team-plans/${plan.id}/approve`, {
+            hash: plan.hash,
+            version: 1,
+          });
+          assert.equal(approval.status, 200, await approval.clone().text());
+          const started = await post(`/projects/${project}/team-plans/${plan.id}/execute`, {
+            requestId: randomUUID(),
+            hash: plan.hash,
+            version: 1,
+            commit: 'a'.repeat(40),
+          });
+          assert.equal(started.status, 202, await started.clone().text());
+          const execution = teamExecutionResponse.parse(await started.json()).execution;
+          const data = await waitFor(
+            async () => {
+              const value = await teamDetail(execution.id);
+              return ['completed', 'failed', 'cancelled'].includes(value.execution.state)
+                ? value
+                : false;
+            },
+            rounds === 2 ? 120000 : 60000,
+          ).catch(async () => {
+            const rows = (
+              await pool.query(
+                'SELECT s.position,s.iteration,j.state,j.error_code,j.attempt FROM team_execution_steps s LEFT JOIN jobs j ON j.id=s.job_id WHERE s.execution_id=$1 ORDER BY position',
+                [execution.id],
+              )
+            ).rows;
+            throw Error('P08 team did not terminate: ' + JSON.stringify(rows));
+          });
+          const result = (await ownerReview(source.job.id)).dimensions[0]!;
+          return { source, data, result, plan };
+        }
+        const valid = await review('P08 dimensions refuted');
+        assert.equal(valid.data.execution.state, 'completed');
+        assert.equal(valid.result.state, 'complete', JSON.stringify(valid.result.blockers));
+        assert.equal(valid.result.findings.length, 1);
+        const finding = valid.result.findings[0]!;
+        assert.equal(finding.provenance.length, 2);
+        assert.ok(finding.discrepancies.includes('severity'));
+        assert.ok(finding.discrepancies.includes('impact'));
+        assert.equal(finding.finding.severity, 'high');
+        assert.equal(finding.verification.status, 'refuted');
+        assert.equal(finding.verification.origin, 'controller-test');
+        const proofRun = await report(finding.verification.proof!.jobId);
+        assert.equal(
+          proofRun.report!.tests[finding.verification.proof!.testIndex]!.origin,
+          'controller-review-tests',
+        );
+        assert.ok(
+          proofRun.report!.tests[finding.verification.proof!.testIndex]!.output.includes(
+            finding.verification.proof!.quote,
+          ),
+        );
+        assert.equal((await ownerReview(valid.source.job.id)).review, null);
+        const conflictMessage = randomUUID(),
+          conflictStep = valid.data.steps[0]!;
+        await pool.query(
+          "INSERT INTO team_messages(id,execution_id,sequence,request_id,sender,sender_step_id,sender_job_id,kind,text,payload_hash) VALUES($1,$2,99999,$3,'agent',$4,$5,'conflict','Fixture unresolved team conflict',$6)",
+          [
+            conflictMessage,
+            valid.data.execution.id,
+            randomUUID(),
+            conflictStep.id,
+            conflictStep.jobId,
+            '0'.repeat(64),
+          ],
+        );
+        assert.ok(
+          (await ownerReview(valid.source.job.id)).dimensions[0]!.blockers.includes(
+            'team_message_conflict',
+          ),
+        );
+        await pool.query('DELETE FROM team_messages WHERE id=$1', [conflictMessage]);
+        const verifierStep = valid.data.steps.find((s) => s.key === 'verify')!;
+        const originalVerifier = (
+          await pool.query('SELECT delivery FROM team_execution_steps WHERE id=$1', [
+            verifierStep.id,
+          ])
+        ).rows[0].delivery;
+        const forged = {
+          ...originalVerifier,
+          result: JSON.stringify({
+            verifications: [
+              {
+                findingId: finding.id,
+                status: 'confirmed',
+                reason: 'An agent claim cannot manufacture controller evidence.',
+                proof: {
+                  jobId: randomUUID(),
+                  testIndex: 0,
+                  quote: 'not ok 1 - adds positive and negative numbers',
+                },
+              },
+            ],
+          }),
+        };
+        await pool.query('UPDATE team_execution_steps SET delivery=$2 WHERE id=$1', [
+          verifierStep.id,
+          JSON.stringify(forged),
+        ]);
+        assert.equal(
+          (await ownerReview(valid.source.job.id)).dimensions[0]!.findings[0]!.verification.status,
+          'unverifiable',
+        );
+        await pool.query('UPDATE team_execution_steps SET delivery=$2 WHERE id=$1', [
+          verifierStep.id,
+          JSON.stringify(originalVerifier),
+        ]);
+        assert.equal(
+          (
+            await request(
+              'GET',
+              `/projects/${project}/coding/${valid.source.job.id}/review`,
+              undefined,
+              foreign,
+            )
+          ).status,
+          404,
+        );
+        const draft = {
+          // Human approval remains separate even after dimensional completion.
+          version: 0,
+          title: 'P08 reviewed proposal',
+          body: 'Explicit human review is still required.',
+          branch: `ferweb/p08-${valid.source.job.id}`,
+          approved: true,
+          notes: 'Reviewed independently.',
+        };
+        const saved = await request(
+          'PUT',
+          `/projects/${project}/coding/${valid.source.job.id}/review`,
+          draft,
+          cookie,
+        );
+        assert.equal(saved.status, 200, await saved.clone().text());
+        assert.equal(reviewResponse.parse(await saved.json()).review!.approved, true);
+        fixture.state.denied = true;
+        assert.equal(
+          (
+            await request(
+              'GET',
+              `/projects/${project}/team-plans/${valid.plan.id}`,
+              undefined,
+              cookie,
+            )
+          ).status,
+          403,
+        );
+        fixture.state.denied = false;
+        await github.connect(owner.id, 71);
+        const restoredLink = (await github.read(owner.id, project)).link!;
+        await github.sync(owner.id, project, restoredLink.version);
+        const changedReport = {
+          ...(await report(valid.source.job.id)).report!,
+          diff: differences(
+            valid.plan.snapshot.reviewTarget!.beforeFiles,
+            valid.plan.snapshot.reviewTarget!.files.map((f) =>
+              f.path === 'src/add.cjs'
+                ? { ...f, content: 'exports.add = (a, b) => a + b + 2;\n' }
+                : f,
+            ),
+          ),
+        };
+        await pool.query('UPDATE coding_runs SET report=$2 WHERE job_id=$1', [
+          valid.source.job.id,
+          JSON.stringify(changedReport),
+        ]);
+        const stale = await ownerReview(valid.source.job.id);
+        assert.equal(stale.dimensions[0]!.state, 'stale');
+        assert.equal(stale.review!.approved, false);
+        assert.equal(
+          (
+            await post(`/projects/${project}/coding/${valid.source.job.id}/review/publish`, {
+              version: 1,
+            })
+          ).status,
+          409,
+        );
+        const confirmed = await review('P08 reproduced target');
+        assert.equal(confirmed.result.state, 'complete', JSON.stringify(confirmed.result.blockers));
+        assert.equal(confirmed.result.findings[0]!.verification.status, 'confirmed');
+        assert.equal(confirmed.result.findings[0]!.verification.origin, 'controller-test');
+        const unverified = await review('P08 unverified');
+        assert.equal(unverified.result.state, 'incomplete');
+        assert.equal(unverified.result.findings[0]!.verification.status, 'unverifiable');
+        assert.ok(unverified.result.blockers.some((b) => b.startsWith('severe_unverified')));
+        const blockedDraft = { ...draft, branch: `ferweb/p08-${unverified.source.job.id}` };
+        assert.equal(
+          (
+            await request(
+              'PUT',
+              `/projects/${project}/coding/${unverified.source.job.id}/review`,
+              blockedDraft,
+              cookie,
+            )
+          ).status,
+          409,
+        );
+        assert.equal(
+          (
+            await request(
+              'PUT',
+              `/projects/${project}/coding/${unverified.source.job.id}/review`,
+              { ...blockedDraft, approved: false },
+              cookie,
+            )
+          ).status,
+          200,
+        );
+        const invalid = await review('P08 invalid dimension');
+        assert.equal(invalid.result.state, 'incomplete');
+        assert.equal(invalid.result.dimensions.find((d) => d.key === 'stack')!.state, 'invalid');
+        const corrected = await review('P08 corrected review', 2);
+        assert.equal(corrected.result.state, 'complete', JSON.stringify(corrected.result.blockers));
+        assert.equal(corrected.result.iteration, 2);
+        assert.equal(corrected.result.maxIterations, 2);
+        assert.equal(corrected.data.steps.length, 8);
+        assert.ok(
+          corrected.result.dimensions.some(
+            (d) => d.iteration === 1 && d.key === 'stack' && d.state === 'invalid',
+          ),
+        );
+        assert.ok(
+          corrected.result.dimensions.some(
+            (d) => d.iteration === 2 && d.key === 'stack' && d.state === 'verified',
+          ),
+        );
+        assert.ok(corrected.result.findings[0]!.provenance.some((p) => p.iteration === 1));
+        assert.ok(corrected.result.findings[0]!.provenance.some((p) => p.iteration === 2));
+        const admissions = (
+          await pool.query(
+            'SELECT count(*)::int AS n FROM execution_request_admissions a JOIN execution_budget_steps s ON s.job_id=a.job_id WHERE s.budget_id=$1',
+            [corrected.data.execution.budgetId],
+          )
+        ).rows[0];
+        assert.equal(admissions.n, 16);
+        const failed = await review('P08 verifier failure', 2);
+        assert.equal(failed.data.steps.length, 4);
+        assert.equal(failed.data.execution.state, 'failed');
+        assert.equal(failed.result.state, 'incomplete');
+        assert.equal(failed.result.dimensions.find((d) => d.key === 'verify')!.state, 'failed');
+        assert.equal(
+          (
+            await pool.query(
+              "SELECT count(*)::int AS n FROM jobs WHERE project_id=$1 AND state IN ('pending','running')",
+              [project],
+            )
+          ).rows[0].n,
+          0,
+        );
       },
     );
     await t.test(

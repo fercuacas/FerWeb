@@ -16,6 +16,7 @@ import type { CodingService } from '../jobs/coding-service.js';
 import { canonical, digest } from '../jobs/review-artifacts.js';
 import { TeamService } from './service.js';
 import { TeamMessages, systemTeamMessage } from './messages.js';
+import { gatherDimensionalReview } from '../jobs/dimension-reviews.js';
 
 const active = (state: string) => ['pending', 'running'].includes(state);
 const missing = () => new HttpError(404, 'not_found', 'No se ha encontrado la ejecución.');
@@ -154,11 +155,14 @@ export class TeamExecutions {
         [id],
       )
     ).rows[0].n;
-    const required = steps.filter(
-      (step) =>
-        row.snapshot.plan.template.definition.strategy !== 'specialists' ||
-        row.snapshot.plan.steps.at(-1).key !== step.step_key,
-    );
+    const latestIteration = Math.max(...steps.map((s) => s.iteration));
+    const required = steps
+      .filter((s) => s.iteration === latestIteration)
+      .filter(
+        (step) =>
+          row.snapshot.plan.template.definition.strategy !== 'specialists' ||
+          row.snapshot.plan.steps.at(-1).key !== step.step_key,
+      );
     const received = required
       .filter((step) => step.delivery?.verified)
       .map((step) => step.step_key);
@@ -178,6 +182,7 @@ export class TeamExecutions {
       steps: steps.map((step) => ({
         id: step.id,
         position: step.position,
+        iteration: step.iteration,
         key: step.step_key,
         jobId: step.job_id,
         state: step.state ?? (active(row.state) ? 'pending' : 'skipped'),
@@ -451,16 +456,51 @@ export class TeamExecutions {
       ended.delivery = await this.saveDelivery(run, ended, specialists);
       if (!ended.delivery.verified) throw conflict(ended.error_code ?? 'team_delivery_unverified');
     }
-    if (steps.every((step) => step.delivery?.verified)) {
+    const iteration = Math.max(...steps.map((s) => s.iteration));
+    const currentSteps = steps.filter((s) => s.iteration === iteration);
+    if (currentSteps.every((step) => step.delivery?.verified)) {
+      if (
+        snapshot.reviewTarget &&
+        iteration < snapshot.maxIterations &&
+        gatherDimensionalReview(run, steps).blockers.length
+      ) {
+        await this.coding.jobs.queue.tx(async (db) => {
+          const locked = (
+            await db.query(
+              'SELECT state,cancel_requested FROM team_executions WHERE id=$1 FOR UPDATE',
+              [run.id],
+            )
+          ).rows[0];
+          if (!active(locked.state) || locked.cancel_requested) return;
+          const next = await db.query(
+            'SELECT 1 FROM team_execution_steps WHERE execution_id=$1 AND iteration=$2',
+            [run.id, iteration + 1],
+          );
+          if (next.rowCount) return;
+          for (const [index, step] of snapshot.steps.entries())
+            await db.query(
+              'INSERT INTO team_execution_steps(execution_id,position,step_key,iteration) VALUES($1,$2,$3,$4)',
+              [run.id, iteration * snapshot.steps.length + index + 1, step.key, iteration + 1],
+            );
+          await teamEvent(
+            db,
+            run.id,
+            'review_correction',
+            'Ronda de corrección de hallazgos con el mismo diff, criterios, presupuesto y plazo.',
+            { iteration: iteration + 1 },
+          );
+        });
+        return;
+      }
       await this.close(run.id, 'completed', null);
       return;
     }
-    const completed = steps.filter((step) => step.delivery?.verified);
+    const completed = currentSteps.filter((step) => step.delivery?.verified);
     const current = specialists
-      ? steps.find(
+      ? currentSteps.find(
           (item) =>
             !item.job_id &&
-            snapshot.steps[item.position - 1]!.dependsOn.every((key) =>
+            snapshot.steps[(item.position - 1) % snapshot.steps.length]!.dependsOn.every((key) =>
               completed.some((done) => done.step_key === key),
             ),
         )
@@ -477,7 +517,7 @@ export class TeamExecutions {
       link.snapshot?.commit !== run.commit_sha
     )
       throw conflict('team_source_changed');
-    const step = snapshot.steps[current.position - 1]!;
+    const step = snapshot.steps[(current.position - 1) % snapshot.steps.length]!;
     if (step.dependsOn.some((key) => !completed.some((item) => item.step_key === key)))
       throw conflict('team_dependency_missing');
     const previous = specialists ? undefined : steps[current.position - 2];
@@ -497,8 +537,9 @@ export class TeamExecutions {
         timeoutMs: snapshot.limits.timeoutMs,
         agent: step.role,
         budgetId: run.budget_id,
-        attribution:
-          specialists && current.position === steps.length
+        attribution: snapshot.reviewTarget
+          ? 'reviewer'
+          : specialists && current.position === steps.length
             ? 'summary'
             : step.requiredCapabilities.includes('workspaceWrite')
               ? 'agent'
@@ -509,7 +550,11 @@ export class TeamExecutions {
         stepId: current.id,
         snapshot,
         stepKey: step.key,
-        ...(previous && { files: codingWorkspace.parse(previous.output_files) }),
+        ...(snapshot.reviewTarget
+          ? { files: snapshot.reviewTarget.files }
+          : previous
+            ? { files: codingWorkspace.parse(previous.output_files) }
+            : {}),
         deliveries: completed.map((item) => teamDelivery.parse(item.delivery)),
       },
     );
@@ -582,8 +627,8 @@ export class TeamExecutions {
         )) {
           const row = (
             await db.query(
-              'SELECT id FROM team_execution_steps WHERE execution_id=$1 AND step_key=$2',
-              [run.id, target.key],
+              'SELECT id FROM team_execution_steps WHERE execution_id=$1 AND step_key=$2 AND iteration=$3',
+              [run.id, target.key, current.iteration],
             )
           ).rows[0];
           await systemTeamMessage(

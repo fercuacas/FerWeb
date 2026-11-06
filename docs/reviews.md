@@ -2,7 +2,7 @@
 
 ## Recorrido desde la web
 
-Esta publicación y repetición individual corresponde a trabajos Codex independientes. Los hijos de equipos P06 muestran sus informes y diff, pero no permiten publicar ni repetirse por separado; requieren la futura revisión agregada del equipo. [Equipo secuencial](codex.md#equipo-secuencial-duradero-p06)
+Esta publicación y repetición individual corresponde a trabajos Codex independientes. P08 añade revisión por dimensiones del diff de un trabajo, incluidos hijos con cambios; estos siguen sin publicar ni repetirse por separado. La publicación del resultado de un equipo completo permanece pendiente. [Equipo secuencial](codex.md#equipo-secuencial-duradero-p06)
 
 En un proyecto propio, vincula y sincroniza el repositorio, crea una tarea y abre **Trabajos → Nueva tarea con Codex**. La ejecución conserva tarea, criterios, archivos y commit inicial. El visor muestra diff por archivo, comandos, salidas y códigos de pruebas, uso disponible y limitaciones. Los resultados del agente y la verificación del controlador conservan su origen; superar pruebas no acredita por sí solo los criterios.
 
@@ -14,6 +14,33 @@ Cuando termine como completada, en **Revisión y pull request**:
 4. Abre el enlace de la PR. La revisión y el resultado sobreviven a recargas/reinicio de API. Si un intento queda interrumpido, actualiza y reintenta la misma publicación. La reserva caduca a los tres minutos; antes devuelve conflicto. No cambies sus condiciones para recuperarla.
 
 El archivo de un proyecto bloquea preparación, repetición y publicación. La lectura sigue requiriendo propiedad y acceso actual al repositorio. La revocación impide servir informes y revisiones; no elimina cambios que ya se hayan creado en GitHub.
+
+## Revisión por dimensiones (P08)
+
+1. En **Agentes → Equipos y plantillas**, crea **Revisión por dimensiones**. Asigna versiones compatibles con `node-readonly-v1` a corrección, especialista del stack, seguridad/pruebas y verificador. Ajusta su alcance mediante roles, skills y criterios de salida; no se conceden herramientas nuevas.
+2. Abre el informe de un trabajo con diff completo y parada confirmada. En **Revisión por dimensiones**, elige plantilla/modelo y pulsa **Preparar revisión del diff**. También se pueden investigar trabajos fallidos con artefactos íntegros; esto no los habilita para publicar.
+3. Revisa el diff congelado, sus hashes, versiones y presupuesto en el plan; aprueba la copia y ejecuta. Preparar/aprobar no consume inferencia. El workflow conserva los límites de P07: dos globales y uno por proyecto por defecto; solicitar dos lectores necesita la configuración explícita del proyecto.
+4. Consulta dimensiones, hallazgos, procedencia, discrepancias y evidencia desde el informe original. El historial y los planes se recuperan al recargar; una revalidación fallida oculta los datos privados.
+
+Los tres revisores reciben exactamente los mismos archivos finales reconstruidos desde el diff y los originales como referencia congelada; no el HEAD móvil ni cambios de sus compañeros. El plan guarda trabajo origen y hashes del informe, diff, tarea, herramientas y archivos. Cambiar esos artefactos invalida la revisión; también se comprueban antes de aprobar, iniciar, avanzar y servir entrada al hijo. La tarea debe corresponder a la versión del trabajo origen al preparar.
+
+El origen debe ser reconstruible según las reglas de E9; conserva sus exclusiones de rutas y workflows. Esta fase sigue usando herramientas Node y no amplía los perfiles ni los permisos de publicación.
+
+Las salidas son JSON estricto. Cada hallazgo declara código de incidencia, ubicación/lado antes o después, rango de hasta cincuenta líneas, extracto exacto, condición desencadenante, impacto, título, severidad y nombre de una prueba de reproducción o `null`. El servidor comprueba la ubicación contra los archivos congelados y exige que pertenezca al diff. Una salida inválida conserva la dimensión como inválida y la revisión incompleta. Cada revisor admite hasta diez hallazgos por ronda.
+
+La clave de deduplicación combina código, ruta/lado, rango, evidencia y desencadenante normalizado. Los títulos libres no deciden igualdad. Se conservan todas las aportaciones con hijo, dimensión, ronda, rol/versión y texto; diferencias de severidad, impacto o reproducción quedan explícitas. Se toma la severidad más alta declarada, sin eliminar discrepancias.
+
+El controlador ejecuta adicionalmente el comando fijo `node --test` con un **reporter propio de confianza**, veinte segundos y salida acotada sobre el snapshot de solo lectura. Conserva registros `ferweb-test-v1` del flujo de eventos, separados del stdout/stderr del repositorio y de comandos del agente. El verificador posterior recibe esos informes y los hallazgos validados; no aporta comandos nuevos. Para confirmar/refutar, debe referenciar hijo, índice y registro exacto de una prueba con el nombre indicado, resultado no omitido y terminación válida. Una referencia ajena, una afirmación sin prueba, resultados ambiguos/recortados o un nombre ausente permanecen **no verificables**. [Reporters de Node](https://nodejs.org/docs/latest-v24.x/api/test.html#custom-reporters).
+
+La prueba referenciada debe proceder de un archivo congelado bajo `/workspace`. Para confirmar se exige un fallo de aserción observado; errores de entorno o de ejecución del test, incluidos permisos, dependencias ausentes y plazos, quedan no verificables. Una prueba omitida o marcada como pendiente tampoco confirma ni refuta. El texto impreso por un test no crea registros de verificación.
+
+**Confirmado/refutado se refiere al resultado observado de esa reproducción concreta**. La relación entre el caso y el impacto requiere revisión humana; pruebas del repositorio pueden ser insuficientes. El verificador no convierte consenso entre modelos ni una comprobación de montaje en evidencia funcional. Para hallazgos `critical/high`, la falta de evidencia independiente válida bloquea la revisión. Los perfiles sin una prueba reproducible compatible conservan esa limitación; no se instalan dependencias ni se invoca otro proveedor.
+
+La plantilla autoriza una o dos rondas como máximo. Una segunda ronda solo corrige salidas/hallazgos incompletos tras terminar técnicamente todos los hijos de la primera; conserva criterios, fuentes, roles y el **mismo** presupuesto/plazo P04. Con dos peticiones por etapa, dos rondas requieren hasta dieciséis peticiones. Cada ronda crea hijos rastreados nuevos; no reinicia código ni repone reservas. Los hallazgos graves anteriores se mantienen en la reunión aunque un revisor deje de mencionarlos. Las dimensiones inválidas previas permanecen en el historial y una corrección posterior se muestra separada. Un hijo fallido/cancelado detiene el equipo sin intentar otra ronda ni aparentar aprobación. Corregir fuentes requiere una ejecución de código explícita y revisar su diff nuevo.
+
+`GET /review` reúne hasta diez revisiones duraderas, con estados `running/complete/incomplete/stale`. La revisión humana se vincula al informe y al resultado dimensional más reciente. Si este cambia, está incompleto o queda invalidado, la lectura deja de mostrar la aprobación como vigente y el servidor rechaza aprobar/publicar; permite conservar un borrador sin aprobar. Un recorrido completo no marca la casilla humana. Una revisión posterior válida puede resolver una anterior incompleta, que sigue visible en el historial. Guardar aprobación y **Publicar PR borrador** mantienen acciones separadas y nunca se ejecutan desde un acuerdo entre modelos.
+
+Se reutilizan planes, cola, presupuesto, mensajes y entregas SQL de P05–P07. La migración 017 añade el vínculo de aprobación y el índice por trabajo revisado; 018 identifica rondas y admite las ocho etapas máximas del workflow. Se conservan las revisiones E9 sin análisis dimensional y su recorrido individual. No se publica el conjunto de un equipo ni se habilitan escritores paralelos.
 
 ## Permisos de la App
 
@@ -52,6 +79,8 @@ El controlador resuelve y fija el ID inmutable de la imagen del sandbox. Guarda 
 Las condiciones diferentes se señalan explícitamente por commit, archivos, tarea/criterios, herramientas/límites o configuración. Un entorno antiguo desconocido nunca se declara comparable. Hay **un único ejecutor Codex**: repetir modelos permite comparar ejecuciones/modelos con ese ejecutor; no acredita comparación entre motores de agentes distintos ni coordinación multiagente.
 
 ## Pruebas y aceptación externa
+
+P08 añade [integración de dimensiones](../apps/api/test/coding.integration.ts), [frontera del reporter](../apps/api/test/coding-boundaries.test.ts) y [recorrido Chromium](../tests/browser/dimension-reviews.spec.ts). Se comprueban duplicados, discrepancias, prueba independiente con resultado confirmado/refutado/no verificable, referencias forjadas, fallos de revisores/verificador, conflictos pendientes, rondas/cupo compartido, invalidación, acceso, recarga y móvil. El reporter se prueba con Node real, fallos de aserción/entorno, omisiones y stdout que intenta imitar registros. CLI, procesos, SQL y contenedores son reales; Responses/GitHub están simulados y no acreditan calidad de modelos reales.
 
 - [Integración de revisión](../apps/api/test/review.integration.ts): SQL/HTTP reales; informes sembrados explícitamente y GitHub con efectos remotos en memoria. Cubre permisos, aprobación/versiones, base cambiante, ramas ajenas, respuestas perdidas tras commit/ref/PR, concurrencia, reserva expirada, revocación, integridad y condiciones de comparación.
 - [Fronteras](../apps/api/test/coding-boundaries.test.ts): reconstrucción exacta, altas/bajas/vacíos/UTF-8/saltos finales, permisos ejecutables y rechazo de paths/hashes manipulados.

@@ -163,7 +163,7 @@ function TemplateEditor({
           <select
             value={draft.strategy ?? 'sequential'}
             onChange={(e) => {
-              const { strategy: _, ...rest } = draft;
+              const { strategy: _, reviewMode: _reviewMode, ...rest } = draft;
               setDraft({
                 ...rest,
                 ...(e.target.value === 'specialists' && {
@@ -200,7 +200,7 @@ function TemplateEditor({
           <input
             type="number"
             min={1}
-            max={draft.strategy === 'specialists' ? 1 : 3}
+            max={draft.reviewMode ? 2 : draft.strategy === 'specialists' ? 1 : 3}
             required
             value={draft.maxIterations}
             onChange={(e) => setDraft({ ...draft, maxIterations: Number(e.target.value) })}
@@ -459,6 +459,7 @@ export function TeamTemplates({ project }: { project: Project }) {
     const initial: TeamDefinition = template?.latest.definition ?? {
       name: preset?.name ?? '',
       ...(preset?.strategy && { strategy: preset.strategy }),
+      ...(preset?.reviewMode && { reviewMode: preset.reviewMode }),
       description: preset?.description ?? '',
       maxIterations: 1,
       limits: { maxRequests: 10, timeoutMs: 300000, concurrency: 1 },

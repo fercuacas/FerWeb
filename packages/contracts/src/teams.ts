@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { reviewTarget } from './review.js';
 import { agentCapability, agentSelection, agentTemplateId } from './agents.js';
 import { codingAgentSnapshot } from './coding.js';
 import { executionOptionSchema } from './execution.js';
@@ -15,6 +16,7 @@ export const teamPresetId = z.enum([
   'research-answer',
   'review-diff',
   'specialists-review',
+  'dimensional-review',
 ]);
 export const teamStep = z.strictObject({
   key,
@@ -42,12 +44,24 @@ export const teamDefinition = z
   .strictObject({
     name: text.trim().min(1).max(120),
     strategy: z.literal('specialists').optional(),
+    reviewMode: z.literal('dimensions-v1').optional(),
     description: text.trim().max(1000),
     maxIterations: z.number().int().min(1).max(3),
     limits: executionBudgetLimits,
     steps: z.array(teamStep).min(1).max(6),
   })
   .superRefine((value, ctx) => {
+    if (
+      value.reviewMode &&
+      (value.strategy !== 'specialists' ||
+        value.steps.map((s) => s.key).join(',') !== 'correctness,stack,security-tests,verify')
+    )
+      ctx.addIssue({
+        code: 'custom',
+        path: ['steps'],
+        message:
+          'La revisión requiere corrección, stack, seguridad/pruebas y verificador, en ese orden.',
+      });
     if (value.strategy === 'specialists') {
       const roots = value.steps.slice(0, -1),
         summary = value.steps.at(-1)!;
@@ -57,13 +71,13 @@ export const teamDefinition = z
         roots.some((step) => step.dependsOn.length) ||
         summary.dependsOn.length !== roots.length ||
         roots.some((step) => !summary.dependsOn.includes(step.key)) ||
-        value.maxIterations !== 1 ||
+        value.maxIterations > (value.reviewMode ? 2 : 1) ||
         value.steps.some((step) => step.requiredCapabilities.includes('workspaceWrite'))
       )
         ctx.addIssue({
           code: 'custom',
           message:
-            'Especialistas requiere entre dos y cuatro etapas independientes de solo lectura y un resumen dependiente de todas, en una pasada.',
+            'Especialistas requiere etapas independientes de solo lectura y reunión final: una pasada, o hasta dos rondas de revisión P08.',
           path: ['steps'],
         });
     } else if (value.limits.concurrency !== 1)
@@ -107,6 +121,7 @@ export const teamDefinition = z
       });
   });
 export const teamPreset = z.object({
+  reviewMode: z.literal('dimensions-v1').optional(),
   strategy: z.literal('specialists').optional(),
   id: teamPresetId,
   name: z.string(),
@@ -141,6 +156,7 @@ export const archiveTeamTemplateInput = z.strictObject({ version });
 export const prepareTeamPlanInput = z
   .strictObject({
     requestId: z.uuid(),
+    reviewTarget: z.uuid().optional(),
     taskId: z.uuid(),
     taskVersion: z.number().int().positive().max(2_147_483_647),
     templateId: z.uuid(),
@@ -170,6 +186,7 @@ export function classifyPlanTask(task: { description: string; acceptanceCriteria
   >;
 }
 export const teamPlanSnapshot = z.object({
+  reviewTarget: reviewTarget.optional(),
   version: z.literal(1),
   template: teamTemplateVersion,
   task: z.object({
@@ -203,6 +220,7 @@ export const teamPlan = z.object({
   snapshot: teamPlanSnapshot,
 });
 export const teamPlanSummary = teamPlan.omit({ snapshot: true }).extend({
+  reviewJobId: z.uuid().nullable(),
   taskId: z.uuid(),
   title: z.string(),
   templateName: z.string(),
@@ -270,6 +288,7 @@ export const teamExecutionResponse = z.object({
     z.object({
       id: z.uuid(),
       position: z.number().int(),
+      iteration: z.number().int().min(1).max(2),
       key: z.string(),
       jobId: z.uuid().nullable(),
       state: z.enum(['pending', 'running', 'completed', 'failed', 'cancelled', 'skipped']),

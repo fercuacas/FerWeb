@@ -9,7 +9,9 @@ test.afterEach(async ({ page }) => {
 test('Codex task UI freezes a commit, shows a verified diff, reloads evidence and stops isolated work', async ({
   page,
 }) => {
-  test.setTimeout(60000);
+  // Covers roles/skills, execution, review, publication, comparison and cancellation;
+  // per-job deadlines and assertions keep their own shorter limits.
+  test.setTimeout(90000);
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
   await page.goto('/');

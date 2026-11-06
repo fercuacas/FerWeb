@@ -159,6 +159,12 @@ Cada mensaje tiene un destinatario o el coordinador, hasta 2.000 caracteres/8 kB
 
 Pruebas: [integración](../apps/api/test/coding.integration.ts), [fronteras](../apps/api/test/coding-boundaries.test.ts) y [Chromium](../tests/browser/specialists.spec.ts). El entorno desechable configura dos explícitamente y usa CLI/comandos/contenedores reales con proveedor simulado. La capacidad de modelos externos o locales no se infiere de estas pruebas. [Contrato HTTP](api.md#especialistas-y-mensajes-p07)
 
+## Revisión por dimensiones (P08)
+
+El preset **Revisión por dimensiones** utiliza el perfil de solo lectura de P07 para corrección, stack, seguridad/pruebas y verificador sobre el mismo diff congelado. Se prepara desde el informe del trabajo y mantiene aprobación/ejecución explícitas. Admite hasta dos rondas aprobadas de corrección de hallazgos, compartiendo el presupuesto y plazo; no modifica fuentes ni criterios. Los fallos de hijos no se reintentan.
+
+El controlador añade resultados de pruebas capturados mediante su reporter estructurado. La reunión valida ubicación/evidencia, conserva duplicados con procedencia y discrepancias y distingue confirmado, refutado y no verificable. Los hallazgos graves sin evidencia y los conflictos pendientes bloquean la revisión; cambiar artefactos invalida su aprobación. El recorrido E9 individual y la aprobación humana/publicación separadas se mantienen. [Uso, contrato, pruebas y límites](reviews.md#revisión-por-dimensiones-p08).
+
 ## Supervisión, cancelación e informe
 
 La pestaña Trabajos consulta eventos persistentes y resultados. Se guarda informe parcial durante la ejecución. Al cancelar se conserva la solicitud SQL, el worker pide detener al controlador, este bloquea nuevas peticiones al modelo, recoge el estado final y mata el contenedor completo, incluidos descendientes separados del shell. Se confirma la parada mediante Docker; si no puede observarse, queda desconocida. Cancelar no revierte llamadas facturables previas ni garantiza la parada/facturación remota de OpenAI.

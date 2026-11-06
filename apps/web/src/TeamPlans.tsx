@@ -8,7 +8,7 @@ import { ExecutionDetails, capabilityLabels } from './ExecutionDetails';
 import { SkillText } from './Skills';
 import { TeamLauncher, TeamRunDetails } from './TeamRuns';
 
-function PlanDetails({ project, id }: { project: Project; id: string }) {
+export function PlanDetails({ project, id }: { project: Project; id: string }) {
   const query = teamsApi.useTeamPlanQuery({ project: project.id, id });
   const [approve, result] = teamsApi.useApproveTeamPlanMutation();
   const [confirmed, setConfirmed] = useState('');
@@ -37,6 +37,23 @@ function PlanDetails({ project, id }: { project: Project; id: string }) {
             · Copia inmutable v{plan.snapshot.version}
           </p>
           <p className="skill-text">Hash: {plan.hash}</p>
+          {plan.snapshot.reviewTarget && (
+            <details>
+              <summary>Diff congelado de la revisión</summary>
+              <p className="skill-text">
+                Ejecución: {plan.snapshot.reviewTarget.jobId} · Diff:{' '}
+                {plan.snapshot.reviewTarget.diffHash} · Artefacto:{' '}
+                {plan.snapshot.reviewTarget.artifactHash}
+              </p>
+              {plan.snapshot.reviewTarget.diff.map((file) => (
+                <pre className="skill-text" key={file.path}>
+                  {file.path}
+                  {'\n'}
+                  {file.patch}
+                </pre>
+              ))}
+            </details>
+          )}
           <p>
             Tarea v{plan.snapshot.task.version} · Plantilla v{plan.snapshot.template.version} ·{' '}
             {plan.snapshot.mode === 'single' ? 'Agente único' : 'Equipo'} · Modelo:{' '}
@@ -285,7 +302,7 @@ function PlansContent({ project }: { project: Project }) {
               >
                 <option value="">Selecciona una plantilla</option>
                 {templates
-                  .filter((item) => !item.archivedAt)
+                  .filter((item) => !item.archivedAt && !item.latest.definition.reviewMode)
                   .map((item) => (
                     <option key={item.id} value={item.id}>
                       {item.latest.definition.name}

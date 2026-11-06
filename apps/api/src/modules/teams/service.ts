@@ -23,6 +23,7 @@ import { SkillLibrary } from '../skills/library.js';
 import type { CodingService } from '../jobs/coding-service.js';
 import { canonical, digest } from '../jobs/review-artifacts.js';
 import { teamPresets } from './presets.js';
+import { assertReviewTarget, freezeReviewTarget } from '../jobs/dimension-reviews.js';
 
 const missing = () => new HttpError(404, 'not_found', 'No se ha encontrado el recurso.');
 const conflict = () =>
@@ -241,7 +242,7 @@ export class TeamService {
     const rows = (
       await this.pool.query(
         `SELECT r.id,r.hash,r.created_at,r.approved_at,r.approval_hash,r.task_id,r.execution_id,
-       r.snapshot->'task'->>'title' AS title,r.snapshot->'template'->'definition'->>'name' AS template_name,
+       r.snapshot->'task'->>'title' AS title,r.snapshot->'reviewTarget'->>'jobId' AS review_job_id,r.snapshot->'template'->'definition'->>'name' AS template_name,
        (r.snapshot->'template'->>'version')::int AS template_version
        FROM prepared_team_plans r JOIN projects p ON p.id=r.project_id
        WHERE p.owner_id=$1 AND p.id=$2 ORDER BY r.created_at DESC,r.id LIMIT 100`,
@@ -252,6 +253,7 @@ export class TeamService {
       plans: rows.map((row) =>
         teamPlanSummary.parse({
           id: row.id,
+          reviewJobId: row.review_job_id ?? null,
           hash: row.hash,
           state: row.execution_id ? 'executed' : row.approved_at ? 'approved' : 'prepared',
           createdAt: row.created_at.toISOString(),
@@ -278,9 +280,16 @@ export class TeamService {
     return row;
   }
   async readPlan(owner: string, project: string, id: string) {
-    return { plan: planDto(await this.planRow(this.pool, owner, project, id)) };
+    const plan = planDto(await this.planRow(this.pool, owner, project, id));
+    if (plan.snapshot.reviewTarget)
+      await this.coding.read(owner, project, plan.snapshot.reviewTarget.jobId);
+    return { plan };
   }
   async validateSnapshot(owner: string, project: string, snapshot: TeamPlan['snapshot']) {
+    if (snapshot.reviewTarget) {
+      await this.coding.read(owner, project, snapshot.reviewTarget.jobId);
+      await assertReviewTarget(this.pool, snapshot.reviewTarget, project);
+    }
     const task = await this.projects.getTask(owner, project, snapshot.task.id);
     if (task.version !== snapshot.task.version) throw conflict();
     const caps = await this.coding.capabilities(owner, project);
@@ -331,6 +340,25 @@ export class TeamService {
       (item) => item.version === input.templateVersion,
     );
     if (!selected) throw missing();
+    if (!!selected.definition.reviewMode !== !!input.reviewTarget)
+      throw new HttpError(
+        422,
+        'review_target_required',
+        'Usa una plantilla de revisión por dimensiones y elige la ejecución cuyo diff se revisará.',
+      );
+    let reviewTarget: ReturnType<typeof freezeReviewTarget> | undefined;
+    if (input.reviewTarget) {
+      await this.coding.read(owner, project, input.reviewTarget);
+      const source = (
+        await this.pool.query(
+          'SELECT c.*,j.state,j.configuration FROM coding_runs c JOIN jobs j ON j.id=c.job_id WHERE c.job_id=$1 AND j.project_id=$2',
+          [input.reviewTarget, project],
+        )
+      ).rows[0];
+      if (!source || source.task_id !== task.id || source.task_snapshot.version !== task.version)
+        throw conflict();
+      reviewTarget = freezeReviewTarget(source);
+    }
     if (selected.definition.strategy === 'specialists' && input.mode !== 'team')
       throw new HttpError(422, 'team_mode_required', 'Especialistas requiere el equipo completo.');
     const caps = await this.coding.capabilities(owner, project);
@@ -384,6 +412,7 @@ export class TeamService {
               .map((step) => ({ ...step, dependsOn: [] }))
           : allSteps;
       const snapshot = teamPlanSnapshot.parse({
+        ...(reviewTarget && { reviewTarget }),
         version: 1,
         template,
         task: {
