@@ -9,6 +9,8 @@ import { readFile } from 'node:fs/promises';
 import {
   codingCapabilitiesResponse,
   codingRunSchema,
+  agentEvaluation,
+  agentEvaluationList,
   agentMutationResponse,
   agentResponse,
   agentsResponse,
@@ -176,6 +178,7 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
       maxRequests = 4,
       withContext = false,
       toolProfile?: TeamDefinition['toolProfile'],
+      existingTask?: { id: string; version: number },
     ) {
       const post = (path: string, body: unknown) => request('POST', path, body, cookie);
       const roles = [];
@@ -232,7 +235,7 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
         .parse(
           await (await post(`/projects/${project}/team-templates`, { definition })).json(),
         ).template;
-      const taskRow = await task(title);
+      const taskRow = existingTask ?? (await task(title));
       const prepared = teamPlanResponse.parse(
         await (
           await post(`/projects/${project}/team-plans`, {
@@ -2618,6 +2621,183 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
             assert.deepEqual(decision.paths, ['.GITHUB/workflows/alias.yml']);
             assert.equal(evidence.report.diffComplete, false);
           }
+        }
+      },
+    );
+    await t.test(
+      'P13 compares recorded solo and team runs, grades held-out probes and protects persisted evidence',
+      async () => {
+        if (!worker || worker.exitCode !== null || worker.signalCode !== null) await startWorker();
+        if (fixture.state.denied) {
+          fixture.state.denied = false;
+          await github.connect(owner.id, 71);
+          const link = (await github.read(owner.id, project)).link!;
+          await github.sync(owner.id, project, link.version);
+        }
+        const title = 'P13 paired addition';
+        const shared = await task(title);
+        const paired = {
+          taskId: shared.id,
+          taskVersion: shared.version,
+          maxRequests: 10,
+          maxOutputTokens: 4096,
+          timeoutMs: 120000,
+        };
+        const { job: solo, body } = await enqueue(title, paired);
+        assert.equal(
+          (
+            await request(
+              'POST',
+              `/projects/${project}/coding`,
+              {
+                ...body,
+                requestId: randomUUID(),
+                toolProfile: 'unsupported-v1',
+              },
+              cookie,
+            )
+          ).status,
+          400,
+        );
+        assert.equal((await terminal(solo.id)).job.state, 'completed');
+        const started = await startTeam(title, 4, false, undefined, shared);
+        const team = await teamTerminal(started.data.execution.id);
+        assert.equal(team.execution.state, 'completed', JSON.stringify(team.steps));
+        const path = `/projects/${project}/lab/agent-evaluations`;
+        const input = { soloId: solo.id, teamId: team.execution.id, case: 'addition-v1' };
+        const submit = async (body: unknown) => {
+          const response = await request('POST', path, body, cookie);
+          assert.equal(response.status, 200, await response.clone().text());
+          return agentEvaluation.parse(await response.json());
+        };
+        const list = agentEvaluationList.parse(
+          await (await request('GET', path, undefined, cookie)).json(),
+        );
+        assert.ok(list.solo.some((item) => item.id === solo.id));
+        assert.ok(list.teams.some((item) => item.id === team.execution.id));
+        assert.ok(!list.solo.some((item) => item.id === team.steps[0]?.jobId));
+        const result = await submit(input);
+        assert.deepEqual(result.evidence.differences, []);
+        for (const arm of [result.evidence.solo, result.evidence.team]) {
+          assert.equal(arm.evidence, 'simulated');
+          assert.equal(arm.baseline.status, 'failed');
+          assert.equal(arm.grade.status, 'passed');
+          assert.equal(arm.costUsd, null);
+          assert.ok(arm.elapsedMs && arm.elapsedMs > 0);
+          assert.ok(arm.artifactHash);
+        }
+        assert.deepEqual(
+          result.evidence.team.steps.map((step) => step.key),
+          ['implement', 'review'],
+        );
+        assert.ok(result.evidence.team.steps.every((step) => step.requests && step.reportHash));
+        assert.deepEqual(await submit(input), result);
+        const detail = `${path}/${result.id}`;
+        const review = { version: 0, verdict: 'tie', note: 'Ambas entregas superan las pruebas.' };
+        const reviewed = await request('POST', detail + '/reviews', review, cookie);
+        assert.equal(reviewed.status, 200, await reviewed.clone().text());
+        assert.equal(agentEvaluation.parse(await reviewed.json()).reviews[0]?.note, review.note);
+        assert.equal((await request('POST', detail + '/reviews', review, cookie)).status, 409);
+        const exported = await request('GET', detail + '/export', undefined, cookie);
+        assert.equal(exported.status, 200);
+        assert.match(exported.headers.get('content-disposition') ?? '', /attachment/);
+        assert.equal(
+          agentEvaluation.parse(await exported.json()).evidenceHash,
+          result.evidenceHash,
+        );
+        assert.equal((await request('GET', detail + '/export', undefined, foreign)).status, 404);
+
+        const packs = coding.contextPacks!;
+        await packs.retrieval.index(owner.id, project, true);
+        const map = await packs.map(owner.id, project);
+        await packs.saveMap(owner.id, project, {
+          version: map?.version ?? 0,
+          markdown: '# Provisioning\nInspect workspace isolation and resource limits.',
+          paths: [],
+        });
+        const { receipt } = await packs.prepare(owner.id, project, {
+          requestId: randomUUID(),
+          taskId: shared.id,
+          taskVersion: shared.version,
+          profile: 'lean',
+          mode: 'manual',
+          explicitSkillIds: [],
+          excludedSkillIds: [],
+          memory: [],
+          includeMemory: false,
+          query: 'qzxvincompatiblecontext',
+        });
+        const { job: contextual } = await enqueue(title, {
+          ...paired,
+          contextReceipt: { id: receipt.id, hash: receipt.hash },
+        });
+        assert.equal((await terminal(contextual.id)).job.state, 'completed');
+        const contextMismatch = await submit({ ...input, soloId: contextual.id, case: 'recorded' });
+        assert.deepEqual(contextMismatch.evidence.differences, ['context']);
+        // The receipt measures selected excerpts; the whole allowed workspace is still mounted.
+        assert.notEqual(contextMismatch.evidence.solo.steps[0]?.context?.receiptHash, undefined);
+        const relevanceInput = { ...input, soloId: contextual.id };
+        await pool.query(
+          "UPDATE coding_runs SET report=jsonb_set(report,'{turnCompleted}','false') WHERE job_id=$1",
+          [contextual.id],
+        );
+        const silent = await submit(relevanceInput);
+        assert.equal(silent.evidence.solo.steps[0]?.context?.relevance, 'missing');
+        assert.equal(silent.evidence.solo.grade.status, 'unverifiable');
+
+        // A modified controller input must never reuse a passing receipt.
+        const changed = await pool.query(
+          "UPDATE coding_runs SET report=jsonb_set(report,'{controls,inputHash}',to_jsonb(repeat('0',64))) WHERE job_id=$1",
+          [solo.id],
+        );
+        assert.equal(changed.rowCount, 1);
+        assert.equal((await request('POST', path, input, cookie)).status, 409);
+        const rejected = await submit({ ...input, case: 'recorded' });
+        assert.equal(rejected.evidence.solo.artifactHash, null);
+        assert.equal(rejected.evidence.solo.grade.status, 'not_run');
+
+        const cancelled = await enqueue('P13 cancel pair');
+        assert.equal(
+          (
+            await request(
+              'POST',
+              `/projects/${project}/jobs/${cancelled.job.id}/cancel`,
+              {},
+              cookie,
+            )
+          ).status,
+          200,
+        );
+        assert.equal((await terminal(cancelled.job.id)).job.state, 'cancelled');
+        const mismatch = await submit({ ...input, soloId: cancelled.job.id });
+        assert.equal(mismatch.evidence.comparable, false);
+        assert.ok(mismatch.evidence.differences.includes('task'));
+        assert.ok(mismatch.evidence.differences.includes('limits'));
+        assert.equal(mismatch.evidence.solo.grade.status, 'not_run');
+        assert.equal(
+          (await request('POST', `${path}/${mismatch.id}/reviews`, review, cookie)).status,
+          409,
+        );
+
+        await pool.query('UPDATE projects SET archived_at=now() WHERE id=$1', [project]);
+        try {
+          assert.equal((await request('GET', detail, undefined, cookie)).status, 200);
+          assert.equal((await request('POST', path, input, cookie)).status, 409);
+          assert.equal(
+            (await request('POST', detail + '/reviews', { ...review, version: 1 }, cookie)).status,
+            409,
+          );
+        } finally {
+          await pool.query('UPDATE projects SET archived_at=NULL WHERE id=$1', [project]);
+        }
+        fixture.state.denied = true;
+        try {
+          assert.equal((await request('GET', detail + '/export', undefined, cookie)).status, 403);
+        } finally {
+          fixture.state.denied = false;
+          await github.connect(owner.id, 71);
+          const link = (await github.read(owner.id, project)).link!;
+          await github.sync(owner.id, project, link.version);
         }
       },
     );

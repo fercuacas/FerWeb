@@ -9,7 +9,7 @@ test.afterEach(async ({ page }) => {
 test('sequential team UI executes approved task, restores deliveries and reports after reload and cancels its active child', async ({
   page,
 }) => {
-  test.setTimeout(90000);
+  test.setTimeout(120000);
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto('/');
@@ -123,6 +123,53 @@ test('sequential team UI executes approved task, restores deliveries and reports
       .getByText('controller-verification', { exact: true }),
   ).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+  ).toBeTruthy();
+  const { job: solo } = await post(`/projects/${project.id}/coding`, {
+    requestId: crypto.randomUUID(),
+    taskId: task.id,
+    taskVersion: task.version,
+    commit: 'a'.repeat(40),
+    model: 'fixture-codex',
+    maxRequests: 8,
+    maxOutputTokens: 4096,
+    timeoutMs: 120000,
+  });
+  await expect
+    .poll(
+      async () => {
+        const response = await page.request.get(`/api/projects/${project.id}/jobs/${solo.id}`);
+        return (await response.json()).job.state;
+      },
+      { timeout: 40000 },
+    )
+    .toBe('completed');
+  await page.getByRole('button', { name: 'Laboratorio', exact: true }).click();
+  await page.getByText('Evaluar agente y equipo', { exact: true }).press('Enter');
+  await page
+    .getByRole('combobox', { name: 'Agente único', exact: true })
+    .selectOption(solo.id, { timeout: 10000 });
+  await page
+    .getByRole('combobox', { name: 'Equipo', exact: true })
+    .selectOption({ index: 1 }, { timeout: 10000 });
+  await page
+    .getByRole('combobox', { name: 'Caso de evaluación', exact: true })
+    .selectOption('addition-v1', { timeout: 10000 });
+  await page.getByRole('button', { name: 'Guardar comparación', exact: true }).press('Enter');
+  const evaluation = page.getByRole('region', { name: 'Resultado de evaluación' });
+  await expect(evaluation.getByText('Condiciones registradas equivalentes')).toBeVisible();
+  await expect(evaluation.getByText(/Verificador independiente Aprobado/)).toHaveCount(2);
+  await evaluation.getByLabel('Motivo de la valoración').fill('Dos entregas verificadas.');
+  await evaluation.getByRole('button', { name: 'Guardar valoración' }).click();
+  await expect(evaluation.getByText('Dos entregas verificadas.')).toBeVisible();
+  await evaluation.getByRole('button', { name: 'Repetir verificación' }).click();
+  await expect(evaluation.getByRole('status')).toHaveText(
+    'La repetición coincide con la evidencia guardada.',
+  );
+  const download = page.waitForEvent('download');
+  await evaluation.getByRole('link', { name: 'Exportar evaluación JSON' }).click();
+  expect((await download).suggestedFilename()).toMatch(/^ferweb-agent-evaluation-.+\.json$/);
   expect(
     await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
   ).toBeTruthy();

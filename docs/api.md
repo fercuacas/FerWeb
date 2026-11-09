@@ -353,6 +353,15 @@ El puente interno autenticado `POST /internal/coding/:jobId/context` recibe `{fe
 
 El laboratorio admite `contextExperiment: ferweb-context-p10-v1`, con `retrieval-v1`, `hybrid-v1` e `hybrid-memory-v1` en ese orden. Conserva revisiones de memoria, métricas de búsqueda, etiquetas de citas y uso nullable; no adopta evidencia simulada.
 
+## Evaluación de agentes P13
+
+- `GET /projects/:projectId/lab/agent-evaluations` devuelve cabeceras y candidatos terminales recientes, separados por brazo.
+- `POST /projects/:projectId/lab/agent-evaluations` recibe `soloId`, `teamId` y `case` (`recorded` o `addition-v1`). Persiste un informe por par y caso. Repetir el mismo cuerpo recalcula la evidencia, devuelve el mismo recurso si la huella coincide y responde 409 si cambia.
+- `GET /projects/:projectId/lab/agent-evaluations/:evaluationId` revalida los orígenes y devuelve el informe congelado. Añadir `/export` descarga el mismo DTO como JSON.
+- `POST /projects/:projectId/lab/agent-evaluations/:evaluationId/reviews` recibe `version` (número actual de valoraciones), `verdict` (`solo`, `team`, `tie` o `inconclusive`) y `note`. Guarda una valoración humana adicional. Con condiciones distintas solo se admite `inconclusive`.
+
+El proyecto archivado permite leer y exportar. La revalidación usa la autorización de Codex y equipos, incluidas sus referencias a contexto y memoria. El [laboratorio](laboratory.md#evaluación-de-agente-único-y-equipo-p13) describe los límites del corpus y las métricas.
+
 ## Referencias de diseño
 
 - [Node.js crypto](https://nodejs.org/api/crypto.html).

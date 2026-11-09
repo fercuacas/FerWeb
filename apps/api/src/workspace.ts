@@ -22,6 +22,8 @@ import { RetrievalService } from './modules/retrieval/service.js';
 import { createRetrievalRouter } from './modules/retrieval/routes.js';
 import { LaboratoryService } from './modules/laboratory/service.js';
 import { createLaboratoryRouter } from './modules/laboratory/routes.js';
+import { agentEvaluationRouter } from './modules/laboratory/evaluation-routes.js';
+import { AgentEvaluations } from './modules/laboratory/evaluations.js';
 import { JobService } from './modules/jobs/service.js';
 import { createJobRouter } from './modules/jobs/routes.js';
 import { CodingService } from './modules/jobs/coding-service.js';
@@ -142,9 +144,9 @@ export function createWorkspaceRouter({
   router.use(createJobRouter(new JobService(pool)));
   router.use(agentRouter(new AgentCatalog(pool)));
   router.use(skillRouter(new SkillLibrary(pool)));
-  router.use(
-    teamRouter(new TeamService(pool, codingService), new TeamExecutions(pool, codingService)),
-  );
+  const teamExecutions = new TeamExecutions(pool, codingService);
+  router.use(teamRouter(new TeamService(pool, codingService), teamExecutions));
+  router.use(agentEvaluationRouter(new AgentEvaluations(pool, codingService, teamExecutions)));
   router.use(codingRouter(codingService));
   router.use(memoryRouter(codingService.memory));
   router.get('/projects', async (_request, response) => {

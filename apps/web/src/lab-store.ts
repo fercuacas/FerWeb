@@ -11,10 +11,57 @@ import {
   contextComparisonResponse,
   contextPolicyResponse,
   type contextAdoptionInput,
+  agentEvaluation,
+  agentEvaluationList,
+  type AgentEvaluation,
+  type AgentEvaluationInput,
+  type agentEvaluationReviewInput,
 } from '@ferweb/contracts';
 import { workspaceApi } from './workspace-store';
 export const labApi = workspaceApi.injectEndpoints({
   endpoints: (builder) => ({
+    agentEvaluations: builder.query<z.infer<typeof agentEvaluationList>, string>({
+      query: (project) => `/projects/${project}/lab/agent-evaluations`,
+      transformResponse: (data) => agentEvaluationList.parse(data),
+      providesTags: ['Laboratory'],
+      keepUnusedDataFor: 0,
+    }),
+    agentEvaluation: builder.query<AgentEvaluation, { project: string; id: string }>({
+      query: ({ project, id }) => `/projects/${project}/lab/agent-evaluations/${id}`,
+      transformResponse: (data) => agentEvaluation.parse(data),
+      providesTags: ['Laboratory'],
+      keepUnusedDataFor: 0,
+    }),
+    compareAgents: builder.mutation<
+      AgentEvaluation,
+      { project: string; body: AgentEvaluationInput }
+    >({
+      query: ({ project, body }) => ({
+        url: `/projects/${project}/lab/agent-evaluations`,
+        method: 'POST',
+        timeout: 90000,
+        body,
+      }),
+      transformResponse: (data) => agentEvaluation.parse(data),
+      invalidatesTags: ['Laboratory'],
+    }),
+    reviewAgentEvaluation: builder.mutation<
+      AgentEvaluation,
+      {
+        project: string;
+        id: string;
+        body: z.infer<typeof agentEvaluationReviewInput>;
+      }
+    >({
+      query: ({ project, id, body }) => ({
+        url: `/projects/${project}/lab/agent-evaluations/${id}/reviews`,
+        method: 'POST',
+        timeout: 60000,
+        body,
+      }),
+      transformResponse: (data) => agentEvaluation.parse(data),
+      invalidatesTags: ['Laboratory'],
+    }),
     contextComparison: builder.query<
       z.infer<typeof contextComparisonResponse>,
       { project: string; id: string }
