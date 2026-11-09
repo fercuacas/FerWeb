@@ -86,7 +86,7 @@ El controlador negocia la API del motor por el socket local. Admite de 1.45 a 1.
 | CPU/memoria/procesos | Una CPU, 768 MiB, swap limitado al mismo total y 128 PIDs por contenedor de código. Descriptores 1024. El recolector tiene 0,5 CPU, 128 MiB, 16 PIDs y ningún privilegio/red. |
 | Tiempo | 10 segundos–20 minutos desde primera asignación. Lease SQL renovable; supervisor root comprueba lease por socket cada 500 ms y sale si pierde control. El plazo también se vigila dentro del contenedor. |
 | Concurrencia | Dos trabajos globales y uno por proyecto por defecto; P07 admite dos especialistas del mismo equipo con configuración explícita. El controlador admite como máximo dos ejecuciones activas. |
-| Verificación | `node --test` en Node aislado, comprobación estática estricta en TypeScript/React y verificador de snapshot/montaje para especialistas P07. El controlador fija el comando, 20 segundos y salida acotada. |
+| Verificación | `node --test` con reporter de confianza en Node aislado, comprobación estática estricta en TypeScript/React y verificador de snapshot/montaje para especialistas P07. El controlador fija el comando, hasta 20 segundos y salida acotada. |
 | Artefactos | Lectura final acotada, solo archivos regulares UTF-8; sin enlaces/especiales, hasta 100 archivos y 1 MB. Diff de texto máximo 600 KB; exceso/fallo no se presenta como diff completo. |
 
 El código podría llamar directamente a su pasarela de modelo: no es una credencial general, pero puede consumir el cupo reservado a esa tarea. El contador y la política se aplican en el controlador también a esas peticiones. No se afirma un límite monetario exacto ni un presupuesto exacto de tokens de entrada. La aceptación real del límite de salida depende de la API/modelo configurados y sigue pendiente de prueba explícita.
@@ -187,6 +187,16 @@ TypeScript/React usa Node 24.22.2, TypeScript 7.0.2 y declaraciones React/React 
 La imagen se construye desde un manifiesto y lockfile revisados de FerWeb con scripts de instalación deshabilitados. En ejecución, el controlador usa el compilador y la configuración de la imagen de solo lectura, con el mismo aislamiento, cupos y política de red de Node. Los archivos y scripts del repositorio siguen siendo datos de la tarea. El informe registra la verificación como `controller-typecheck` y conserva por separado los comandos del agente. Un error del compilador deja el trabajo en fallo con su evidencia.
 
 Al iniciar, el controlador resuelve ambas etiquetas a IDs inmutables. La admisión congela perfil, imagen, versiones, hash de política y límites en el entorno de ejecución existente. El plan y el recibo de contexto guardan la revisión de ese entorno. Repetir o aprobar exige que siga disponible el entorno congelado. Los informes anteriores se conservan, aunque un cambio de imagen o política puede impedir su repetición exacta.
+
+## Controles de ejecución (P12)
+
+En **Trabajos → informe de Codex → Controles de ejecución**, FerWeb muestra las fases y decisiones registradas por el controlador. La fase inicial identifica commit y archivos mediante una huella. Si el trabajo incluye un recibo P10 vigente, conserva su referencia y reutiliza ese contexto. Preparar estos controles no consume peticiones de modelo ni ejecuta otra búsqueda.
+
+Antes de lanzar el agente, el supervisor protege en la raíz del snapshot `.github`, `.git`, `.codex`, `.env`, `.npmrc` y `AGENTS.md`. En trabajos escritores, las entradas protegidas pertenecen a root y el directorio padre usa el bit sticky para impedir su sustitución. Se conservan los archivos admitidos de esas rutas en lectura. Las entradas reservadas creadas solo para impedir altas se omiten del diff. Los especialistas conservan su montaje completo de solo lectura. El recolector vuelve a comprobar las rutas protegidas antes de admitir una entrega, también ante variantes de mayúsculas.
+
+La CLI fijada en 0.166.0 se inicia con los hooks de Codex deshabilitados. FerWeb usa fases propias del controlador y los permisos del contenedor para aplicar esta política. La documentación oficial distingue las llamadas que pasan por `PreToolUse` y las excepciones. La evidencia de FerWeb cubre las rutas reservadas y la frontera de entrega. Los intentos observados por el agente quedan en sus comandos, separados de las decisiones del controlador. [OpenAI Docs sobre hooks](https://learn.chatgpt.com/docs/hooks#tool-coverage)
+
+Al terminar Codex, el controlador ejecuta la comprobación fija del perfil. En Node exige evidencia del reporter de confianza de que se superó al menos una prueba. Si Node termina sin esa evidencia, el control queda **Sin ejecutar** y la ejecución falla con `verification_not_run`. Un plazo agotado queda diferenciado de un fallo de comprobación. Los informes conservan salida, duración y procedencia. Las entregas a otras etapas y la publicación de un informe P12 requieren los controles superados. La revisión y la autorización de publicación siguen asociadas al informe concreto.
 
 ## Supervisión, cancelación e informe
 

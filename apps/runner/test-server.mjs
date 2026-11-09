@@ -119,6 +119,12 @@ async function fakeProvider(run, value, res) {
           : `node --test; node tests/isolation-probe.cjs; node -e "require('node:fs').writeFileSync('src/add.cjs', 'exports.add = (a, b) => a + b${/P08 reproduced target/.test(run.input.task.title) ? ' + 1' : ''};\\n')"; node --test`;
     if (run.input.task.title === 'P10 bounded context')
       command = 'node tools/context-expand-probe.cjs && (' + command + ')';
+    if (run.input.task.title === 'P12 guard')
+      command = 'node tools/p12-probe.cjs guard && (' + command + ')';
+    if (run.input.task.title === 'P12 alias')
+      command = '(' + command + ') && node tools/p12-probe.cjs alias';
+    if (run.input.task.title === 'P12 no tests') command = 'node tools/p12-probe.cjs empty';
+    if (run.input.task.title === 'P12 check deadline') command = 'node tools/p12-probe.cjs slow';
     if (run.input.task.title === 'P11 typecheck failure')
       command = 'node tests/isolation-probe.cjs';
     if (

@@ -40,7 +40,18 @@ Do not claim tests passed unless actually run.${input.toolProfile === 'typescrip
 Task snapshot:\n${JSON.stringify(input.task)}\n`;
 const child = spawn(
   'codex',
-  ['-a', 'never', 'exec', '--json', '--skip-git-repo-check', '-C', '/workspace', '-'],
+  [
+    '-a',
+    'never',
+    '--disable',
+    'hooks',
+    'exec',
+    '--json',
+    '--skip-git-repo-check',
+    '-C',
+    '/workspace',
+    '-',
+  ],
   {
     cwd: '/workspace',
     env: {

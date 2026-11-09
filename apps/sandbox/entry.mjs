@@ -6,13 +6,30 @@ import { spawn } from 'node:child_process';
 // no-new-privileges and cannot signal this supervisor or read its process memory.
 const input = JSON.parse(await readFile('/control/input.json', 'utf8'));
 if (input.workspaceAccess !== 'read-only') {
+  const protect = spawn(process.execPath, ['/opt/ferweb/prepare.mjs', '--protect'], {
+    env: {},
+    stdio: 'ignore',
+  });
+  if (
+    (await new Promise((resolve) => {
+      protect.once('exit', resolve);
+      protect.once('error', () => resolve(2));
+    })) !== 0
+  )
+    process.exit(2);
   const prepare = spawn(process.execPath, ['/opt/ferweb/prepare.mjs'], {
     uid: 1000,
     gid: 1000,
     env: {},
     stdio: 'ignore',
   });
-  if ((await new Promise((resolve) => prepare.once('exit', resolve))) !== 0) process.exit(2);
+  if (
+    (await new Promise((resolve) => {
+      prepare.once('exit', resolve);
+      prepare.once('error', () => resolve(2));
+    })) !== 0
+  )
+    process.exit(2);
 }
 const proxy = http.createServer((req, res) => {
   const upstream = http.request(

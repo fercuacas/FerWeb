@@ -80,7 +80,37 @@ const command = z.object({
   origin: z.string(),
   status: z.string().optional(),
 });
+export const codingControls = z.object({
+  version: z.literal('ferweb-controls-v1'),
+  inputHash: z.string().regex(/^[a-f0-9]{64}$/),
+  files: z.number().int().nonnegative().max(100),
+  receiptId: z.uuid().nullable(),
+  protectedRoots: z.array(z.string().max(32)).max(12),
+  events: z
+    .array(
+      z.object({
+        id: z.enum(['impact', 'configuration', 'verification', 'artifact']),
+        stage: z.enum(['before_agent', 'after_agent', 'before_delivery']),
+        status: z.enum([
+          'not_run',
+          'running',
+          'passed',
+          'failed',
+          'blocked',
+          'timeout',
+          'interrupted',
+        ]),
+        code: z.string().max(80),
+        durationMs: nullableCount,
+        paths: z.array(z.string().max(220)).max(12),
+      }),
+    )
+    .length(4)
+    .refine((events) => new Set(events.map((event) => event.id)).size === 4),
+});
 export const codingReport = z.object({
+  // Reports recorded before P12 have no control evidence.
+  controls: codingControls.optional(),
   providerUsage: z
     .object({
       reportedRequests: z.number().int(),

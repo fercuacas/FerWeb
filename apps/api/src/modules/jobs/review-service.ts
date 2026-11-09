@@ -100,6 +100,8 @@ export class ReviewService {
         'La ejecución debe haber completado con las condiciones de publicación registradas. Las ejecuciones antiguas deben repetirse.',
       );
     const report = codingReport.parse(row.report);
+    if (report.controls?.events.some((event) => event.status !== 'passed'))
+      throw conflict('Los controles de ejecución deben quedar superados antes de publicar.');
     if (
       report.terminationConfirmed !== true ||
       report.commit !== row.commit_sha ||

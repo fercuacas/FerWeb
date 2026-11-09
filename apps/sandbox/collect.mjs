@@ -1,4 +1,5 @@
 import { readdir, lstat, readFile } from 'node:fs/promises';
+import { protectedPlaceholders } from './protected-paths.mjs';
 const files = [];
 let size = 0,
   entries = 0;
@@ -17,7 +18,11 @@ async function visit(dir, depth = 0) {
       throw Error('special_file_rejected');
     if (stat.isDirectory()) await visit(path, depth + 1);
     else {
-      if (stat.size > 200000 || files.length >= 100 || (size += stat.size) > 1000000)
+      if (
+        stat.size > 200000 ||
+        files.length >= 100 + protectedPlaceholders.length ||
+        (size += stat.size) > 1000000
+      )
         throw Error('artifact_size_limit');
       const data = await readFile('/workspace' + path);
       files.push({

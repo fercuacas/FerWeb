@@ -378,6 +378,38 @@ const states = {
   cancelled: 'Cancelado',
 };
 const known = (v: number | null | undefined) => v ?? 'Desconocido';
+const controlLabels = {
+  impact: 'Alcance congelado',
+  configuration: 'Protección de configuración',
+  verification: 'Verificación del perfil',
+  artifact: 'Control de entrega',
+};
+const controlStates = {
+  not_run: 'Sin ejecutar',
+  running: 'En curso',
+  passed: 'Superado',
+  failed: 'Fallido',
+  blocked: 'Bloqueado',
+  timeout: 'Tiempo agotado',
+  interrupted: 'Interrumpido',
+};
+const controlDetails: Record<string, string> = {
+  snapshot_recorded: 'Se registraron el commit y los archivos antes de lanzar el agente.',
+  receipt_reused: 'Se reutilizó el recibo P10 de esta ejecución.',
+  reserved_paths_locked: 'Las rutas reservadas están protegidas contra escritura y sustitución.',
+  readonly_workspace: 'El volumen completo se montó en solo lectura.',
+  workspace_not_ready: 'El espacio de trabajo no respondió dentro del plazo de preparación.',
+  workspace_setup_failed: 'Falló la preparación del espacio de trabajo.',
+  verification_deadline: 'La comprobación independiente agotó su plazo.',
+  verification_interrupted: 'El proceso de verificación terminó por una señal.',
+  profile_failed: 'La comprobación devolvió un error. Consulta la salida del controlador.',
+  profile_passed: 'La comprobación independiente del perfil se completó correctamente.',
+  no_tests_executed:
+    'Node no informó de ninguna prueba superada. Añade o habilita pruebas para verificar el trabajo.',
+  protected_artifact_changed: 'Se rechazó la entrega porque modifica una ruta reservada.',
+  artifact_unavailable: 'No se pudo recoger un snapshot final válido.',
+  snapshot_collected: 'Se recogió el snapshot y se comprobó el alcance protegido.',
+};
 export function CodingView({
   project,
   job,
@@ -483,6 +515,26 @@ export function CodingView({
       )}
       {report && (
         <>
+          {report.controls && (
+            <details>
+              <summary>Controles de ejecución</summary>
+              <p>{report.controls.files} archivos en el alcance inicial.</p>
+              <p className="job-id">Huella del alcance · {report.controls.inputHash}</p>
+              <p>Rutas reservadas en la raíz · {report.controls.protectedRoots.join(', ')}</p>
+              <ul>
+                {report.controls.events.map((event) => (
+                  <li key={event.id}>
+                    <strong>
+                      {controlLabels[event.id]} · {controlStates[event.status]}
+                    </strong>
+                    {event.durationMs !== null && <span> · {event.durationMs} ms</span>}
+                    {controlDetails[event.code] && <p>{controlDetails[event.code]}</p>}
+                    {event.paths.length > 0 && <p className="job-id">{event.paths.join(', ')}</p>}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
           <p>
             {report.simulated ? 'Proveedor simulado · ' : ''}Codex CLI {report.cliVersion} ·{' '}
             {report.model}

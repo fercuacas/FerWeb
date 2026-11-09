@@ -2377,6 +2377,8 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
         assert.ok(evidence.contextReceipt);
         const receipt = await packs.read(owner.id, project, evidence.contextReceipt.id);
         assert.equal(receipt.phase, 'final');
+        assert.equal(evidence.report?.controls?.receiptId, receipt.id);
+        assert.equal(evidence.report?.controls?.events[0]?.code, 'receipt_reused');
         assert.equal(receipt.expansions.length, 2);
         assert.ok(receipt.expansions.every((e) => e.status === 'completed'));
         assert.deepEqual(
@@ -2544,6 +2546,78 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
           assert.deepEqual(child.environment, caps.typescriptEnvironment);
           assert.equal(child.report?.tests[0]?.origin, 'controller-typecheck');
           assert.equal(child.report?.tests[0]?.exitCode, 0);
+        }
+      },
+    );
+    await t.test(
+      'P12 locks reserved paths and audits blocked, missing and timed-out controls',
+      async () => {
+        if (!worker || worker.exitCode !== null || worker.signalCode !== null) await startWorker();
+        addSource(fixture, '.github/workflows/p12.yml', 'name: original\n');
+        addSource(
+          fixture,
+          'tools/p12-probe.cjs',
+          await readFile(new URL('../../../tests/fixtures/p12-probe.cjs', import.meta.url), 'utf8'),
+        );
+        const current = (await github.read(owner.id, project)).link!;
+        await github.sync(owner.id, project, current.version);
+        const cases = [
+          {
+            title: 'P12 guard',
+            state: 'completed',
+            id: 'configuration',
+            status: 'passed',
+            code: 'reserved_paths_locked',
+          },
+          {
+            title: 'P12 alias',
+            state: 'failed',
+            id: 'artifact',
+            status: 'blocked',
+            code: 'protected_artifact_changed',
+          },
+          {
+            title: 'P12 no tests',
+            state: 'failed',
+            id: 'verification',
+            status: 'not_run',
+            code: 'no_tests_executed',
+          },
+          {
+            title: 'P12 check deadline',
+            state: 'failed',
+            id: 'verification',
+            status: 'timeout',
+            code: 'verification_deadline',
+          },
+        ] as const;
+        for (const fixtureCase of cases) {
+          const { job } = await enqueue(fixtureCase.title);
+          const done = await terminal(job.id, 80000);
+          assert.equal(done.job.state, fixtureCase.state, JSON.stringify(done));
+          const evidence = await report(job.id);
+          const controls = evidence.report?.controls;
+          assert.ok(controls);
+          const decision = controls.events.find((event) => event.id === fixtureCase.id);
+          assert.equal(decision?.status, fixtureCase.status, JSON.stringify(controls));
+          assert.equal(decision?.code, fixtureCase.code);
+          assert.ok(evidence.report?.terminationConfirmed);
+          if (fixtureCase.title === 'P12 guard') {
+            assert.ok(
+              evidence.report.commands.some(
+                (command) =>
+                  command.exitCode === 0 && command.output.includes('P12_DENIAL_CONFIRMED'),
+              ),
+            );
+            assert.ok(evidence.manifest.some((file) => file.path === '.github/workflows/p12.yml'));
+            assert.deepEqual(
+              evidence.report.diff.map((file) => file.path),
+              ['src/add.cjs'],
+            );
+          } else if (fixtureCase.id === 'artifact') {
+            assert.deepEqual(decision.paths, ['.GITHUB/workflows/alias.yml']);
+            assert.equal(evidence.report.diffComplete, false);
+          }
         }
       },
     );

@@ -160,6 +160,9 @@ test('Codex task UI freezes a commit, shows a verified diff, reloads evidence an
     '+exports.add = (a, b) => a + b;',
   );
   await expect(page.getByRole('heading', { name: 'Comandos y pruebas' })).toBeVisible();
+  await page.getByText('Controles de ejecución', { exact: true }).press('Enter');
+  await expect(page.getByText('Protección de configuración · Superado')).toBeVisible();
+  await expect(page.getByText('Verificación del perfil · Superado')).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Revisión y pull request' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Publicar PR borrador en GitHub' })).toBeDisabled();
   await page.getByLabel('Título de la PR', { exact: true }).fill('Corregir suma revisada');

@@ -5,6 +5,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { connectDocker, demux } from './docker.mjs';
 import { validateFiles, differences, hash } from './files.mjs';
 import { modelPayload, attachUsageMeter, providerUsage } from './policy.mjs';
+import { createControls, control, protectedChanges, removePlaceholders } from './controls.mjs';
 
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 async function body(req, limit = 1200000) {
@@ -22,6 +23,14 @@ const safeEqual = (a, b) =>
 const safeText = (value, limit = 8000) => (typeof value === 'string' ? value.slice(0, limit) : '');
 const number = (v) => (Number.isSafeInteger(v) && v >= 0 ? v : null);
 const typecheck = ['tsc', '--project', '/opt/ferweb/typescript/tsconfig.json'];
+const nodeVerification = [
+  'node',
+  '--test',
+  '--test-reporter=/opt/ferweb/review-reporter.mjs',
+  '--test-reporter-destination=stdout',
+  '--test-reporter=tap',
+  '--test-reporter-destination=stderr',
+];
 
 export async function createController({ token, configuration, fakeProvider, namespace, volume }) {
   if (!token || token.length < 32) throw Error('runner_token_missing');
@@ -41,9 +50,14 @@ export async function createController({ token, configuration, fakeProvider, nam
     policyHash: hash(
       (
         await Promise.all(
-          ['controller.mjs', 'policy.mjs', 'files.mjs', 'docker.mjs'].map((file) =>
-            readFile(new URL(file, import.meta.url), 'utf8'),
-          ),
+          [
+            'controller.mjs',
+            'policy.mjs',
+            'files.mjs',
+            'docker.mjs',
+            'controls.mjs',
+            'protected-paths.mjs',
+          ].map((file) => readFile(new URL(file, import.meta.url), 'utf8')),
         )
       ).join('\n'),
     ),
@@ -126,8 +140,9 @@ export async function createController({ token, configuration, fakeProvider, nam
           await docker('GET', `/containers/${c.Id}/logs?stdout=1&stderr=1`, undefined, 2000000),
         ),
       );
-      validateFiles(files, true);
-      return files;
+      const material = removePlaceholders(run.input, files);
+      validateFiles(material, true);
+      return material;
     } finally {
       await docker('DELETE', `/containers/${c.Id}?force=1&v=1`).catch(() => {});
     }
@@ -259,15 +274,35 @@ export async function createController({ token, configuration, fakeProvider, nam
         ? reason
         : (run.budgetReason ?? reason);
       run.phase = 'collecting';
+      for (const event of run.report.controls.events)
+        if (event.status === 'running')
+          control(run, event.id, reason === 'timeout' ? 'timeout' : 'interrupted', reason);
+      const collectionStarted = performance.now();
+      control(run, 'artifact', 'running', 'collecting');
       for (const abort of run.upstreams) abort.abort();
       try {
         await docker('POST', `/containers/${run.container}/pause`);
         const collected = await collect(run);
+        const blocked = protectedChanges(run.input.files, collected);
+        if (blocked.length) {
+          control(
+            run,
+            'artifact',
+            'blocked',
+            'protected_artifact_changed',
+            collectionStarted,
+            blocked.slice(0, 12),
+          );
+          throw Error('protected_artifact_changed');
+        }
         run.report.diff = differences(run.input.files, collected);
         if (JSON.stringify(run.report.diff).length > 600000) throw Error('diff_limit');
         run.report.diffComplete = true;
+        control(run, 'artifact', 'passed', 'snapshot_collected', collectionStarted);
         if (run.input.captureWorkspace === true) run.outputFiles = collected;
       } catch (error) {
+        if (error.message !== 'protected_artifact_changed')
+          control(run, 'artifact', 'failed', 'artifact_unavailable', collectionStarted);
         if (fakeProvider)
           console.error(
             JSON.stringify({ event: 'fixture_artifact_error', message: error.message }),
@@ -294,7 +329,11 @@ export async function createController({ token, configuration, fakeProvider, nam
         run.report.limitations.push('No se ha confirmado la parada física del contenedor.');
       }
       run.report.finishedAt = new Date().toISOString();
-      if (run.reason === 'completed' && !run.report.diffComplete) run.reason = 'artifact_failed';
+      if (run.reason === 'completed' && !run.report.diffComplete)
+        run.reason =
+          run.report.controls.events.find((event) => event.id === 'artifact').status === 'blocked'
+            ? 'protected_artifact_changed'
+            : 'artifact_failed';
       run.report.durationMs = Date.now() - run.started;
       run.report.modelRequests = run.requests;
       run.report.reason = run.reason;
@@ -522,14 +561,14 @@ export async function createController({ token, configuration, fakeProvider, nam
     }
   }
   async function start(input) {
-    const control = new URL(input.controlOrigin);
+    const controlUrl = new URL(input.controlOrigin);
     if (
-      !['http:', 'https:'].includes(control.protocol) ||
-      control.username ||
-      control.password ||
-      control.pathname !== '/' ||
-      control.search ||
-      control.hash
+      !['http:', 'https:'].includes(controlUrl.protocol) ||
+      controlUrl.username ||
+      controlUrl.password ||
+      controlUrl.pathname !== '/' ||
+      controlUrl.search ||
+      controlUrl.hash
     )
       throw Error('invalid_control_origin');
     const selectedEnvironment =
@@ -592,7 +631,7 @@ export async function createController({ token, configuration, fakeProvider, nam
     const run = {
       key,
       input,
-      controlOrigin: control.origin,
+      controlOrigin: controlUrl.origin,
       budgetReason: null,
       digest,
       lease,
@@ -614,6 +653,7 @@ export async function createController({ token, configuration, fakeProvider, nam
         startedAt: new Date().toISOString(),
         finishedAt: null,
         summary: '',
+        controls: createControls(input),
         commands: [],
         tests: [],
         diff: [],
@@ -626,7 +666,7 @@ export async function createController({ token, configuration, fakeProvider, nam
         limitations: [
           'Snapshot filtrado del commit, sin historial Git ni dependencias instaladas.',
           'El diff cubre texto UTF-8, sin comparar permisos; se rechazan enlaces y archivos especiales.',
-          'Solo perfil Node: verificación fija node --test, sin instalación ni red general.',
+          'Verificación independiente según el perfil, con salida y tiempo acotados.',
           'Consumo ausente es desconocido; no se estima factura ni se garantiza cancelación remota de facturación.',
         ],
       },
@@ -641,6 +681,8 @@ export async function createController({ token, configuration, fakeProvider, nam
     await new Promise((resolve) => server.listen(dir + '/model.sock', resolve));
     await chmod(dir + '/model.sock', 0o666);
     run.gateway = server;
+    const configurationStarted = performance.now();
+    control(run, 'configuration', 'running', 'preparing_workspace');
     try {
       run.workspace = 'ferweb_code_' + key.replaceAll('-', '');
       await json('POST', '/volumes/create', {
@@ -650,7 +692,10 @@ export async function createController({ token, configuration, fakeProvider, nam
         DriverOpts: {
           type: 'tmpfs',
           device: 'tmpfs',
-          o: 'size=67108864,uid=1000,gid=1000,mode=0700,noexec,nosuid',
+          o:
+            input.workspaceAccess === 'read-only'
+              ? 'size=67108864,uid=1000,gid=1000,mode=0700,noexec,nosuid'
+              : 'size=67108864,uid=0,gid=0,mode=1777,noexec,nosuid',
         },
       });
       if (input.workspaceAccess === 'read-only') await seedReadOnly(run);
@@ -706,16 +751,32 @@ export async function createController({ token, configuration, fakeProvider, nam
       void (async () => {
         try {
           // Wait for root supervisor preparation before executing anything as uid 1000.
-          for (let i = 0; i < 50; i++) {
+          let prepared = false;
+          for (let i = 0; i < 50 && !run.finishing; i++) {
             const probe = await exec(run, [
               'node',
               '-e',
-              "fetch('http://127.0.0.1:9040/lease').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+              "fetch('http://127.0.0.1:9040/lease',{signal:AbortSignal.timeout(500)}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
             ]);
-            if (probe.exitCode === 0) break;
+            if (probe.exitCode === 0) {
+              prepared = true;
+              break;
+            }
             await new Promise((r) => setTimeout(r, 100));
           }
           if (run.finishing) return;
+          if (!prepared) {
+            control(run, 'configuration', 'timeout', 'workspace_not_ready', configurationStarted);
+            await finish(run, 'control_timeout');
+            return;
+          }
+          control(
+            run,
+            'configuration',
+            'passed',
+            input.workspaceAccess === 'read-only' ? 'readonly_workspace' : 'reserved_paths_locked',
+            configurationStarted,
+          );
           run.phase = 'codex';
           const agent = await exec(run, ['node', '/opt/ferweb/agent.mjs'], (line) =>
             observe(run, line),
@@ -732,19 +793,36 @@ export async function createController({ token, configuration, fakeProvider, nam
           }
           run.phase = 'verification';
           const readOnly = input.workspaceAccess === 'read-only';
-          run.report.tests.push(
-            await exec(
-              run,
-              readOnly
-                ? ['timeout', '--signal=KILL', '20s', 'node', '/opt/ferweb/verify-readonly.mjs']
-                : [
-                    'timeout',
-                    '--signal=KILL',
-                    '20s',
-                    ...(typescript ? typecheck : ['node', '--test']),
-                  ],
-            ),
+          const verificationStarted = performance.now();
+          const verifiesNodeTests = !readOnly && !typescript;
+          let executed = 0;
+          control(run, 'verification', 'running', 'checking_profile');
+          const result = await exec(
+            run,
+            [
+              'timeout',
+              '--kill-after=1s',
+              '19s',
+              ...(readOnly
+                ? ['node', '/opt/ferweb/verify-readonly.mjs']
+                : typescript
+                  ? typecheck
+                  : nodeVerification),
+            ],
+            verifiesNodeTests
+              ? (line) => {
+                  try {
+                    const record = JSON.parse(line);
+                    if (record.protocol === 'ferweb-test-v1' && record.outcome === 'passed')
+                      executed++;
+                  } catch {
+                    // Only records from the fixed stdout reporter contribute evidence.
+                  }
+                }
+              : undefined,
           );
+          if (run.finishing) return;
+          run.report.tests.push(result);
           run.report.tests[0].command = readOnly
             ? 'verify-readonly-snapshot'
             : selectedEnvironment.independentTest;
@@ -753,6 +831,32 @@ export async function createController({ token, configuration, fakeProvider, nam
             : typescript
               ? 'controller-typecheck'
               : 'controller-verification';
+          const timedOut =
+            result.exitCode === 124 && performance.now() - verificationStarted >= 19000;
+          const missingTests = result.exitCode === 0 && verifiesNodeTests && executed === 0;
+          const status = timedOut
+            ? 'timeout'
+            : missingTests
+              ? 'not_run'
+              : result.exitCode === 0
+                ? 'passed'
+                : 'failed';
+          result.status = status;
+          control(
+            run,
+            'verification',
+            status,
+            timedOut
+              ? 'verification_deadline'
+              : missingTests
+                ? 'no_tests_executed'
+                : result.exitCode === 0
+                  ? 'profile_passed'
+                  : result.exitCode === 137
+                    ? 'verification_interrupted'
+                    : 'profile_failed',
+            verificationStarted,
+          );
           if (
             !run.finishing &&
             readOnly &&
@@ -775,12 +879,33 @@ export async function createController({ token, configuration, fakeProvider, nam
             });
           }
           if (!run.finishing)
-            await finish(run, run.report.tests[0].exitCode === 0 ? 'completed' : 'tests_failed');
+            await finish(
+              run,
+              timedOut
+                ? 'verification_timeout'
+                : missingTests
+                  ? 'verification_not_run'
+                  : result.exitCode === 0
+                    ? 'completed'
+                    : 'tests_failed',
+            );
         } catch {
-          if (!run.finishing) await finish(run, 'executor_failed');
+          if (!run.finishing) {
+            const setup = run.phase === 'preparing';
+            if (setup)
+              control(
+                run,
+                'configuration',
+                'failed',
+                'workspace_setup_failed',
+                configurationStarted,
+              );
+            await finish(run, setup ? 'control_failed' : 'executor_failed');
+          }
         }
       })();
     } catch (error) {
+      control(run, 'configuration', 'failed', 'workspace_setup_failed', configurationStarted);
       if (fakeProvider)
         console.error(
           JSON.stringify({

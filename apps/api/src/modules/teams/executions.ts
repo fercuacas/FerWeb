@@ -593,6 +593,7 @@ export class TeamExecutions {
       current.state === 'completed' &&
       report?.diffComplete === true &&
       report.terminationConfirmed === true &&
+      !report.controls?.events.some((event) => event.status !== 'passed') &&
       !!output?.length &&
       report.tests.some((test) => test.origin === origin && test.exitCode === 0) &&
       (!specialists ||
