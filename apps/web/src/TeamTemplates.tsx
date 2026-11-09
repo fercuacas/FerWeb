@@ -163,13 +163,14 @@ function TemplateEditor({
           <select
             value={draft.strategy ?? 'sequential'}
             onChange={(e) => {
-              const { strategy: _, reviewMode: _reviewMode, ...rest } = draft;
+              const { strategy: _, reviewMode: _reviewMode, toolProfile, ...rest } = draft;
               setDraft({
                 ...rest,
                 ...(e.target.value === 'specialists' && {
                   strategy: 'specialists' as const,
                   maxIterations: 1,
                 }),
+                ...(e.target.value !== 'specialists' && toolProfile && { toolProfile }),
                 limits: { ...draft.limits, concurrency: 1 },
               });
             }}
@@ -178,6 +179,28 @@ function TemplateEditor({
             <option value="specialists">Especialistas de solo lectura y resumen</option>
           </select>
         </label>
+        {draft.strategy !== 'specialists' && (
+          <label>
+            Perfil de herramientas del equipo
+            <select
+              value={draft.toolProfile ?? 'node-isolated-v1'}
+              onChange={(e) => {
+                const { toolProfile: _, ...rest } = draft;
+                setDraft(
+                  e.target.value === 'typescript-react-v1'
+                    ? {
+                        ...rest,
+                        toolProfile: 'typescript-react-v1',
+                      }
+                    : rest,
+                );
+              }}
+            >
+              <option value="node-isolated-v1">Node aislado</option>
+              <option value="typescript-react-v1">TypeScript/React aislado</option>
+            </select>
+          </label>
+        )}
         {draft.strategy === 'specialists' && (
           <label>
             Concurrencia solicitada

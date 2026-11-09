@@ -119,6 +119,14 @@ async function fakeProvider(run, value, res) {
           : `node --test; node tests/isolation-probe.cjs; node -e "require('node:fs').writeFileSync('src/add.cjs', 'exports.add = (a, b) => a + b${/P08 reproduced target/.test(run.input.task.title) ? ' + 1' : ''};\\n')"; node --test`;
     if (run.input.task.title === 'P10 bounded context')
       command = 'node tools/context-expand-probe.cjs && (' + command + ')';
+    if (run.input.task.title === 'P11 typecheck failure')
+      command = 'node tests/isolation-probe.cjs';
+    if (
+      run.input.task.title === 'P11 typecheck fix' ||
+      run.input.task.title === 'P11 TypeScript team'
+    ) {
+      command = `node tests/isolation-probe.cjs && node -e "const fs=require('node:fs');const p='src/Counter.tsx';fs.writeFileSync(p,fs.readFileSync(p,'utf8').replace('total=\\"wrong\\"','total={42}'))" && (${command})`;
+    }
     const args =
       exec.name === 'exec_command'
         ? { cmd: command, yield_time_ms: cancel ? 1000 : 10000, max_output_tokens: 3000 }

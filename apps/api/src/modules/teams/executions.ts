@@ -544,6 +544,9 @@ export class TeamExecutions {
         taskVersion: snapshot.task.version,
         commit: run.commit_sha,
         model: snapshot.model!,
+        ...(snapshot.template.definition.toolProfile && {
+          toolProfile: snapshot.template.definition.toolProfile,
+        }),
         maxRequests: step.maxRequests,
         maxOutputTokens: 4096,
         timeoutMs: snapshot.limits.timeoutMs,
@@ -572,9 +575,14 @@ export class TeamExecutions {
     );
   }
   private async saveDelivery(run: QueryResultRow, current: QueryResultRow, specialists: boolean) {
+    const snapshot = teamPlanSnapshot.parse(run.snapshot.plan);
     const report = current.report ? codingReport.parse(current.report) : null;
     const output = current.output_files ? codingWorkspace.parse(current.output_files) : null;
-    const origin = specialists ? 'controller-readonly-verification' : 'controller-verification';
+    const origin = specialists
+      ? 'controller-readonly-verification'
+      : snapshot.execution.toolProfile === 'typescript-react-v1'
+        ? 'controller-typecheck'
+        : 'controller-verification';
     const fingerprint = (files: z.infer<typeof codingWorkspace>) =>
       canonical(
         files
@@ -633,7 +641,6 @@ export class TeamExecutions {
           JSON.stringify({ step: current.step_key, verified, outputHash: delivery.outputHash }),
           verified,
         );
-        const snapshot = teamPlanSnapshot.parse(run.snapshot.plan);
         for (const target of snapshot.steps.filter((step) =>
           step.dependsOn.includes(current.step_key),
         )) {

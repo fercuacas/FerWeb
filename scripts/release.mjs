@@ -44,7 +44,13 @@ try {
     else if (command === 'restore') await restore(options, process.argv[3]);
     else if (commands[command]) {
       if (command === 'build')
-        await options.run(['--profile', 'build-sandbox', 'build', 'sandbox-image']);
+        await options.run([
+          '--profile',
+          'build-sandbox',
+          'build',
+          'sandbox-image',
+          'sandbox-typescript-image',
+        ]);
       await options.run(commands[command]);
     } else
       throw new Error(

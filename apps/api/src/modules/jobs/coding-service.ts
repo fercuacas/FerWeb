@@ -15,7 +15,11 @@ import {
   type repeatCodingInput,
 } from '@ferweb/contracts';
 import { HttpError } from '../../http-error.js';
-import { describeCoding, describeReadOnlyCoding } from '../../execution-capabilities.js';
+import {
+  codingEnvironment,
+  describeCoding,
+  describeReadOnlyCoding,
+} from '../../execution-capabilities.js';
 import { GitHubService } from '../github/service.js';
 import { ProjectRepository } from '../projects/repository.js';
 import { JobService } from './service.js';
@@ -77,8 +81,10 @@ export class CodingService {
       models: caps.models,
       simulated: caps.simulated,
       environment: caps.environment,
+      typescriptEnvironment: caps.typescriptEnvironment,
       execution: describeCoding(caps),
       readOnlyExecution: describeReadOnlyCoding(caps),
+      typescriptExecution: describeCoding(caps, 'typescript-react-v1'),
     };
   }
   private async access(owner: string, project: string, repositoryId: number) {
@@ -214,11 +220,14 @@ export class CodingService {
         'El material ya no coincide con la versión del rol.',
       );
     const capabilities = await this.runner.capabilities();
-    if (
-      !capabilities.available ||
-      !capabilities.models.includes(input.model) ||
-      !capabilities.environment
-    )
+    const environment = codingEnvironment(capabilities, input.toolProfile);
+    if (input.toolProfile === 'typescript-react-v1' && !environment)
+      throw new HttpError(
+        503,
+        'coding_profile_unavailable',
+        'El ejecutor no confirma la imagen del perfil TypeScript/React.',
+      );
+    if (!capabilities.available || !capabilities.models.includes(input.model) || !environment)
       throw new HttpError(
         503,
         'codex_unconfigured',
@@ -229,12 +238,11 @@ export class CodingService {
           : 'Configura Codex en el servidor y selecciona un modelo permitido.',
       );
     const readOnly = team?.snapshot.template.definition.strategy === 'specialists';
-    if (
-      contextPack &&
-      contextPack.execution.toolProfile !== (readOnly ? 'node-readonly-v1' : 'node-isolated-v1')
-    )
-      throw changed();
-    const option = readOnly ? describeReadOnlyCoding(capabilities) : describeCoding(capabilities);
+    if (readOnly && input.toolProfile === 'typescript-react-v1') throw incompatible();
+    const option = readOnly
+      ? describeReadOnlyCoding(capabilities)
+      : describeCoding(capabilities, input.toolProfile);
+    if (contextPack && canonical(contextPack.execution) !== canonical(option)) throw changed();
     if (team && canonical(option) !== canonical(team.snapshot.execution)) throw changed();
     if (agent && ![agent, ...materials].every((item) => supportsAgent(item, option)))
       throw incompatible();
@@ -295,10 +303,20 @@ export class CodingService {
         'coding_source_empty',
         'No hay archivos de texto permitidos para ejecutar.',
       );
+    if (
+      input.toolProfile === 'typescript-react-v1' &&
+      !files.some((file) => /\.tsx?$/.test(file.path) && !file.path.endsWith('.d.ts'))
+    )
+      throw new HttpError(
+        422,
+        'typescript_source_required',
+        'El perfil requiere fuentes TypeScript en el snapshot.',
+      );
     const fresh = await this.access(owner, project, link.repositoryId);
     if (fresh.version !== link.version || fresh.stale || fresh.snapshot?.commit !== input.commit)
       throw changed();
     const configuration = codingConfiguration.parse({
+      ...(input.toolProfile && { toolProfile: input.toolProfile }),
       ...(input.contextReceipt && { contextReceipt: input.contextReceipt }),
       ...(input.memory?.length && { memory: input.memory }),
       ...(readOnly && { workspaceAccess: 'read-only' }),
@@ -454,7 +472,7 @@ export class CodingService {
           JSON.stringify(excluded),
           link.branch,
           JSON.stringify(sourceTree),
-          JSON.stringify(capabilities.environment),
+          JSON.stringify(environment),
           agent ? JSON.stringify({ ...agent, ...(materials.length && { materials }) }) : null,
           JSON.stringify(input.memory ?? []),
         ],
@@ -761,7 +779,8 @@ export class CodingService {
       !caps.available ||
       !caps.models.includes(input.model) ||
       !source.environment ||
-      canonical(caps.environment) !== canonical(source.environment)
+      canonical(codingEnvironment(caps, source.configuration.toolProfile)) !==
+        canonical(source.environment)
     )
       throw new HttpError(
         409,
@@ -773,7 +792,7 @@ export class CodingService {
       model: input.model,
     });
     const agent = source.agent_snapshot ? codingAgentSnapshot.parse(source.agent_snapshot) : null;
-    const option = describeCoding(caps);
+    const option = describeCoding(caps, configuration.toolProfile);
     if (agent && ![agent, ...(agent.materials ?? [])].every((item) => supportsAgent(item, option)))
       throw incompatible();
     const id = await this.jobs.queue.tx(async (db) => {

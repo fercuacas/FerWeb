@@ -117,7 +117,13 @@ const report = {
   sourceSha256: sourceHash.digest('hex'),
 };
 try {
-  await options.run(['--profile', 'build-sandbox', 'build', 'sandbox-image']);
+  await options.run([
+    '--profile',
+    'build-sandbox',
+    'build',
+    'sandbox-image',
+    'sandbox-typescript-image',
+  ]);
   await options.run(['build', 'api', 'web', 'ai', 'runner', 'tools']);
   const inspectRuntime = async () => {
     const [image] = JSON.parse(
@@ -278,12 +284,14 @@ try {
         { capture: true },
       ),
     };
-  report.images.sandbox = {
-    tag: 'ferweb-codex-sandbox:0.166.0',
-    id: await docker(['image', 'inspect', 'ferweb-codex-sandbox:0.166.0', '--format', '{{.Id}}'], {
-      capture: true,
-    }),
-  };
+  for (const [key, tag] of [
+    ['sandbox', 'ferweb-codex-sandbox:0.166.0'],
+    ['typescriptSandbox', 'ferweb-codex-typescript:1'],
+  ])
+    report.images[key] = {
+      tag,
+      id: await docker(['image', 'inspect', tag, '--format', '{{.Id}}'], { capture: true }),
+    };
   report.passed = true;
 } finally {
   for (const stack of [options, restored]) {

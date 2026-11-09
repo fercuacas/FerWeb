@@ -51,6 +51,7 @@ export class ContextPackService {
       owner: string,
       project: string,
       readOnly?: boolean,
+      toolProfile?: z.infer<typeof contextPackPrepare>['toolProfile'],
     ) => Promise<ExecutionOption>,
   ) {
     this.projects = new ProjectRepository(pool);
@@ -288,7 +289,13 @@ export class ContextPackService {
       all = [];
     for (const s of catalog)
       if (s.review === 'approved') all.push(await this.skills.read(owner, project, s.id));
-    const execution = await this.execution(owner, project, input.readOnly),
+    if (input.readOnly && input.toolProfile === 'typescript-react-v1')
+      throw new HttpError(
+        422,
+        'context_profile_incompatible',
+        'TypeScript/React requiere un espacio escribible.',
+      );
+    const execution = await this.execution(owner, project, input.readOnly, input.toolProfile),
       selection = selectContextSkills({
         skills: all,
         rules: policy.rules,
@@ -497,7 +504,12 @@ export class ContextPackService {
       digest(canonical((await this.skills.list(owner, project)).versions)) !== s.catalogHash ||
       digest(
         canonical(
-          await this.execution(owner, project, s.execution.toolProfile === 'node-readonly-v1'),
+          await this.execution(
+            owner,
+            project,
+            s.execution.toolProfile === 'node-readonly-v1',
+            s.execution.toolProfile === 'typescript-react-v1' ? 'typescript-react-v1' : undefined,
+          ),
         ),
       ) !== digest(canonical(s.execution))
     )

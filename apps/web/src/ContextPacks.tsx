@@ -3,6 +3,7 @@ import { skipToken } from '@reduxjs/toolkit/query';
 import { z } from 'zod';
 import {
   contextLimits,
+  type CodingToolProfile,
   contextPackPolicyInput,
   type ContextReceiptReference,
   type contextPackConfigure,
@@ -193,6 +194,7 @@ export function ContextPreparer({
   taskVersion,
   agent,
   model,
+  toolProfile,
   memory,
   onChange,
 }: {
@@ -201,6 +203,7 @@ export function ContextPreparer({
   taskVersion: number;
   agent: z.infer<typeof agentSelection> | undefined;
   model: string;
+  toolProfile: CodingToolProfile;
   memory: z.infer<typeof memorySelections>;
   onChange: (s: ContextSelection) => void;
 }) {
@@ -220,7 +223,15 @@ export function ContextPreparer({
     reference && enabled ? { project, id: reference.id } : skipToken,
     poll,
   );
-  const binding = JSON.stringify([taskId, taskVersion, agent?.id, agent?.version, model, memory]);
+  const binding = JSON.stringify([
+    taskId,
+    taskVersion,
+    agent?.id,
+    agent?.version,
+    model,
+    memory,
+    toolProfile,
+  ]);
   useEffect(() => {
     setReference(null);
     request.current = crypto.randomUUID();
@@ -229,6 +240,7 @@ export function ContextPreparer({
   const valid =
     !!current &&
     current.valid &&
+    current.snapshot.execution.toolProfile === toolProfile &&
     current.snapshot.task.id === taskId &&
     current.snapshot.task.version === taskVersion &&
     current.snapshot.agent?.id === agent?.id &&
@@ -361,6 +373,7 @@ export function ContextPreparer({
                   taskVersion,
                   ...(agent && { agent }),
                   ...(model && { model }),
+                  ...(toolProfile === 'typescript-react-v1' && { toolProfile }),
                   profile,
                   mode,
                   explicitSkillIds: explicit,

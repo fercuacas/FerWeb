@@ -4,6 +4,9 @@ services:
     build:
       secrets:
         - npm_ca
+  sandbox-typescript-image:
+    build:
+      secrets: [npm_ca]
   worker:
     build:
       secrets:

@@ -27,6 +27,7 @@ const capabilityLabels: Record<(typeof agentCapability.options)[number], string>
 const profileLabels: Record<(typeof agentToolProfile.options)[number], string> = {
   'node-readonly-v1': 'Node con fuentes de solo lectura',
   'node-isolated-v1': 'Node aislado',
+  'typescript-react-v1': 'TypeScript/React aislado',
   'text-only': 'Solo texto',
 };
 const blank: AgentDefinition = {

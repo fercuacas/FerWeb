@@ -4,7 +4,7 @@ import { memorySelections } from './memory.js';
 import { contextPackConfigure, contextReceiptReference } from './context-packs.js';
 import { agentCapability, agentSelection, agentTemplateId } from './agents.js';
 import { codingAgentSnapshot } from './coding.js';
-import { executionOptionSchema } from './execution.js';
+import { codingToolProfile, executionOptionSchema } from './execution.js';
 import { executionBudgetLimits } from './usage.js';
 
 const text = z.string().regex(/^[^\u0000\uD800-\uDFFF]*$/u);
@@ -45,6 +45,7 @@ export function teamStepOrder(steps: { key: string; dependsOn: string[] }[]) {
 export const teamDefinition = z
   .strictObject({
     name: text.trim().min(1).max(120),
+    toolProfile: codingToolProfile.optional(),
     strategy: z.literal('specialists').optional(),
     reviewMode: z.literal('dimensions-v1').optional(),
     description: text.trim().max(1000),
@@ -65,6 +66,12 @@ export const teamDefinition = z
           'La revisión requiere corrección, stack, seguridad/pruebas y verificador, en ese orden.',
       });
     if (value.strategy === 'specialists') {
+      if (value.toolProfile === 'typescript-react-v1')
+        ctx.addIssue({
+          code: 'custom',
+          path: ['toolProfile'],
+          message: 'El perfil TypeScript/React requiere ejecución secuencial.',
+        });
       const roots = value.steps.slice(0, -1),
         summary = value.steps.at(-1)!;
       if (

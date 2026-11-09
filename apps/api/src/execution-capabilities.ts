@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import {
   type AiProvider,
+  type CodingToolProfile,
   type ExecutionOption,
   type ExecutionUnavailableReason,
 } from '@ferweb/contracts';
@@ -10,12 +11,14 @@ import type { RunnerClient } from './modules/jobs/runner-client.js';
 
 export function describeCoding(
   caps: Awaited<ReturnType<RunnerClient['capabilities']>>,
+  profile: CodingToolProfile = 'node-isolated-v1',
 ): ExecutionOption {
+  const environment = codingEnvironment(caps, profile);
   const reason =
     caps.reason ??
     (!caps.available
       ? 'provider_unconfigured'
-      : !caps.environment
+      : !environment
         ? 'runner_unavailable'
         : caps.models.length === 0
           ? 'no_allowed_models'
@@ -25,12 +28,12 @@ export function describeCoding(
     provider: 'openai',
     runtime: 'codex-cli',
     destination: caps.reason ? 'unknown' : caps.simulated ? 'simulated' : 'openai-api',
-    toolProfile: 'node-isolated-v1',
-    configurationRevision: caps.environment
+    toolProfile: profile,
+    configurationRevision: environment
       ? createHash('sha256')
           .update(
             JSON.stringify({
-              environment: caps.environment,
+              environment,
               models: caps.models,
               available: caps.available,
             }),
@@ -51,6 +54,13 @@ export function describeCoding(
       usage: 'unknown',
     },
   };
+}
+
+export function codingEnvironment(
+  caps: Awaited<ReturnType<RunnerClient['capabilities']>>,
+  profile?: CodingToolProfile,
+) {
+  return profile === 'typescript-react-v1' ? caps.typescriptEnvironment : caps.environment;
 }
 
 export function describeReadOnlyCoding(

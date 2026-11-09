@@ -48,9 +48,14 @@ export function ExecutionDetails({ option }: { option: ExecutionOption }) {
           ? 'Herramientas Node aisladas'
           : option.toolProfile === 'node-readonly-v1'
             ? 'Node · fuentes de solo lectura'
-            : 'Solo texto'}
+            : option.toolProfile === 'typescript-react-v1'
+              ? 'TypeScript/React aislado'
+              : 'Solo texto'}
       </p>
       {option.reason && <p>{reasonLabels[option.reason]}</p>}
+      {option.available && option.toolProfile === 'typescript-react-v1' && (
+        <p>Verificación disponible: comprobación estricta de tipos TypeScript y JSX en Docker.</p>
+      )}
       <details>
         <summary>Ver capacidades de esta opción</summary>
         <ul>

@@ -45,7 +45,13 @@ export class RunnerClient {
       reason: 'runner_unconfigured' | 'runner_unavailable' | null;
     }
   > {
-    const unavailable = { available: false, models: [], simulated: false, environment: null };
+    const unavailable = {
+      available: false,
+      models: [],
+      simulated: false,
+      environment: null,
+      typescriptEnvironment: null,
+    };
     if (!this.token) return { ...unavailable, reason: 'runner_unconfigured' };
     try {
       return { ...codingCapabilities.parse(await this.request('/capabilities')), reason: null };

@@ -3,7 +3,7 @@ import { sourceSchema, hybridResponse } from './retrieval.js';
 import { memorySelection, memorySelections, memoryEntry } from './memory.js';
 import { agentSelection } from './agents.js';
 import { skillReference, skillVersion } from './skills.js';
-import { executionOptionSchema } from './execution.js';
+import { codingToolProfile, executionOptionSchema } from './execution.js';
 const text = z.string().regex(/^[^\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\uD800-\uDFFF]*$/u);
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 const ids = z
@@ -59,6 +59,7 @@ export const contextPackPolicy = z.object({
 });
 export const contextReceiptReference = z.strictObject({ id: z.uuid(), hash });
 export const contextPackPrepare = z.strictObject({
+  toolProfile: codingToolProfile.optional(),
   model: text.trim().min(1).max(100).optional(),
   readOnly: z.boolean().default(false),
   requestId: z.uuid(),

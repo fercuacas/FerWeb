@@ -18,6 +18,15 @@ services:
     build:
       context: .
       dockerfile: apps/sandbox/Dockerfile
+      target: node-sandbox
+
+  sandbox-typescript-image:
+    profiles: ['build-sandbox']
+    image: ferweb-codex-typescript:1
+    build:
+      context: .
+      dockerfile: apps/sandbox/Dockerfile
+      target: typescript-sandbox
 
   runner:
     build:

@@ -1,6 +1,12 @@
 import { useState, type FormEvent } from 'react';
 import { skipToken } from '@reduxjs/toolkit/query';
-import { classifyPlanTask, teamStepOrder, type Project, type TeamPlan } from '@ferweb/contracts';
+import {
+  classifyPlanTask,
+  codingOption,
+  teamStepOrder,
+  type Project,
+  type TeamPlan,
+} from '@ferweb/contracts';
 import { teamsApi } from './teams-store';
 import { codingApi } from './coding-store';
 import { workspaceApi, errorMessage } from './workspace-store';
@@ -210,11 +216,10 @@ function PlansContent({ project }: { project: Project }) {
     (item) => item.version === (version || detail.template.latest.version),
   );
   const specialists = template?.definition.strategy === 'specialists';
-  const execution = capabilities.error
-    ? undefined
-    : specialists
-      ? capabilities.currentData?.readOnlyExecution
-      : capabilities.currentData?.execution;
+  const execution =
+    !capabilities.error && capabilities.currentData
+      ? codingOption(capabilities.currentData, template?.definition.toolProfile, specialists)
+      : undefined;
   const effectiveModel = execution?.models.some((item) => item.id === model)
     ? model
     : (execution?.models[0]?.id ?? '');

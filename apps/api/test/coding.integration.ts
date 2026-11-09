@@ -171,18 +171,39 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
         const d = await detail(id);
         return !['pending', 'running'].includes(d.job.state) ? d : false;
       }, timeout);
-    async function startTeam(title: string, maxRequests = 4, withContext = false) {
+    async function startTeam(
+      title: string,
+      maxRequests = 4,
+      withContext = false,
+      toolProfile?: TeamDefinition['toolProfile'],
+    ) {
       const post = (path: string, body: unknown) => request('POST', path, body, cookie);
       const roles = [];
       for (const template of ['implementer', 'reviewer'])
         roles.push(
           agentMutationResponse.parse(
-            await (await post(`/projects/${project}/agents`, { template })).json(),
+            await (
+              await post(
+                `/projects/${project}/agents`,
+                toolProfile
+                  ? {
+                      name: template,
+                      purpose: 'Check the pinned toolchain.',
+                      instructions: 'Use the fixed profile for this fixture.',
+                      outputFormat: 'Evidence.',
+                      requiredCapabilities:
+                        template === 'implementer' ? ['text', 'workspaceWrite'] : ['text'],
+                      allowedToolProfiles: [toolProfile],
+                    }
+                  : { template },
+              )
+            ).json(),
           ).role,
         );
       const definition: TeamDefinition = {
         name: title,
         description: 'Durable team fixture.',
+        ...(toolProfile && { toolProfile }),
         maxIterations: 1,
         limits: { maxRequests: 10, timeoutMs: 120000, concurrency: 1 },
         steps: [
@@ -2440,6 +2461,90 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
           ).status,
           403,
         );
+      },
+    );
+    await t.test(
+      'P11 freezes TypeScript tools and verifies JSX independently in an isolated container',
+      async () => {
+        if (!worker || worker.exitCode !== null || worker.signalCode !== null) await startWorker();
+        const profile = 'typescript-react-v1';
+        const caps = await coding.capabilities(owner.id, project);
+        assert.equal(caps.typescriptExecution.available, true);
+        assert.equal(caps.typescriptExecution.toolProfile, profile);
+        assert.notEqual(caps.typescriptEnvironment?.image, caps.environment?.image);
+        for (const path of ['src/Counter.tsx', 'tsconfig.json'])
+          addSource(
+            fixture,
+            path,
+            await readFile(
+              new URL('../../../tests/fixtures/typescript-repo/' + path, import.meta.url),
+              'utf8',
+            ),
+          );
+        const current = (await github.read(owner.id, project)).link!;
+        await github.sync(owner.id, project, current.version);
+
+        const { job: invalid, body } = await enqueue('P11 typecheck failure', {
+          toolProfile: profile,
+        });
+        const failed = await terminal(invalid.id, 80000);
+        assert.equal(failed.job.state, 'failed');
+        assert.equal(failed.job.errorCode, 'tests_failed');
+        const rejected = await report(invalid.id);
+        assert.deepEqual(rejected.environment, caps.typescriptEnvironment);
+        assert.equal(rejected.report?.tests[0]?.origin, 'controller-typecheck');
+        assert.notEqual(rejected.report?.tests[0]?.exitCode, 0);
+        assert.match(rejected.report?.tests[0]?.output ?? '', /Counter\.tsx.*TS2322/);
+        assert.ok(
+          rejected.report?.commands.some(
+            (c) => c.exitCode === 0 && c.output.includes('ISOLATION_OK'),
+          ),
+        );
+
+        const oldRole = agentMutationResponse.parse(
+          await (
+            await request(
+              'POST',
+              `/projects/${project}/agents`,
+              { template: 'implementer' },
+              cookie,
+            )
+          ).json(),
+        ).role;
+        const mismatch = await request(
+          'POST',
+          `/projects/${project}/coding`,
+          {
+            ...body,
+            requestId: randomUUID(),
+            agent: { id: oldRole.id, version: 1 },
+          },
+          cookie,
+        );
+        assert.equal(mismatch.status, 422, await mismatch.clone().text());
+
+        const { job: fixed } = await enqueue('P11 typecheck fix', { toolProfile: profile });
+        const done = await terminal(fixed.id, 80000);
+        assert.equal(done.job.state, 'completed', JSON.stringify(done));
+        const accepted = await report(fixed.id);
+        assert.equal(accepted.report?.tests[0]?.origin, 'controller-typecheck');
+        assert.equal(accepted.report?.tests[0]?.exitCode, 0);
+        assert.ok(
+          accepted.report?.diff.some(
+            (file) => file.path === 'src/Counter.tsx' && file.patch.includes('total={42}'),
+          ),
+        );
+
+        const team = await startTeam('P11 TypeScript team', 4, false, profile);
+        const completed = await teamTerminal(team.data.execution.id);
+        assert.equal(completed.execution.state, 'completed', JSON.stringify(completed.execution));
+        for (const step of completed.steps) {
+          assert.equal(step.delivery?.verified, true);
+          const child = await report(step.jobId!);
+          assert.deepEqual(child.environment, caps.typescriptEnvironment);
+          assert.equal(child.report?.tests[0]?.origin, 'controller-typecheck');
+          assert.equal(child.report?.tests[0]?.exitCode, 0);
+        }
       },
     );
     await t.test(

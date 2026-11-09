@@ -1,6 +1,7 @@
 import http from 'node:http';
 import { mkdir, writeFile, chmod, rm, readdir, readFile } from 'node:fs/promises';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { connectDocker, demux } from './docker.mjs';
 import { validateFiles, differences, hash } from './files.mjs';
 import { modelPayload, attachUsageMeter, providerUsage } from './policy.mjs';
@@ -20,6 +21,7 @@ const safeEqual = (a, b) =>
   typeof a === 'string' && a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 const safeText = (value, limit = 8000) => (typeof value === 'string' ? value.slice(0, limit) : '');
 const number = (v) => (Number.isSafeInteger(v) && v >= 0 ? v : null);
+const typecheck = ['tsc', '--project', '/opt/ferweb/typescript/tsconfig.json'];
 
 export async function createController({ token, configuration, fakeProvider, namespace, volume }) {
   if (!token || token.length < 32) throw Error('runner_token_missing');
@@ -52,6 +54,21 @@ export async function createController({ token, configuration, fakeProvider, nam
     network: 'none',
     independentTest: 'node --test',
   };
+  // The optional toolchain is selected only by a frozen, server-defined profile.
+  const typescriptImage = await json('GET', '/images/ferweb-codex-typescript:1/json')
+    .then((info) => info.Id)
+    .catch(() => null);
+  const typescriptEnvironment = typescriptImage
+    ? {
+        ...environment,
+        image: typescriptImage,
+        profile: 'typescript-react-v1',
+        tools: [...environment.tools, 'tsc'],
+        versions: ['Node 24.22.2', 'TypeScript 7.0.2', 'React/React DOM types 19.3.0'],
+        independentTest: typecheck.join(' '),
+        verificationTimeoutMs: 20000,
+      }
+    : null;
   const label = `ferweb.codex.controller=${namespace}`;
   const root = '/runtime';
   await mkdir(root, { recursive: true });
@@ -515,12 +532,12 @@ export async function createController({ token, configuration, fakeProvider, nam
       control.hash
     )
       throw Error('invalid_control_origin');
-    const environmentKeys = Object.keys(environment).sort();
-    if (
-      JSON.stringify(input.environment, environmentKeys) !==
-      JSON.stringify(environment, environmentKeys)
-    )
+    const selectedEnvironment =
+      input.environment?.profile === 'typescript-react-v1' ? typescriptEnvironment : environment;
+    if (!selectedEnvironment || !isDeepStrictEqual(input.environment, selectedEnvironment))
       throw Error('execution_environment_changed');
+    const typescript = selectedEnvironment.profile === 'typescript-react-v1';
+    if (typescript && input.workspaceAccess === 'read-only') throw Error('invalid_profile');
     if (
       !uuid.test(input.jobId) ||
       !uuid.test(input.fence) ||
@@ -564,6 +581,7 @@ export async function createController({ token, configuration, fakeProvider, nam
       repository: input.repository,
       commit: input.commit,
       task: input.task,
+      ...(typescript && { toolProfile: selectedEnvironment.profile }),
       role: input.role,
       files: input.files,
       workspaceAccess: input.workspaceAccess,
@@ -637,7 +655,7 @@ export async function createController({ token, configuration, fakeProvider, nam
       });
       if (input.workspaceAccess === 'read-only') await seedReadOnly(run);
       const c = await json('POST', '/containers/create', {
-        Image: image,
+        Image: selectedEnvironment.image,
         Env: [],
         Labels: { 'ferweb.codex.controller': namespace, 'ferweb.codex.job': input.jobId },
         User: '0:0',
@@ -719,13 +737,22 @@ export async function createController({ token, configuration, fakeProvider, nam
               run,
               readOnly
                 ? ['timeout', '--signal=KILL', '20s', 'node', '/opt/ferweb/verify-readonly.mjs']
-                : ['timeout', '--signal=KILL', '20s', 'node', '--test'],
+                : [
+                    'timeout',
+                    '--signal=KILL',
+                    '20s',
+                    ...(typescript ? typecheck : ['node', '--test']),
+                  ],
             ),
           );
-          run.report.tests[0].command = readOnly ? 'verify-readonly-snapshot' : 'node --test';
+          run.report.tests[0].command = readOnly
+            ? 'verify-readonly-snapshot'
+            : selectedEnvironment.independentTest;
           run.report.tests[0].origin = readOnly
             ? 'controller-readonly-verification'
-            : 'controller-verification';
+            : typescript
+              ? 'controller-typecheck'
+              : 'controller-verification';
           if (
             !run.finishing &&
             readOnly &&
@@ -791,6 +818,7 @@ export async function createController({ token, configuration, fakeProvider, nam
           models: configuration.models,
           simulated: !!fakeProvider,
           environment,
+          typescriptEnvironment,
         });
         return;
       }

@@ -2,6 +2,8 @@ import { z } from 'zod';
 import { aiProviderSchema } from './chat.js';
 
 const support = z.enum(['supported', 'unsupported', 'unknown']);
+export const codingToolProfile = z.enum(['node-isolated-v1', 'typescript-react-v1']);
+export type CodingToolProfile = z.infer<typeof codingToolProfile>;
 const executionUnavailableReason = z.enum([
   'runner_unconfigured',
   'runner_unavailable',
@@ -17,7 +19,7 @@ export const executionOptionSchema = z.object({
   provider: aiProviderSchema,
   runtime: z.enum(['codex-cli', 'ferweb-chat']),
   destination: z.enum(['openai-api', 'local-ollama', 'simulated', 'unknown']),
-  toolProfile: z.enum(['node-isolated-v1', 'node-readonly-v1', 'text-only']),
+  toolProfile: z.enum([...codingToolProfile.options, 'node-readonly-v1', 'text-only']),
   configurationRevision: z.string().nullable(),
   available: z.boolean(),
   reason: executionUnavailableReason.nullable(),

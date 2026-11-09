@@ -63,7 +63,7 @@ if ($env:FERWEB_BUILD_CA_FILE) { $ferwebComposeArgs += @('-f', 'compose.ca.yaml'
 docker @ferwebComposeArgs --profile tools build tools
 ```
 
-La imagen `tools` copia los fuentes: reconstruir tras cambios antes de probar. Si cambia `apps/sandbox/`, reconstruye también con `docker @ferwebComposeArgs --profile build-sandbox build sandbox-image` (incluido en `npm run docker:up`). Estos argumentos no montan configuraciones privadas de proveedores. El Docker Desktop/motor Linux debe estar iniciado; no ejecutes compiladores o servicios nativos para sustituirlo.
+La imagen `tools` copia los fuentes: reconstruir tras cambios antes de probar. Si cambia `apps/sandbox/`, reconstruye también con `docker @ferwebComposeArgs --profile build-sandbox build sandbox-image sandbox-typescript-image` (incluido en `npm run docker:up`). Estos argumentos no montan configuraciones privadas de proveedores. El Docker Desktop/motor Linux debe estar iniciado; no ejecutes compiladores o servicios nativos para sustituirlo.
 
 Sin servicios ni proveedores, tipos/pruebas básicas/compilación:
 

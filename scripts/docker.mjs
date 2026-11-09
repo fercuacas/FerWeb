@@ -98,7 +98,7 @@ async function run(command) {
 const command = process.argv[2];
 try {
   if (command === 'up' || command === 'check')
-    await run(['--profile', 'build-sandbox', 'build', 'sandbox-image']);
+    await run(['--profile', 'build-sandbox', 'build', 'sandbox-image', 'sandbox-typescript-image']);
   if (command === 'check' || command === 'format') {
     if (command === 'check') await run(commands.up);
     await run(['--profile', 'tools', 'build', 'tools']);

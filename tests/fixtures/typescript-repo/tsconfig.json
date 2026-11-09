@@ -1,0 +1,4 @@
+{
+  "compilerOptions": { "noCheck": true },
+  "files": ["src/Counter.tsx"]
+}

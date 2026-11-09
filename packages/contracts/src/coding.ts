@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { executionOptionSchema } from './execution.js';
+import { codingToolProfile, executionOptionSchema, type CodingToolProfile } from './execution.js';
 import { agentSelection, agentSnapshot } from './agents.js';
 import { skillVersion } from './skills.js';
 import { executionBudgetLimits, executionBudgetSchema, usageAttribution } from './usage.js';
@@ -10,6 +10,7 @@ export const codingAgentSnapshot = agentSnapshot.extend({
   materials: z.array(skillVersion).max(3).optional(),
 });
 export const codingConfiguration = z.strictObject({
+  toolProfile: codingToolProfile.optional(),
   contextReceipt: contextReceiptReference.optional(),
   memory: memorySelections.optional(),
   workspaceAccess: z.literal('read-only').optional(),
@@ -26,6 +27,7 @@ export const codingConfiguration = z.strictObject({
   }),
 });
 export const codingInput = z.strictObject({
+  toolProfile: codingToolProfile.optional(),
   contextReceipt: contextReceiptReference.optional(),
   memory: memorySelections.optional(),
   requestId: z.uuid(),
@@ -45,11 +47,31 @@ export const codingCapabilities = z.object({
   models: z.array(z.string()),
   simulated: z.boolean(),
   environment: z.record(z.string(), z.unknown()).nullable().default(null),
+  typescriptEnvironment: z
+    .looseObject({
+      profile: z.literal('typescript-react-v1'),
+      image: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+      policyHash: z.string().regex(/^[a-f0-9]{64}$/),
+      versions: z.array(z.string()).min(1),
+      independentTest: z.string(),
+      verificationTimeoutMs: z.literal(20000),
+    })
+    .nullable()
+    .default(null),
 });
 export const codingCapabilitiesResponse = codingCapabilities.extend({
   execution: executionOptionSchema,
   readOnlyExecution: executionOptionSchema,
+  typescriptExecution: executionOptionSchema,
 });
+export function codingOption(
+  caps: z.infer<typeof codingCapabilitiesResponse>,
+  profile?: CodingToolProfile,
+  readOnly?: boolean,
+) {
+  if (readOnly) return caps.readOnlyExecution;
+  return profile === 'typescript-react-v1' ? caps.typescriptExecution : caps.execution;
+}
 const nullableCount = z.number().int().nonnegative().nullable();
 const command = z.object({
   command: z.string(),

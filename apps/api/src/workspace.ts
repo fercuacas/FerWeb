@@ -115,9 +115,13 @@ export function createWorkspaceRouter({
     pool,
     packRetrieval,
     codingService.memory,
-    async (owner, project, readOnly) => {
+    async (owner, project, readOnly, profile) => {
       const caps = await codingService.capabilities(owner, project);
-      return readOnly ? caps.readOnlyExecution : caps.execution;
+      return readOnly
+        ? caps.readOnlyExecution
+        : profile === 'typescript-react-v1'
+          ? caps.typescriptExecution
+          : caps.execution;
     },
   );
   router.use(contextPackRouter(codingService.contextPacks));

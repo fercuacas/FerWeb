@@ -1,4 +1,4 @@
-FROM node:24.22.2-bookworm-slim@sha256:c86ecead9e55a5210ac1727de38a4ca840bf03dcaf34dc9749addbf383b1920c
+FROM node:24.22.2-bookworm-slim@sha256:c86ecead9e55a5210ac1727de38a4ca840bf03dcaf34dc9749addbf383b1920c AS node-sandbox
 ARG SOURCE_DATE_EPOCH=0
 RUN sed -i 's|http://deb.debian.org/debian-security|http://snapshot.debian.org/archive/debian-security/20261101T000000Z|g; s|http://deb.debian.org/debian|http://snapshot.debian.org/archive/debian/20261101T000000Z|g' /etc/apt/sources.list.d/debian.sources \
     && apt-get -o Acquire::Check-Valid-Until=false update \
@@ -12,3 +12,11 @@ RUN --mount=type=secret,id=npm_ca \
 COPY apps/sandbox/*.mjs /opt/ferweb/
 WORKDIR /workspace
 ENTRYPOINT ["node", "/opt/ferweb/entry.mjs"]
+
+FROM node-sandbox AS typescript-sandbox
+COPY apps/sandbox/typescript/package*.json apps/sandbox/typescript/tsconfig.json /opt/ferweb/typescript/
+RUN --mount=type=secret,id=npm_ca \
+    if [ -f /run/secrets/npm_ca ]; then export NODE_EXTRA_CA_CERTS=/run/secrets/npm_ca; fi; \
+    npm ci --prefix /opt/ferweb/typescript --ignore-scripts --no-audit --no-fund \
+    && ln -s /opt/ferweb/typescript/node_modules/.bin/tsc /usr/local/bin/tsc \
+    && tsc --version

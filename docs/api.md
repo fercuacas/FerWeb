@@ -148,11 +148,13 @@ Se conservan las rutas de estado/eventos/cancelación E7 y sus cinco estados par
 
 | Método y ruta bajo `/api` | Entrada / resultado |
 | --- | --- |
-| `GET /projects/:projectId/coding/capabilities` | Conserva `{available,models,simulated,environment}` y añade `execution` con el diagnóstico normalizado. Exige acceso al proyecto. |
+| `GET /projects/:projectId/coding/capabilities` | Devuelve diagnóstico Node en `execution`, solo lectura en `readOnlyExecution` y TypeScript/React en `typescriptExecution`, con su entorno en `typescriptEnvironment`. Exige acceso al proyecto. |
 | `POST /projects/:projectId/coding` | `{requestId,taskId,taskVersion,commit,model,timeoutMs,maxRequests,maxOutputTokens}`; 202, detalle de trabajo y `X-FerWeb-Job`. Tarea/commit guardados antes de encolar. |
 | `GET /projects/:projectId/coding/:jobId` | `{jobId,task,commit,repository,baseBranch,environment,manifest,excluded,report}`. Revalida acceso GitHub antes de devolver informe o fuentes congeladas. |
 
 Campos extra como `command`, credenciales, rutas de montaje o imagen son rechazados. Error 400 para input inválido; 404 para ámbito ajeno; 409 para tarea/commit/snapshot modificados, archivo o UUID conflictivo; 422 para tamaño/cupo; 503 para ejecutor/modelo sin configurar; 403 o error de autorización GitHub si no se confirma acceso a la fuente. El modelo se elige de una lista del servidor. Contratos en [coding.ts](../packages/contracts/src/coding.ts).
+
+El campo opcional `toolProfile` de la admisión Codex, la plantilla secuencial y la preparación P10 admite `node-isolated-v1` o `typescript-react-v1`. Omitirlo selecciona el perfil correspondiente de Node. TypeScript/React requiere un entorno disponible y versiones compatibles de rol y skills. La admisión exige fuentes TypeScript en el snapshot. El cliente elige un ID de perfil y el servidor fija imagen, herramientas, comando de verificación y política. [Perfiles P11](codex.md#perfiles-de-herramientas-p11)
 
 La ruta interna `POST /internal/coding/:jobId/input` requiere token de servidor y generación de lease vigente. No usa cookie de navegador ni acepta escoger propietario/repositorio; el servidor los obtiene del trabajo admitido y revalida acceso. No se envía ese token al contenedor de código. La API del controlador no se expone al anfitrión ni ofrece opciones Docker arbitrarias al cliente. Semántica, configuración y evidencia en [codex.md](codex.md).
 

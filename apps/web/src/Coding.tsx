@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { skipToken } from '@reduxjs/toolkit/query';
-import { supportsAgent } from '@ferweb/contracts';
+import {
+  codingOption,
+  codingToolProfile,
+  supportsAgent,
+  type CodingToolProfile,
+} from '@ferweb/contracts';
 import type { Job } from '@ferweb/contracts';
 import { agentsApi } from './agents-store';
 import { SkillPreview, SkillText } from './Skills';
@@ -38,6 +43,7 @@ export function CodingForm({
     useState<(typeof usageAttribution.options)[number]>('agent');
   const [agentId, setAgentId] = useState('');
   const [agentVersion, setAgentVersion] = useState(0);
+  const [toolProfile, setToolProfile] = useState<CodingToolProfile>('node-isolated-v1');
   const history = agentsApi.useAgentQuery(agentId ? { project, id: agentId } : skipToken, {
     refetchOnFocus: true,
   });
@@ -51,21 +57,20 @@ export function CodingForm({
   const task = tasks.currentData?.tasks.find((t) => t.id === taskId),
     link = source.currentData?.link;
   const options = caps.error ? undefined : caps.currentData;
+  const execution = options && codingOption(options, toolProfile);
   const selectedModel = model || options?.models[0] || '';
   const roles = agents.error
     ? []
     : (agents.currentData?.roles.filter((role) => !role.archivedAt) ?? []);
   const versions =
-    options &&
+    execution &&
     !agents.error &&
     !history.error &&
     roles.some((role) => role.id === agentId) &&
     history.currentData &&
     !history.currentData.role.archivedAt
       ? history.currentData.versions.filter((version) =>
-          [version, ...(version.skills ?? [])].every((item) =>
-            supportsAgent(item, options.execution),
-          ),
+          [version, ...(version.skills ?? [])].every((item) => supportsAgent(item, execution)),
         )
       : [];
   const selectedAgent = versions.find((version) => version.version === agentVersion);
@@ -84,8 +89,8 @@ export function CodingForm({
     !link.stale &&
     !link.revoked &&
     !link.snapshot.treeTruncated &&
-    options?.execution.available &&
-    options.models.includes(selectedModel) &&
+    execution?.available &&
+    execution.models.some((item) => item.id === selectedModel) &&
     (!agentId || !!selectedAgent) &&
     budgetAvailable &&
     !source.error &&
@@ -107,6 +112,7 @@ export function CodingForm({
               taskVersion: task.version,
               commit: link.snapshot.commit,
               model: selectedModel,
+              ...(toolProfile === 'typescript-react-v1' && { toolProfile }),
               timeoutMs,
               maxRequests,
               maxOutputTokens,
@@ -143,6 +149,7 @@ export function CodingForm({
               selectedAgent ? { id: selectedAgent.id, version: selectedAgent.version } : undefined
             }
             model={selectedModel}
+            toolProfile={toolProfile}
             memory={memory}
             onChange={setContext}
           />
@@ -159,8 +166,21 @@ export function CodingForm({
             Codex trabaja en una copia separada del commit. Revisa el diff y las pruebas antes de
             aplicar los cambios.
           </p>
-          {options && <ExecutionDetails option={options.execution} />}
-          {options?.execution.destination === 'openai-api' && (
+          <label>
+            Perfil de herramientas
+            <select
+              value={toolProfile}
+              onChange={(e) => {
+                setToolProfile(codingToolProfile.parse(e.target.value));
+                setAgentVersion(0);
+              }}
+            >
+              <option value="node-isolated-v1">Node aislado</option>
+              <option value="typescript-react-v1">TypeScript/React aislado</option>
+            </select>
+          </label>
+          {execution && <ExecutionDetails option={execution} />}
+          {execution?.destination === 'openai-api' && (
             <p>
               Al ejecutar, la tarea, las instrucciones del rol y sus materiales vinculados se
               enviarán a OpenAI mediante la API configurada.
@@ -414,6 +434,9 @@ export function CodingView({
           <p className="job-id">
             {visible.repository} · commit {visible.commit}
           </p>
+          {visible.environment?.profile === 'typescript-react-v1' && (
+            <p>Perfil congelado · TypeScript/React aislado</p>
+          )}
           {visible.budget ? (
             <BudgetUsage budget={visible.budget} />
           ) : (
@@ -511,7 +534,11 @@ export function CodingView({
               <summary>
                 {c.command} · salida {known(c.exitCode)}
               </summary>
-              <p>{c.origin}</p>
+              <p>
+                {c.origin === 'controller-typecheck'
+                  ? 'Comprobación de tipos del controlador'
+                  : c.origin}
+              </p>
               <pre>{c.output || 'Sin salida capturada.'}</pre>
             </details>
           ))}

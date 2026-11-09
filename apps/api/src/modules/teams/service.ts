@@ -1,6 +1,7 @@
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
 import type { z } from 'zod';
 import {
+  codingOption,
   teamTemplateVersion,
   teamTemplate,
   teamPlan,
@@ -166,8 +167,11 @@ export class TeamService {
   }
   async create(owner: string, project: string, input: z.infer<typeof createTeamTemplateInput>) {
     const caps = await this.coding.capabilities(owner, project);
-    const execution =
-      input.definition.strategy === 'specialists' ? caps.readOnlyExecution : caps.execution;
+    const execution = codingOption(
+      caps,
+      input.definition.toolProfile,
+      input.definition.strategy === 'specialists',
+    );
     return this.write(owner, project, async (db) => {
       await this.resolve(db, owner, project, input.definition, execution);
       const count = (
@@ -197,8 +201,11 @@ export class TeamService {
     input: z.infer<typeof updateTeamTemplateInput>,
   ) {
     const caps = await this.coding.capabilities(owner, project);
-    const execution =
-      input.definition.strategy === 'specialists' ? caps.readOnlyExecution : caps.execution;
+    const execution = codingOption(
+      caps,
+      input.definition.toolProfile,
+      input.definition.strategy === 'specialists',
+    );
     return this.write(owner, project, async (db) => {
       const current = await this.templateVersion(db, owner, project, id, input.version);
       const head = (await db.query('SELECT latest_version FROM team_templates WHERE id=$1', [id]))
@@ -302,10 +309,12 @@ export class TeamService {
     const task = await this.projects.getTask(owner, project, snapshot.task.id);
     if (task.version !== snapshot.task.version) throw conflict();
     const caps = await this.coding.capabilities(owner, project);
-    const execution =
-      snapshot.template.definition.strategy === 'specialists'
-        ? caps.readOnlyExecution
-        : caps.execution;
+    const definition = snapshot.template.definition;
+    const execution = codingOption(
+      caps,
+      definition.toolProfile,
+      definition.strategy === 'specialists',
+    );
     if (!execution.available || canonical(execution) !== canonical(snapshot.execution))
       throw new HttpError(
         409,
@@ -372,8 +381,11 @@ export class TeamService {
     if (selected.definition.strategy === 'specialists' && input.mode !== 'team')
       throw new HttpError(422, 'team_mode_required', 'Especialistas requiere el equipo completo.');
     const caps = await this.coding.capabilities(owner, project);
-    const execution =
-      selected.definition.strategy === 'specialists' ? caps.readOnlyExecution : caps.execution;
+    const execution = codingOption(
+      caps,
+      selected.definition.toolProfile,
+      selected.definition.strategy === 'specialists',
+    );
     if (
       input.model
         ? !execution.models.some((model) => model.id === input.model)
@@ -401,6 +413,7 @@ export class TeamService {
           phase: 'team:' + key,
           ...(input.model && { model: input.model }),
           readOnly: selected.definition.strategy === 'specialists',
+          ...(selected.definition.toolProfile && { toolProfile: selected.definition.toolProfile }),
           memory: input.memory ?? [],
         });
         contexts.push({
@@ -509,10 +522,12 @@ export class TeamService {
     if (initial.snapshot.memory?.length)
       await this.coding.memory.selections(owner, project, initial.snapshot.memory);
     const caps = await this.coding.capabilities(owner, project);
-    const execution =
-      initial.snapshot.template.definition.strategy === 'specialists'
-        ? caps.readOnlyExecution
-        : caps.execution;
+    const definition = initial.snapshot.template.definition;
+    const execution = codingOption(
+      caps,
+      definition.toolProfile,
+      definition.strategy === 'specialists',
+    );
     return this.write(owner, project, async (db) => {
       const row = await this.planRow(db, owner, project, id);
       const plan = planDto(row);

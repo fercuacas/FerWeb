@@ -38,7 +38,7 @@ PostgreSQL es la autoridad duradera. Tras confirmar el informe en SQL, el worker
 
 Desde **Agentes**, abre un proyecto y crea un rol o añade una de las seis plantillas revisadas. Editar crea una versión nueva. El historial permite ver el propósito, las instrucciones, la forma de salida, las capacidades y perfiles requeridos y el origen de cada versión. Las plantillas de FerWeb son de redacción propia e identifican las especialidades que las inspiraron. [Catálogo de ECC](https://github.com/affaan-m/ECC/tree/main/agents)
 
-En **Trabajos → Nueva tarea con Codex**, selecciona la tarea, el rol opcional y una versión compatible. Codex comprueba las capacidades declaradas como compatibles en P01 y el perfil permitido. El modelo sigue escogido de la lista del ejecutor. El rol guía el trabajo y el formato de la respuesta. Los perfiles de esta fase sirven para comprobar compatibilidad y las sugerencias de mantener archivos intactos dependen de que el agente las siga. El aislamiento efectivo sigue siendo el del perfil Node existente.
+En **Trabajos → Nueva tarea con Codex**, selecciona la tarea, el rol opcional y una versión compatible. Codex comprueba las capacidades declaradas en P01 y el perfil permitido. El modelo se elige de la lista del ejecutor. El rol guía el trabajo y el formato de la respuesta, y el controlador aplica el aislamiento y la verificación del [perfil seleccionado](#perfiles-de-herramientas-p11).
 
 La migración 011 guarda el catálogo y el historial en PostgreSQL. Cada trabajo guarda una copia íntegra de la versión elegida junto a la tarea y el commit. El informe muestra **Rol congelado**, incluso tras editar o archivar el rol. Una repetición requiere que el rol siga activo y conserva la versión del trabajo original. La comparación detecta cambios de versión o contenido del rol.
 
@@ -86,7 +86,7 @@ El controlador negocia la API del motor por el socket local. Admite de 1.45 a 1.
 | CPU/memoria/procesos | Una CPU, 768 MiB, swap limitado al mismo total y 128 PIDs por contenedor de código. Descriptores 1024. El recolector tiene 0,5 CPU, 128 MiB, 16 PIDs y ningún privilegio/red. |
 | Tiempo | 10 segundos–20 minutos desde primera asignación. Lease SQL renovable; supervisor root comprueba lease por socket cada 500 ms y sale si pierde control. El plazo también se vigila dentro del contenedor. |
 | Concurrencia | Dos trabajos globales y uno por proyecto por defecto; P07 admite dos especialistas del mismo equipo con configuración explícita. El controlador admite como máximo dos ejecuciones activas. |
-| Verificación | Comando fijo `node --test` para escritores; verificador de snapshot/montaje para especialistas P07. Límite independiente de 20 segundos y salida acotada. No hay un comando de instalación definido por el repositorio. |
+| Verificación | `node --test` en Node aislado, comprobación estática estricta en TypeScript/React y verificador de snapshot/montaje para especialistas P07. El controlador fija el comando, 20 segundos y salida acotada. |
 | Artefactos | Lectura final acotada, solo archivos regulares UTF-8; sin enlaces/especiales, hasta 100 archivos y 1 MB. Diff de texto máximo 600 KB; exceso/fallo no se presenta como diff completo. |
 
 El código podría llamar directamente a su pasarela de modelo: no es una credencial general, pero puede consumir el cupo reservado a esa tarea. El contador y la política se aplican en el controlador también a esas peticiones. No se afirma un límite monetario exacto ni un presupuesto exacto de tokens de entrada. La aceptación real del límite de salida depende de la API/modelo configurados y sigue pendiente de prueba explícita.
@@ -172,6 +172,21 @@ El controlador añade resultados de pruebas capturados mediante su reporter estr
 ## Contexto con recibos (P10)
 
 El contexto opcional de [P10](context-packs.md) prepara mapa, skills revisadas, memoria vigente y fuentes acotadas antes de ejecutar. Cada trabajo/fase conserva su recibo y puede solicitar ampliaciones dirigidas bajo cupo. Se configura desde Conocimiento y desde los preparadores de trabajos/planes; los bytes del material y los tokens informados se muestran por separado.
+
+## Perfiles de herramientas (P11)
+
+En **Trabajos → Nueva tarea con Codex**, elige **Perfil de herramientas**. Los roles indican qué perfiles admiten en **Agentes**, y el formulario filtra sus versiones y skills vinculadas según el perfil elegido. Las plantillas secuenciales también pueden fijarlo para sus etapas. Los especialistas siguen usando el perfil de fuentes de solo lectura.
+
+| Perfil | Imagen de referencia | Verificación del controlador |
+| --- | --- | --- |
+| Node aislado | `ferweb-codex-sandbox:0.166.0` | `node --test` |
+| TypeScript/React aislado | `ferweb-codex-typescript:1` | `tsc --project /opt/ferweb/typescript/tsconfig.json` |
+
+TypeScript/React usa Node 24.22.2, TypeScript 7.0.2 y declaraciones React/React DOM 19.3.0. Comprueba fuentes TypeScript y JSX del snapshot filtrado con configuración estricta y [`noEmit`](https://www.typescriptlang.org/tsconfig/noEmit.html). La evidencia es una comprobación estática. La ejecución de React en navegador, las pruebas propias del repositorio y el soporte de dependencias o aliases arbitrarios quedan fuera de esta comprobación.
+
+La imagen se construye desde un manifiesto y lockfile revisados de FerWeb con scripts de instalación deshabilitados. En ejecución, el controlador usa el compilador y la configuración de la imagen de solo lectura, con el mismo aislamiento, cupos y política de red de Node. Los archivos y scripts del repositorio siguen siendo datos de la tarea. El informe registra la verificación como `controller-typecheck` y conserva por separado los comandos del agente. Un error del compilador deja el trabajo en fallo con su evidencia.
+
+Al iniciar, el controlador resuelve ambas etiquetas a IDs inmutables. La admisión congela perfil, imagen, versiones, hash de política y límites en el entorno de ejecución existente. El plan y el recibo de contexto guardan la revisión de ese entorno. Repetir o aprobar exige que siga disponible el entorno congelado. Los informes anteriores se conservan, aunque un cambio de imagen o política puede impedir su repetición exacta.
 
 ## Supervisión, cancelación e informe
 

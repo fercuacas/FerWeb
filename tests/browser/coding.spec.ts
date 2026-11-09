@@ -128,6 +128,12 @@ test('Codex task UI freezes a commit, shows a verified diff, reloads evidence an
   await page
     .getByRole('combobox', { name: 'Rol de agente', exact: true })
     .selectOption({ label: 'Agente de suma' }, { timeout: 5000 });
+  const tools = page.getByRole('combobox', { name: 'Perfil de herramientas', exact: true });
+  await tools.selectOption('typescript-react-v1');
+  await expect(page.getByText(/comprobación estricta de tipos TypeScript y JSX/)).toBeVisible();
+  await expect(page.getByText(/No hay versiones de este rol compatibles/)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Ejecutar tarea con Codex' })).toBeDisabled();
+  await tools.selectOption('node-isolated-v1');
   await page
     .getByRole('combobox', { name: 'Versión del agente', exact: true })
     .selectOption('2', { timeout: 5000 });
