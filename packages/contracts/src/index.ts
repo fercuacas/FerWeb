@@ -4,6 +4,7 @@ export * from './context-packs.js';
 export * from './retrieval.js';
 export * from './laboratory.js';
 export * from './agent-evaluation.js';
+export * from './learning.js';
 export * from './jobs.js';
 export * from './coding.js';
 export * from './agents.js';

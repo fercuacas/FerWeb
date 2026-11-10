@@ -170,6 +170,19 @@ test('sequential team UI executes approved task, restores deliveries and reports
   const download = page.waitForEvent('download');
   await evaluation.getByRole('link', { name: 'Exportar evaluación JSON' }).click();
   expect((await download).suggestedFilename()).toMatch(/^ferweb-agent-evaluation-.+\.json$/);
+  await evaluation.getByText('Proponer lección de la corrección', { exact: true }).press('Enter');
+  await evaluation.getByLabel('Título de la lección').fill('Comprobar operandos negativos');
+  await evaluation.getByLabel('Fallo observado').fill('La versión inicial restaba.');
+  await evaluation.getByLabel('Corrección propuesta').fill('Probar la suma con signos distintos.');
+  await evaluation.getByRole('button', { name: 'Guardar propuesta' }).click();
+  await expect(evaluation.getByText('Propuesta guardada.', { exact: false })).toBeVisible();
+  await page.getByText('Lecciones y cumplimiento', { exact: true }).press('Enter');
+  await page
+    .getByRole('combobox', { name: 'Propuesta de lección', exact: true })
+    .selectOption({ index: 1 });
+  await expect(page.getByRole('heading', { name: 'Comprobar operandos negativos' })).toBeVisible();
+  await page.getByRole('button', { name: 'Aprobar revisión' }).press('Enter');
+  await expect(page.getByRole('button', { name: 'Adoptar en memoria' })).toBeDisabled();
   expect(
     await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
   ).toBeTruthy();

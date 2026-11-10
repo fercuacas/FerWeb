@@ -362,6 +362,15 @@ El laboratorio admite `contextExperiment: ferweb-context-p10-v1`, con `retrieval
 
 El proyecto archivado permite leer y exportar. La revalidación usa la autorización de Codex y equipos, incluidas sus referencias a contexto y memoria. El [laboratorio](laboratory.md#evaluación-de-agente-único-y-equipo-p13) describe los límites del corpus y las métricas.
 
+## Lecciones y cumplimiento P14
+
+- `GET /projects/:projectId/lab/learning` lista cabeceras. `GET /projects/:projectId/lab/learning/health` devuelve observaciones minimizadas de una ventana de 30 días.
+- `POST /projects/:projectId/lab/learning` guarda una propuesta con `requestId`, `evaluationId`, `arm`, `title`, `failure`, `correction` y una referencia opcional `replaces` a una lección vigente. `GET /projects/:projectId/lab/learning/:proposalId` revalida la comparación de origen.
+- Bajo `/learning/:proposalId`, `POST /review` recibe `version` y `decision` (`approve` o `reject`). `POST /adopt` y `POST /revert` reciben `version` y crean una revisión de memoria cuando procede. Un conflicto de versión, fuente o evidencia impide la acción.
+- `POST /projects/:projectId/lab/learning/compliance` recibe tres UUID de trabajos en `supportive`, `neutral` y `competing`. Devuelve señales observadas, origen y equivalencia de condiciones, sin ejecutar inferencia.
+
+La migración 022 añade propuestas y su historial. Los proyectos archivados permiten consultar. Los requisitos de revisión, adopción y retención se detallan en el [laboratorio](laboratory.md#lecciones-y-cumplimiento-p14).
+
 ## Referencias de diseño
 
 - [Node.js crypto](https://nodejs.org/api/crypto.html).

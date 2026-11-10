@@ -24,6 +24,8 @@ import { LaboratoryService } from './modules/laboratory/service.js';
 import { createLaboratoryRouter } from './modules/laboratory/routes.js';
 import { agentEvaluationRouter } from './modules/laboratory/evaluation-routes.js';
 import { AgentEvaluations } from './modules/laboratory/evaluations.js';
+import { ProjectLearning } from './modules/laboratory/learning.js';
+import { learningRouter } from './modules/laboratory/learning-routes.js';
 import { JobService } from './modules/jobs/service.js';
 import { createJobRouter } from './modules/jobs/routes.js';
 import { CodingService } from './modules/jobs/coding-service.js';
@@ -146,7 +148,9 @@ export function createWorkspaceRouter({
   router.use(skillRouter(new SkillLibrary(pool)));
   const teamExecutions = new TeamExecutions(pool, codingService);
   router.use(teamRouter(new TeamService(pool, codingService), teamExecutions));
-  router.use(agentEvaluationRouter(new AgentEvaluations(pool, codingService, teamExecutions)));
+  const evaluations = new AgentEvaluations(pool, codingService, teamExecutions);
+  router.use(agentEvaluationRouter(evaluations));
+  router.use(learningRouter(new ProjectLearning(pool, codingService, evaluations)));
   router.use(codingRouter(codingService));
   router.use(memoryRouter(codingService.memory));
   router.get('/projects', async (_request, response) => {

@@ -11,6 +11,9 @@ import {
   codingRunSchema,
   agentEvaluation,
   agentEvaluationList,
+  learningHealth,
+  learningProposal,
+  learningCompliance,
   agentMutationResponse,
   agentResponse,
   agentsResponse,
@@ -40,6 +43,8 @@ import { GitHubService } from '../src/modules/github/service.js';
 import { CodingService } from '../src/modules/jobs/coding-service.js';
 import { RunnerClient } from '../src/modules/jobs/runner-client.js';
 import { TeamService } from '../src/modules/teams/service.js';
+import { ProjectLearning } from '../src/modules/laboratory/learning.js';
+import { learningObservation } from '../src/modules/laboratory/learning-observations.js';
 import { githubFixture } from '../../../tests/fixtures/github.mjs';
 import { codingCorpus } from '../../../tests/fixtures/coding.mjs';
 import { addSource } from '../../../tests/fixtures/retrieval.mjs';
@@ -2625,7 +2630,7 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
       },
     );
     await t.test(
-      'P13 compares recorded solo and team runs, grades held-out probes and protects persisted evidence',
+      'P13 evaluates recorded solo and team runs and P14 reviews and reverses lessons',
       async () => {
         if (!worker || worker.exitCode !== null || worker.signalCode !== null) await startWorker();
         if (fixture.state.denied) {
@@ -2707,6 +2712,166 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
         );
         assert.equal((await request('GET', detail + '/export', undefined, foreign)).status, 404);
 
+        const learning = `/projects/${project}/lab/learning`;
+        const proposalBody = {
+          requestId: randomUUID(),
+          evaluationId: result.id,
+          arm: 'solo' as const,
+          title: 'Sumar antes de entregar',
+          failure: 'La base restaba los operandos.',
+          correction: 'Verificar la suma con operandos negativos.',
+        };
+        const draftResponse = await request('POST', learning, proposalBody, cookie);
+        assert.equal(draftResponse.status, 200, await draftResponse.clone().text());
+        const proposal = learningProposal.parse(await draftResponse.json());
+        assert.equal(proposal.eligible, false);
+        assert.equal(proposal.evidence.origin, 'simulated');
+        const proposalPath = `${learning}/${proposal.id}`;
+        assert.equal((await request('GET', proposalPath, undefined, foreign)).status, 404);
+        assert.equal(
+          (await request('POST', proposalPath + '/adopt', { version: 1 }, cookie)).status,
+          409,
+        );
+        const approved = await request(
+          'POST',
+          proposalPath + '/review',
+          { version: 1, decision: 'approve' },
+          cookie,
+        );
+        assert.equal(learningProposal.parse(await approved.json()).state, 'approved');
+        const blocked = await request('POST', proposalPath + '/adopt', { version: 2 }, cookie);
+        assert.equal(blocked.status, 409);
+        assert.equal((await blocked.json()).error.code, 'learning_insufficient');
+        assert.equal(
+          (
+            await request(
+              'POST',
+              proposalPath + '/review',
+              { version: 1, decision: 'reject' },
+              cookie,
+            )
+          ).status,
+          409,
+        );
+        const observations = async () =>
+          learningHealth.parse(
+            await (await request('GET', learning + '/health', undefined, cookie)).json(),
+          );
+        const health = await observations();
+        assert.ok(health.observations.some((o) => o.jobId === solo.id && o.origin === 'simulated'));
+        assert.ok(
+          health.observations.some(
+            (o) => o.jobId === team.steps[0]?.jobId && o.role && o.reportHash,
+          ),
+        );
+        assert.ok(!JSON.stringify(health).includes('aggregated_output'));
+        const observedRun = (await report(solo.id)).report!;
+        const normalize = (commands: typeof observedRun.commands) =>
+          learningObservation({
+            job_id: solo.id,
+            report: { ...observedRun, commands },
+            state: 'completed',
+            environment: { simulated: true },
+            finished_at: new Date(),
+          });
+        const observedTest = {
+          command: "/bin/bash -lc 'node --test'",
+          output: '',
+          origin: 'codex-event',
+          exitCode: 0,
+        };
+        assert.equal(normalize([observedTest]).agentTest, 'passed');
+        assert.equal(
+          normalize([observedTest, { ...observedTest, exitCode: 1 }]).agentTest,
+          'failed',
+        );
+        const opaque = normalize([{ ...observedTest, command: 'node --test; echo done' }]);
+        assert.equal(opaque.agentTest, 'unobserved');
+        assert.equal(opaque.controllerTest, 'passed');
+        const labels = {
+          supportive: solo.id,
+          neutral: team.steps[0]!.jobId,
+          competing: team.steps[1]!.jobId,
+        };
+        const compliance = learningCompliance.parse(
+          await (await request('POST', learning + '/compliance', labels, cookie)).json(),
+        );
+        assert.equal(compliance.comparable, false);
+        assert.deepEqual(
+          compliance.scenarios.map((item) => item.label),
+          ['supportive', 'neutral', 'competing'],
+        );
+        const finished = (await pool.query('SELECT finished_at FROM jobs WHERE id=$1', [solo.id]))
+          .rows[0].finished_at;
+        await pool.query("UPDATE jobs SET finished_at=now()-interval '31 days' WHERE id=$1", [
+          solo.id,
+        ]);
+        try {
+          assert.ok(!(await observations()).observations.some((o) => o.jobId === solo.id));
+          assert.equal(
+            (await request('POST', learning + '/compliance', labels, cookie)).status,
+            404,
+          );
+        } finally {
+          await pool.query('UPDATE jobs SET finished_at=$2 WHERE id=$1', [solo.id, finished]);
+        }
+
+        // Exercise the successful transaction with a controlled assessment at the P13 service
+        // boundary. Actual simulated reports were refused through the public API above.
+        const persisted = agentEvaluation.parse(
+          await (await request('GET', detail, undefined, cookie)).json(),
+        );
+        const assessed = {
+          ...persisted,
+          evidence: {
+            ...persisted.evidence,
+            solo: { ...persisted.evidence.solo, evidence: 'real' as const },
+          },
+        };
+        const learningWrite = new ProjectLearning(pool, coding, {
+          read: async () => assessed,
+          recheck: async () => assessed,
+        });
+        const previousDraft = {
+          kind: 'lesson' as const,
+          status: 'active' as const,
+          title: 'Lección previa',
+          content: 'Prueba anterior.',
+          observedAt: new Date().toISOString(),
+          tags: [],
+          targets: [],
+          sources: [],
+          lesson: { failure: 'Fallo anterior.', decision: 'Decisión anterior.', validation: null },
+        };
+        const { selection: previous } = await coding.memory.create(
+          owner.id,
+          project,
+          randomUUID(),
+          previousDraft,
+        );
+        const next = await learningWrite.propose(owner.id, project, {
+          ...proposalBody,
+          requestId: randomUUID(),
+          replaces: previous,
+        });
+        await learningWrite.review(owner.id, project, next.id, 1, 'approve');
+        const adoption = await learningWrite.adopt(owner.id, project, next.id, 2);
+        assert.equal(adoption.memory?.revision, 2);
+        const reversal = await learningWrite.revert(owner.id, project, next.id, 3);
+        assert.equal(reversal.memory?.revision, 3);
+        assert.equal(
+          (await coding.memory.read(owner.id, project, previous.id)).entry.content,
+          previousDraft.content,
+        );
+        assert.equal(
+          (await coding.memory.read(owner.id, project, previous.id, 2)).entry.content,
+          proposalBody.correction,
+        );
+        assert.deepEqual(
+          reversal.history.map((event) => event.action),
+          ['propose', 'approve', 'adopt', 'revert'],
+        );
+
         const packs = coding.contextPacks!;
         await packs.retrieval.index(owner.id, project, true);
         const map = await packs.map(owner.id, project);
@@ -2782,6 +2947,12 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
         await pool.query('UPDATE projects SET archived_at=now() WHERE id=$1', [project]);
         try {
           assert.equal((await request('GET', detail, undefined, cookie)).status, 200);
+          assert.equal((await request('GET', proposalPath, undefined, cookie)).status, 200);
+          assert.equal(
+            (await request('POST', learning, { ...proposalBody, requestId: randomUUID() }, cookie))
+              .status,
+            409,
+          );
           assert.equal((await request('POST', path, input, cookie)).status, 409);
           assert.equal(
             (await request('POST', detail + '/reviews', { ...review, version: 1 }, cookie)).status,
@@ -2793,6 +2964,8 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
         fixture.state.denied = true;
         try {
           assert.equal((await request('GET', detail + '/export', undefined, cookie)).status, 403);
+          assert.equal((await request('GET', proposalPath, undefined, cookie)).status, 403);
+          assert.equal((await observations()).available, false);
         } finally {
           fixture.state.denied = false;
           await github.connect(owner.id, 71);

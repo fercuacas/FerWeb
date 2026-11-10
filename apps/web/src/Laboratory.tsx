@@ -16,6 +16,7 @@ import { Sources } from './RepositoryContext';
 import './laboratory.css';
 import { ContextExperimentForm, ContextComparison, ContextOperations } from './ContextStrategies';
 import { AgentEvaluations } from './AgentEvaluations';
+import { ProjectLearning } from './ProjectLearning';
 
 type Overview = z.infer<typeof labOverviewSchema>;
 const metric = (value: number | null, suffix = '') =>
@@ -870,6 +871,7 @@ export function ProjectLaboratory({ project }: { project: Project }) {
         resultados aceptables.
       </p>
       <AgentEvaluations key={project.id} project={project} />
+      <ProjectLearning key={'learning-' + project.id} project={project} />
       <Failure error={result.error} />
       {result.isLoading && <p role="status">Cargando laboratorio…</p>}
       {result.currentData && (

@@ -1,6 +1,9 @@
 .laboratory {
   min-width: 0;
 }
+.learning-proposal {
+  overflow-wrap: anywhere;
+}
 .filter-tabs[aria-label='Secciones del proyecto'] {
   flex-wrap: wrap;
 }

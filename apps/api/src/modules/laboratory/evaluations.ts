@@ -132,7 +132,7 @@ export class AgentEvaluations {
     return this.response(row);
   }
 
-  async compare(owner: string, project: string, input: AgentEvaluationInput) {
+  private async collect(owner: string, project: string, input: AgentEvaluationInput) {
     const solo = await this.loadRun(owner, project, input.soloId);
     const team = await this.teams.read(owner, project, input.teamId);
     if (solo.run.teamExecutionId || team.plan.mode !== 'team')
@@ -150,9 +150,23 @@ export class AgentEvaluations {
         throw conflict('evaluation_active', 'La evidencia de los pasos todavía no está cerrada.');
       children.set(step.jobId, child);
     }
-    const evidence = agentEvaluationEvidence.parse(
-      evaluationEvidence(input.case, solo, team, children),
-    );
+    return agentEvaluationEvidence.parse(evaluationEvidence(input.case, solo, team, children));
+  }
+
+  async recheck(owner: string, project: string, id: string) {
+    const saved = await this.read(owner, project, id);
+    const current = await this.collect(owner, project, {
+      soloId: saved.soloId,
+      teamId: saved.teamId,
+      case: saved.case,
+    });
+    if (digest(canonical(current)) !== saved.evidenceHash)
+      throw conflict('evaluation_changed', 'La repetición difiere de la evidencia congelada.');
+    return saved;
+  }
+
+  async compare(owner: string, project: string, input: AgentEvaluationInput) {
+    const evidence = await this.collect(owner, project, input);
     const hash = digest(canonical(evidence));
     const row = await this.coding.jobs.queue.tx(async (db) => {
       const scope = (

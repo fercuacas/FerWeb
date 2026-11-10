@@ -25,6 +25,7 @@ import { memoryNotice, rejectMemorySecrets, parseMemoryImport, exportMemory } fr
 type Draft = z.infer<typeof memoryDraft>;
 type Source = z.infer<typeof memorySource>;
 type Selection = z.infer<typeof memorySelection>;
+type RecordWrite = (db: PoolClient, value: Selection) => Promise<void>;
 type Mode = 'current' | 'history';
 type Issue = 'source_stale' | 'source_unavailable' | 'provenance_limit' | 'revision_changed';
 class SourceError extends HttpError {
@@ -598,7 +599,13 @@ export class MemoryService {
       ],
     );
   }
-  async create(owner: string, project: string, requestId: string, input: Draft) {
+  async create(
+    owner: string,
+    project: string,
+    requestId: string,
+    input: Draft,
+    record?: RecordWrite,
+  ) {
     const projectData = await this.projects.get(owner, project);
     if (projectData.archivedAt)
       throw new HttpError(
@@ -644,18 +651,25 @@ export class MemoryService {
         return { selection: selection(current) };
       }
       await this.localGuards(db, project, prepared.ctx);
-      return {
-        selection: await this.insert(db, project, requestId, requestHash, prepared, {
-          kind: 'operator',
-          userId: owner,
-          label: 'operator',
-          externalId: null,
-          reported: null,
-        }),
-      };
+      const saved = await this.insert(db, project, requestId, requestHash, prepared, {
+        kind: 'operator',
+        userId: owner,
+        label: 'operator',
+        externalId: null,
+        reported: null,
+      });
+      await record?.(db, saved);
+      return { selection: saved };
     });
   }
-  async correct(owner: string, project: string, id: string, version: number, input: Draft) {
+  async correct(
+    owner: string,
+    project: string,
+    id: string,
+    version: number,
+    input: Draft,
+    record?: RecordWrite,
+  ) {
     await this.projects.get(owner, project);
     if (!(await this.row(project, id))) throw missing();
     const prepared = await this.prepare(owner, project, input);
@@ -693,7 +707,9 @@ export class MemoryService {
         id,
         version + 1,
       ]);
-      return { selection: { id, revision: version + 1, hash: prepared.hash } };
+      const saved = { id, revision: version + 1, hash: prepared.hash };
+      await record?.(db, saved);
+      return { selection: saved };
     });
   }
   async import(

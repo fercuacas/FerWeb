@@ -6,6 +6,7 @@ import type {
   Project,
 } from '@ferweb/contracts';
 import { labApi } from './lab-store';
+import { ProposeLesson } from './ProjectLearning';
 import { errorMessage } from './workspace-store';
 
 const cases = { recorded: 'Informes registrados', 'addition-v1': 'Fixture de suma v1' };
@@ -237,7 +238,12 @@ function EvaluationDetail({ project, id }: { project: Project; id: string }) {
           </li>
         ))}
       </ul>
-      {!project.archivedAt && <EvaluationReview project={project.id} evaluation={detail} />}
+      {!project.archivedAt && (
+        <>
+          <EvaluationReview project={project.id} evaluation={detail} />
+          <ProposeLesson project={project.id} evaluationId={detail.id} />
+        </>
+      )}
     </section>
   );
 }

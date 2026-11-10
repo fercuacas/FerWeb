@@ -12,6 +12,8 @@ Desde una entrega verificada de P06 se puede abrir **Guardar entrega como memori
 
 ## Revisiones y fechas
 
+P14 permite adoptar o revertir una lección aprobada desde el Laboratorio. Conserva las revisiones de Conocimiento y registra la decisión de aprendizaje en la misma transacción. [Propuestas y requisitos](laboratory.md#lecciones-y-cumplimiento-p14).
+
 Corregir o retirar crea una revisión vinculada a la anterior. Una transacción bloquea el proyecto, cierra el intervalo anterior, inserta la sucesora y mueve el puntero vigente; una versión concurrente pierde con 409. El hash identifica contenido y evidencia normalizados; la revisión vigente y sus fuentes autorizan reutilizarlo. Máximo 50 revisiones por entrada y 500 entradas por proyecto.
 
 La búsqueda ordinaria excluye entradas retiradas y revisiones anteriores. La lectura por ID permite inspeccionar también una cabeza retirada, sin seleccionarla para ejecutar. Historial y `?revision=N` solicitan versiones anteriores explícitamente. **Conocido en esta fecha** usa el tiempo de registro del servidor, con intervalos `[recordedAt, validUntil)` y precisión de PostgreSQL; `observedAt` es una fecha declarada, no altera lo que el servidor sabía entonces. La corrección importada empieza una entrada local nueva: conserva la procedencia declarada, pero no falsifica intervalos ni identidad del historial local.
