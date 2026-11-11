@@ -198,6 +198,20 @@ La CLI fijada en 0.166.0 se inicia con los hooks de Codex deshabilitados. FerWeb
 
 Al terminar Codex, el controlador ejecuta la comprobación fija del perfil. En Node exige evidencia del reporter de confianza de que se superó al menos una prueba. Si Node termina sin esa evidencia, el control queda **Sin ejecutar** y la ejecución falla con `verification_not_run`. Un plazo agotado queda diferenciado de un fallo de comprobación. Los informes conservan salida, duración y procedencia. Las entregas a otras etapas y la publicación de un informe P12 requieren los controles superados. La revisión y la autorización de publicación siguen asociadas al informe concreto.
 
+## Recetas de tarea P15
+
+Abre **Tareas → Detalle de tarea → Recetas de la tarea**. El registro versionado ofrece investigación, planificación, cambios de funcionalidad, corrección de defectos, revisión de diff, análisis de pruebas, corrección de build, mantenimiento documental y borrador de PR. Cada receta indica rol, pasos, alcance y salida. Puedes elegir un rol de proyecto y reutilizar sus skills aprobadas en las recetas que ejecutan Codex. Las recetas acotadas ejecutan un agente por trabajo.
+
+**Preparar receta** guarda una copia de la tarea y su versión, repositorio, commit, rutas, receta, formato, rol y límites aplicables. Los planes locales ofrecen formatos de pasos, ADR y análisis de impacto. El borrador de PR incluye título, descripción y rutas del informe. Abre el informe enlazado para guardar el borrador mediante E9, que conserva su revisión humana y publicación explícita. Las plantillas de planificación siguen la distinción de ECC entre preparar el plan y confirmar una ejecución. [Plan en ECC](https://github.com/affaan-m/ECC/blob/b38be6a7f6350964d59328b52f0624e1d1d552d1/commands/plan.md).
+
+**Ejecutar receta** confirma la copia mediante su huella y abre un trabajo trazable. El servidor revalida la tarea, el repositorio, el perfil y el modelo antes de encolar. Investigación, revisión y análisis de pruebas usan el montaje de solo lectura. La revisión reconstruye el snapshot final del informe de origen con las comprobaciones de P08. Las rutas indicadas para investigación orientan el análisis, y se puede leer el snapshot filtrado para seguir dependencias.
+
+Los cambios y las correcciones admiten hasta doce archivos existentes. El controlador rechaza la entrega completa si el diff final contiene rutas fuera del alcance. La escritura temporal dentro del contenedor sigue las restricciones del perfil y de P12. Investigación y revisión verifican la integridad del artefacto. Documentación aplica ese control a las rutas Markdown seleccionadas. Las demás ejecuciones conservan la comprobación fija del perfil. Una corrección de build usa Node aislado o la comprobación TypeScript/React según el perfil seleccionado.
+
+La receta documental sirve para revisar rutas existentes como `docs/development.md` y mantener coherentes las instrucciones de desarrollo. El controlador sigue protegiendo las rutas reservadas, incluido `AGENTS.md`. El catálogo y los planes usan parámetros estructurados. El texto de tarea, las rutas y el diff se entregan al agente como datos, con el aislamiento de Codex.
+
+La migración 023 guarda la copia de la receta y vincula el trabajo en la misma transacción que lo encola. Repetir la confirmación devuelve el mismo trabajo. Para volver a ejecutar, prepara una copia nueva. Los planes antiguos conservan su definición y se pueden abrir si el repositorio sigue autorizado. En proyectos archivados está disponible la consulta.
+
 ## Supervisión, cancelación e informe
 
 La pestaña Trabajos consulta eventos persistentes y resultados. Se guarda informe parcial durante la ejecución. Al cancelar se conserva la solicitud SQL, el worker pide detener al controlador, este bloquea nuevas peticiones al modelo, recoge el estado final y mata el contenedor completo, incluidos descendientes separados del shell. Se confirma la parada mediante Docker; si no puede observarse, queda desconocida. Cancelar no revierte llamadas facturables previas ni garantiza la parada/facturación remota de OpenAI.

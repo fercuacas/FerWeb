@@ -13,6 +13,7 @@ import {
   teamPlanSnapshot,
   teamDelivery,
   type repeatCodingInput,
+  type RecipePlan,
 } from '@ferweb/contracts';
 import { HttpError } from '../../http-error.js';
 import {
@@ -25,7 +26,7 @@ import { ProjectRepository } from '../projects/repository.js';
 import { JobService } from './service.js';
 import { RunnerClient } from './runner-client.js';
 import { indexable } from '../retrieval/chunking.js';
-import { canonical } from './review-artifacts.js';
+import { canonical, digest } from './review-artifacts.js';
 import { AgentCatalog } from '../agents/catalog.js';
 import { SkillLibrary } from '../skills/library.js';
 import { teamEvent } from '../teams/executions.js';
@@ -34,6 +35,7 @@ import { MemoryService } from '../memory/service.js';
 import { memoryNotice } from '../memory/codec.js';
 import { contextLimits } from '@ferweb/contracts';
 import type { ContextPackService } from '../context-packs/service.js';
+import { readRecipePlan, recipeTarget } from './recipe-service.js';
 type TeamStepContext = {
   executionId: string;
   stepId: string;
@@ -101,12 +103,15 @@ export class CodingService {
     await this.projects.get(owner, project);
     const row = (
       await this.pool.query(
-        'SELECT c.* FROM coding_runs c JOIN jobs j ON j.id=c.job_id WHERE c.job_id=$1 AND j.project_id=$2 AND c.owner_id=$3',
+        `SELECT c.*,r.snapshot->'source'->>'jobId' AS recipe_source_job_id
+         FROM coding_runs c JOIN jobs j ON j.id=c.job_id LEFT JOIN recipe_plans r ON r.job_id=c.job_id
+         WHERE c.job_id=$1 AND j.project_id=$2 AND c.owner_id=$3`,
         [id, project, owner],
       )
     ).rows[0];
     if (!row) throw missing();
     await this.access(owner, project, Number(row.repository_id));
+    if (row.recipe_source_job_id) await this.read(owner, project, row.recipe_source_job_id);
     if (row.context_receipt_id)
       await this.contextPacks!.read(owner, project, row.context_receipt_id);
     const memory = row.memory_snapshot.length
@@ -148,9 +153,16 @@ export class CodingService {
     project: string,
     input: z.infer<typeof codingInput>,
     team?: TeamStepContext,
+    recipe?: RecipePlan,
   ) {
     const p = await this.projects.get(owner, project);
-    const requestHash = createHash('sha256').update(JSON.stringify(input)).digest('hex');
+    const recipeRef = recipe && {
+      id: recipe.id,
+      hash: recipe.hash,
+      key: recipe.snapshot.definition.key,
+      version: recipe.snapshot.definition.version,
+    };
+    const requestHash = digest(JSON.stringify(recipeRef ? { input, recipe: recipeRef } : input));
     const old = (
       await this.pool.query(
         'SELECT id,request_hash FROM jobs WHERE project_id=$1 AND request_id=$2',
@@ -237,13 +249,20 @@ export class CodingService {
           ? 'El modelo no está permitido para el ejecutor Codex.'
           : 'Configura Codex en el servidor y selecciona un modelo permitido.',
       );
-    const readOnly = team?.snapshot.template.definition.strategy === 'specialists';
+    const readOnly =
+      team?.snapshot.template.definition.strategy === 'specialists' ||
+      recipe?.snapshot.definition.mode === 'read';
     if (readOnly && input.toolProfile === 'typescript-react-v1') throw incompatible();
     const option = readOnly
       ? describeReadOnlyCoding(capabilities)
       : describeCoding(capabilities, input.toolProfile);
     if (contextPack && canonical(contextPack.execution) !== canonical(option)) throw changed();
     if (team && canonical(option) !== canonical(team.snapshot.execution)) throw changed();
+    if (
+      recipe &&
+      (!option.available || recipe.snapshot.runtimeRevision !== option.configurationRevision)
+    )
+      throw changed();
     if (agent && ![agent, ...materials].every((item) => supportsAgent(item, option)))
       throw incompatible();
     const { link } = await this.github.read(owner, project);
@@ -256,6 +275,7 @@ export class CodingService {
       link.snapshot.treeTruncated
     )
       throw changed();
+    if (recipe && link.repositoryId !== recipe.snapshot.repositoryId) throw changed();
     const sourceTree = link.snapshot.tree;
     const files: { path: string; content: string }[] = [],
       manifest: { path: string; sha: string; contentHash: string }[] = [],
@@ -320,6 +340,7 @@ export class CodingService {
       ...(input.contextReceipt && { contextReceipt: input.contextReceipt }),
       ...(input.memory?.length && { memory: input.memory }),
       ...(readOnly && { workspaceAccess: 'read-only' }),
+      ...(recipeRef && { recipe: recipeRef }),
       taskId: task.id,
       commit: input.commit,
       model: input.model,
@@ -327,8 +348,14 @@ export class CodingService {
       maxOutputTokens: input.maxOutputTokens,
       limits: { timeoutMs: input.timeoutMs, maxAttempts: 1 },
     });
-    if (team?.files) {
-      const collected = codingWorkspace.parse(team.files);
+    let handedOff = team?.files;
+    if (recipe?.snapshot.source) {
+      const { target } = await recipeTarget(this, owner, project, recipe.snapshot.source.jobId);
+      if (target.artifactHash !== recipe.snapshot.source.artifactHash) throw changed();
+      handedOff = target.files;
+    }
+    if (handedOff) {
+      const collected = codingWorkspace.parse(handedOff);
       if (!collected.length) throw changed();
       files.splice(0, files.length, ...collected);
       manifest.splice(
@@ -343,6 +370,8 @@ export class CodingService {
         })),
       );
     }
+    if (recipe?.snapshot.input.paths.some((path) => !files.some((file) => file.path === path)))
+      throw changed();
     const id = await this.jobs.queue.tx(async (db) => {
       const current = (
         await db.query('SELECT archived_at FROM projects WHERE id=$1 AND owner_id=$2 FOR UPDATE', [
@@ -367,6 +396,15 @@ export class CodingService {
         return prior.id as string;
       }
       if (current.archived_at) throw changed();
+      if (recipe) {
+        const row = (
+          await db.query(
+            'SELECT hash,job_id FROM recipe_plans WHERE id=$1 AND project_id=$2 AND task_id=$3 FOR UPDATE',
+            [recipe.id, project, task.id],
+          )
+        ).rows[0];
+        if (row?.hash !== recipe.hash || row.job_id) throw changed();
+      }
       if (team) {
         const template = (
           await db.query('SELECT archived_at FROM team_templates WHERE id=$1 AND project_id=$2', [
@@ -491,6 +529,16 @@ export class CodingService {
         ]);
       }
       await this.jobs.queue.event(db, job.id, 'queued', 'Tarea y snapshot del commit guardados.');
+      if (recipeRef) {
+        await db.query('UPDATE recipe_plans SET job_id=$2 WHERE id=$1', [recipeRef.id, job.id]);
+        await this.jobs.queue.event(
+          db,
+          job.id,
+          'recipe_queued',
+          'Ejecución vinculada al plan de receta confirmado.',
+          recipeRef,
+        );
+      }
       if (team) {
         await db.query('UPDATE team_execution_steps SET job_id=$2 WHERE id=$1', [
           team.stepId,
@@ -682,6 +730,31 @@ export class CodingService {
         };
       }
     }
+    const recipeRef = codingConfiguration.parse(row.configuration).recipe;
+    let recipe: RecipePlan['snapshot'] | null = null;
+    let reviewDiff: Awaited<ReturnType<typeof recipeTarget>>['target']['diff'] | undefined;
+    if (recipeRef) {
+      const saved = (
+        await this.pool.query(
+          'SELECT * FROM recipe_plans WHERE id=$1 AND project_id=$2 AND job_id=$3',
+          [recipeRef.id, row.project_id, id],
+        )
+      ).rows[0];
+      if (!saved || saved.hash !== recipeRef.hash) throw changed();
+      recipe = readRecipePlan(saved).snapshot;
+      if (recipe.source && checkOnly)
+        await this.read(row.owner_id, row.project_id, recipe.source.jobId);
+      if (recipe.source && !checkOnly) {
+        const { target } = await recipeTarget(
+          this,
+          row.owner_id,
+          row.project_id,
+          recipe.source.jobId,
+        );
+        if (target.artifactHash !== recipe.source.artifactHash) throw changed();
+        reviewDiff = target.diff;
+      }
+    }
     if (checkOnly) return { authorized: true };
     const agent = row.agent_snapshot ? codingAgentSnapshot.parse(row.agent_snapshot) : null;
     return {
@@ -691,6 +764,17 @@ export class CodingService {
       commit: row.commit_sha,
       task: {
         ...(teamTask ?? row.task_snapshot),
+        ...(recipe && {
+          workRecipe: {
+            key: recipe.definition.key,
+            version: recipe.definition.version,
+            access: recipe.definition.mode,
+            paths: recipe.source?.paths ?? recipe.input.paths,
+            steps: recipe.definition.steps,
+            output: recipe.definition.output,
+            ...(reviewDiff && { diff: reviewDiff }),
+          },
+        }),
         ...(contextPack && {
           projectContext: {
             receiptId: row.context_receipt_id,
@@ -708,8 +792,13 @@ export class CodingService {
       ...(team && { captureWorkspace: true }),
       ...(row.configuration.workspaceAccess === 'read-only' && {
         workspaceAccess: 'read-only',
-        teamMessaging: true,
+        ...(team && { teamMessaging: true }),
       }),
+      ...(recipe?.definition.mode === 'write' && { allowedPaths: recipe.input.paths }),
+      ...(recipe &&
+        (recipe.definition.key === 'investigate' ||
+          recipe.definition.key === 'review' ||
+          recipe.definition.key === 'docs') && { artifactVerification: true }),
       ...(agent && {
         role: {
           purpose: agent.purpose,
@@ -718,6 +807,7 @@ export class CodingService {
           ...(agent.materials?.length && { materials: agent.materials.map(skillPromptMaterial) }),
         },
       }),
+      ...(!agent && recipe && { role: recipe.role }),
       files: row.files,
       environment: row.environment,
       model: row.configuration.model,
@@ -734,6 +824,12 @@ export class CodingService {
     input: z.infer<typeof repeatCodingInput>,
   ) {
     await this.read(owner, project, baseline);
+    if ((await this.pool.query('SELECT 1 FROM recipe_plans WHERE job_id=$1', [baseline])).rowCount)
+      throw new HttpError(
+        409,
+        'recipe_repeat',
+        'Prepara una nueva copia de la receta para volver a ejecutar.',
+      );
     if (
       (await this.pool.query('SELECT 1 FROM team_execution_steps WHERE job_id=$1', [baseline]))
         .rowCount

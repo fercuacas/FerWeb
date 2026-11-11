@@ -879,3 +879,30 @@ body:has(dialog[open]) {
     font-size: 12px;
   }
 }
+.task-recipes,
+.task-recipe-form,
+.task-recipe-preview {
+  margin-block: 1rem;
+}
+.task-recipes summary {
+  cursor: pointer;
+}
+.task-recipes label,
+.task-recipe-form {
+  display: grid;
+  gap: 0.5rem;
+}
+.task-recipes .task-recipe-confirm {
+  display: flex;
+  align-items: center;
+}
+.task-recipes .task-recipe-confirm input {
+  width: auto;
+  min-height: 0;
+}
+.task-recipe-preview {
+  overflow-wrap: anywhere;
+}
+.task-recipe-preview pre {
+  white-space: pre-wrap;
+}

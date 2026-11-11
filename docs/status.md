@@ -1,6 +1,6 @@
 # Estado actual de FerWeb
 
-Actualizado: **2026-11-10**. Evidencias anteriores en [history.md](history.md), solo bajo demanda.
+Actualizado: **2026-11-11**. Evidencias anteriores en [history.md](history.md), solo bajo demanda.
 
 ## Disponible
 
@@ -13,12 +13,13 @@ Actualizado: **2026-11-10**. Evidencias anteriores en [history.md](history.md), 
 - P12: controles de alcance, configuración, verificación y entrega con evidencia en el informe. [Controles](codex.md#controles-de-ejecución-p12).
 - P13: comparación de agente único y equipo sobre ejecuciones registradas, verificador local para la fixture de suma, revisión humana y exportación JSON. [Laboratorio](laboratory.md#evaluación-de-agente-único-y-equipo-p13).
 - P14: propuestas de lección, revisión y adopción reversible en memoria. Salud de ejecuciones y comprobación de pruebas por escenario. [Lecciones](laboratory.md#lecciones-y-cumplimiento-p14).
+- P15: nueve recetas versionadas por tarea, vistas previas y ejecuciones vinculadas con alcance confirmado. [Recetas](codex.md#recetas-de-tarea-p15).
 
 ## Verificado
 
-- P14, `npm run docker:check`: **10 Python, 18 básicas, 101 pruebas/subcasos de integración y 20 Chromium**, tipos, compilación, formato y smoke. Registro privado `.local/p14-docker-check.log`.
-- Pruebas dirigidas P14: propuesta desde una corrección, bloqueo por evidencia simulada, reversión, permisos, retención, teclado y móvil.
-- Instancia local: siete servicios saludables, migración **022**, autoridad `ferweb_postgres_data`, web `http://127.0.0.1:5173`.
+- P15, `npm run docker:check`: **10 Python, 18 básicas, 102 pruebas/subcasos de integración y 21 Chromium**, tipos, compilación, formato y smoke. Registro privado `.local/p15-docker-check.log`.
+- Pruebas dirigidas P15: investigación en solo lectura, corrección acotada, rechazo de diff fuera de alcance, planes locales y navegación con teclado y en móvil.
+- Instancia local: siete servicios saludables, migración **023**, autoridad `ferweb_postgres_data`, web `http://127.0.0.1:5173`.
 
 ## Límites y siguiente paso
 
@@ -28,4 +29,4 @@ El recibo registra el canal P10. La comprobación TypeScript/React es estática 
 
 Despliegue permanente pendiente: host/HTTPS, copias cifradas externas, aceptación con App/modelos, monitorización y pruebas prolongadas. Global dos trabajos; por proyecto uno por defecto. [CI](https://github.com/fercuacas/FerWeb/actions).
 
-Sigue P15. [Plan](plans/ecc-codex-prompts/progress.md).
+Sigue P16. [Plan](plans/ecc-codex-prompts/progress.md).

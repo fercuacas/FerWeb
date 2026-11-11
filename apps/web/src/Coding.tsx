@@ -600,9 +600,11 @@ export function CodingView({
               <li key={i}>{l}</li>
             ))}
           </ul>
-          {!active && !visible?.teamExecutionId && (
-            <CodingComparison key={job.id} project={project} id={job.id} onSelect={onSelect} />
-          )}
+          {!active &&
+            !visible?.teamExecutionId &&
+            !(job.kind === 'codex-v1' && job.configuration.recipe) && (
+              <CodingComparison key={job.id} project={project} id={job.id} onSelect={onSelect} />
+            )}
           {['completed', 'failed'].includes(job.state) &&
             report.diffComplete &&
             report.terminationConfirmed &&

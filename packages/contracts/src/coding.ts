@@ -5,6 +5,7 @@ import { skillVersion } from './skills.js';
 import { executionBudgetLimits, executionBudgetSchema, usageAttribution } from './usage.js';
 import { memorySelections, memoryEntry } from './memory.js';
 import { contextReceiptReference } from './context-packs.js';
+import { recipeReference } from './recipes.js';
 
 export const codingAgentSnapshot = agentSnapshot.extend({
   materials: z.array(skillVersion).max(3).optional(),
@@ -14,6 +15,7 @@ export const codingConfiguration = z.strictObject({
   contextReceipt: contextReceiptReference.optional(),
   memory: memorySelections.optional(),
   workspaceAccess: z.literal('read-only').optional(),
+  recipe: recipeReference.optional(),
   taskId: z.uuid(),
   commit: z.string().regex(/^[a-f0-9]{40}$/),
   model: z.string().min(1).max(100),

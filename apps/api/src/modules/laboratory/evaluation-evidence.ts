@@ -190,7 +190,12 @@ const environmentHash = ({ run, configuration }: EvaluationRun) =>
     : null;
 const contextHash = (item: EvaluationRun, corpus: AgentEvaluationInput['case']) => {
   const receipt = context(item, corpus);
-  return fingerprint([item.memory, item.run.agent?.materials ?? [], receipt?.inputHash ?? null]);
+  return fingerprint([
+    item.memory,
+    item.run.agent?.materials ?? [],
+    receipt?.inputHash ?? null,
+    item.configuration.recipe ?? null,
+  ]);
 };
 
 export function evaluationEvidence(

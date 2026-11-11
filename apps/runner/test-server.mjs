@@ -23,6 +23,7 @@ async function fakeProvider(run, value, res) {
     return;
   }
   const teamStep = run.input.task.teamStep;
+  const recipe = run.input.task.workRecipe;
   const readOnly = run.input.workspaceAccess === 'read-only';
   const dimension = run.input.task.dimensionalReview;
   if (dimension?.dimension === 'verify' && /P08 verifier failure/.test(run.input.task.title)) {
@@ -34,7 +35,9 @@ async function fakeProvider(run, value, res) {
     readOnly &&
     run.requests > 1 &&
     !/cancel|lease|timeout/i.test(run.input.task.title) &&
-    !JSON.stringify(value.input).includes('P07 independent specialist ' + teamStep?.key)
+    !JSON.stringify(value.input).includes(
+      recipe ? 'Snapshot unchanged; write' : 'P07 independent specialist ' + teamStep?.key,
+    )
   ) {
     res.writeHead(503);
     res.end('{"error":{"message":"readonly probe did not complete successfully"}}');
@@ -111,7 +114,9 @@ async function fakeProvider(run, value, res) {
   if (run.requests === 1 && exec) {
     const cancel = /cancel|lease|timeout/i.test(run.input.task.title);
     let command = readOnly
-      ? `node tests/readonly-probe.cjs${cancel ? ' && sleep 30' : ''}`
+      ? recipe
+        ? 'node /opt/ferweb/verify-readonly.mjs'
+        : `node tests/readonly-probe.cjs${cancel ? ' && sleep 30' : ''}`
       : teamStep?.key === 'review'
         ? 'node --test; node tests/isolation-probe.cjs'
         : cancel
@@ -162,9 +167,11 @@ async function fakeProvider(run, value, res) {
             type: 'output_text',
             text: dimension
               ? dimensionalFixture(run, dimension)
-              : readOnly
-                ? `P07 ${teamStep.key}: resultado independiente con fuentes intactas.${teamStep.key === 'summary' ? ' Resumen de las dos entregas verificadas.' : ''} Los criterios requieren revisión humana.`
-                : 'Corregida la suma. Se ejecutaron node --test y la comprobación de aislamiento. Revisa el diff y la verificación independiente del controlador.',
+              : readOnly && recipe
+                ? 'Investigación terminada. Revisado el snapshot de solo lectura.'
+                : readOnly
+                  ? `P07 ${teamStep.key}: resultado independiente con fuentes intactas.${teamStep.key === 'summary' ? ' Resumen de las dos entregas verificadas.' : ''} Los criterios requieren revisión humana.`
+                  : 'Corregida la suma. Se ejecutaron node --test y la comprobación de aislamiento. Revisa el diff y la verificación independiente del controlador.',
             annotations: [],
           },
         ],

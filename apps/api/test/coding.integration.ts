@@ -11,6 +11,8 @@ import {
   codingRunSchema,
   agentEvaluation,
   agentEvaluationList,
+  recipePlan,
+  recipeOverview,
   learningHealth,
   learningProposal,
   learningCompliance,
@@ -2972,6 +2974,157 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
           const link = (await github.read(owner.id, project)).link!;
           await github.sync(owner.id, project, link.version);
         }
+      },
+    );
+    await t.test(
+      'P15 freezes recipes, runs research and fixes with their scope, and prepares local drafts',
+      async () => {
+        if (!worker || worker.exitCode !== null || worker.signalCode !== null) await startWorker();
+        const selected = await task('P15 addition recipe');
+        const route = `/projects/${project}/tasks/${selected.id}/recipes`;
+        const args = {
+          requestId: randomUUID(),
+          key: 'investigate',
+          version: 1,
+          taskVersion: selected.version,
+          paths: ['src/add.cjs'],
+          model: 'fixture-codex',
+        };
+        const overview = await request('GET', route, undefined, cookie);
+        assert.equal(recipeOverview.parse(await overview.json()).recipes.length, 9);
+        assert.equal((await request('GET', route, undefined, foreign)).status, 404);
+        const prepare = async (body: unknown) => {
+          const response = await request('POST', route, body, cookie);
+          assert.equal(response.status, 201, await response.clone().text());
+          return recipePlan.parse(await response.json());
+        };
+        const run = async (plan: ReturnType<typeof recipePlan.parse>) => {
+          const response = await request(
+            'POST',
+            `${route}/${plan.id}/execute`,
+            { hash: plan.hash },
+            cookie,
+          );
+          assert.equal(response.status, 202, await response.clone().text());
+          const execution = recipePlan.parse(await response.json());
+          assert.ok(execution.jobId);
+          return execution.jobId;
+        };
+        assert.equal(
+          (await request('POST', route, { ...args, command: 'node --test' }, cookie)).status,
+          400,
+        );
+        for (const path of [
+          '../src/add.cjs',
+          'src/add.cjs; echo outside',
+          '.github/workflows/ci.yaml',
+        ])
+          assert.equal(
+            (await request('POST', route, { ...args, paths: [path] }, cookie)).status,
+            422,
+          );
+        const research = await prepare(args);
+        assert.equal(research.jobId, null);
+        assert.equal((await prepare(args)).id, research.id);
+        assert.equal(
+          (await request('GET', route + '/' + research.id, undefined, foreign)).status,
+          404,
+        );
+        assert.equal(
+          (
+            await request(
+              'POST',
+              route + '/' + research.id + '/execute',
+              { hash: '0'.repeat(64) },
+              cookie,
+            )
+          ).status,
+          409,
+        );
+        const [researchJob, duplicate] = await Promise.all([run(research), run(research)]);
+        assert.equal(researchJob, duplicate);
+        const researched = await terminal(researchJob);
+        assert.equal(researched.job.state, 'completed', JSON.stringify(researched.job.errorCode));
+        assert.equal(researched.job.kind, 'codex-v1');
+        assert.equal(researched.job.configuration.workspaceAccess, 'read-only');
+        assert.equal(researched.job.configuration.recipe?.version, 1);
+        const researchEvidence = (await report(researchJob)).report!;
+        assert.deepEqual(researchEvidence.diff, []);
+        assert.equal(researchEvidence.tests.length, 0);
+        assert.ok(
+          researchEvidence.commands.some(
+            (command) =>
+              command.output.includes('Snapshot unchanged; write') && command.exitCode === 0,
+          ),
+        );
+        const fix = await prepare({ ...args, requestId: randomUUID(), key: 'fix' });
+        const fixed = await run(fix);
+        assert.equal((await terminal(fixed)).job.state, 'completed');
+        assert.deepEqual(
+          (await report(fixed)).report?.diff.map((file) => file.path),
+          ['src/add.cjs'],
+        );
+        const outside = await prepare({
+          ...args,
+          requestId: randomUUID(),
+          key: 'fix',
+          paths: ['tests/add.test.cjs'],
+        });
+        const blocked = await run(outside);
+        assert.equal((await terminal(blocked)).job.errorCode, 'recipe_scope_changed');
+        const rejected = (await report(blocked)).report!;
+        assert.equal(rejected.diffComplete, false);
+        assert.deepEqual(
+          rejected.controls?.events.find((event) => event.id === 'artifact')?.paths,
+          ['src/add.cjs'],
+        );
+        const review = await prepare({
+          ...args,
+          requestId: randomUUID(),
+          key: 'review',
+          paths: [],
+          sourceJobId: fixed,
+        });
+        const reviewed = await run(review);
+        assert.equal((await terminal(reviewed)).job.state, 'completed');
+        const reviewReport = (await report(reviewed)).report!;
+        assert.equal(reviewReport.diff.length, 0);
+        assert.ok(reviewReport.commands.some((command) => command.exitCode === 0));
+        const { model: _model, ...local } = args;
+        const adr = await prepare({
+          ...local,
+          requestId: randomUUID(),
+          key: 'plan',
+          format: 'adr',
+        });
+        assert.match(adr.snapshot.preview ?? '', /Decisión propuesta/);
+        assert.equal(
+          (await request('POST', route + '/' + adr.id + '/execute', { hash: adr.hash }, cookie))
+            .status,
+          422,
+        );
+        const draft = await prepare({
+          ...local,
+          requestId: randomUUID(),
+          key: 'pr-draft',
+          paths: [],
+          sourceJobId: fixed,
+        });
+        assert.equal(draft.jobId, null);
+        assert.match(draft.snapshot.preview ?? '', /src\/add\.cjs/);
+        assert.equal(
+          (await pool.query('SELECT 1 FROM coding_reviews WHERE job_id=$1', [fixed])).rowCount,
+          0,
+        );
+        const stale = await prepare({ ...args, requestId: randomUUID() });
+        await pool.query('UPDATE tasks SET version=version+1 WHERE id=$1', [selected.id]);
+        assert.equal(
+          (await request('POST', route + '/' + stale.id + '/execute', { hash: stale.hash }, cookie))
+            .status,
+          409,
+        );
+        const saved = await request('GET', route + '/' + research.id, undefined, cookie);
+        assert.equal(recipePlan.parse(await saved.json()).jobId, researchJob);
       },
     );
     await t.test(

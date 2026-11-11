@@ -295,13 +295,32 @@ export async function createController({ token, configuration, fakeProvider, nam
           );
           throw Error('protected_artifact_changed');
         }
-        run.report.diff = differences(run.input.files, collected);
+        const diff = differences(run.input.files, collected);
+        const outside = diff.filter(
+          ({ path }) =>
+            run.input.workspaceAccess === 'read-only' ||
+            (run.input.allowedPaths && !run.input.allowedPaths.includes(path)),
+        );
+        if (outside.length) {
+          control(
+            run,
+            'artifact',
+            'blocked',
+            'recipe_scope_changed',
+            collectionStarted,
+            outside.slice(0, 12).map(({ path }) => path),
+          );
+          throw Error('recipe_scope_changed');
+        }
+        run.report.diff = diff;
         if (JSON.stringify(run.report.diff).length > 600000) throw Error('diff_limit');
         run.report.diffComplete = true;
         control(run, 'artifact', 'passed', 'snapshot_collected', collectionStarted);
+        if (run.input.artifactVerification && run.reason === 'completed')
+          control(run, 'verification', 'passed', 'artifact_scope_verified', collectionStarted);
         if (run.input.captureWorkspace === true) run.outputFiles = collected;
       } catch (error) {
-        if (error.message !== 'protected_artifact_changed')
+        if (!['protected_artifact_changed', 'recipe_scope_changed'].includes(error.message))
           control(run, 'artifact', 'failed', 'artifact_unavailable', collectionStarted);
         if (fakeProvider)
           console.error(
@@ -329,11 +348,10 @@ export async function createController({ token, configuration, fakeProvider, nam
         run.report.limitations.push('No se ha confirmado la parada física del contenedor.');
       }
       run.report.finishedAt = new Date().toISOString();
-      if (run.reason === 'completed' && !run.report.diffComplete)
-        run.reason =
-          run.report.controls.events.find((event) => event.id === 'artifact').status === 'blocked'
-            ? 'protected_artifact_changed'
-            : 'artifact_failed';
+      if (run.reason === 'completed' && !run.report.diffComplete) {
+        const artifact = run.report.controls.events.find((event) => event.id === 'artifact');
+        run.reason = artifact.status === 'blocked' ? artifact.code : 'artifact_failed';
+      }
       run.report.durationMs = Date.now() - run.started;
       run.report.modelRequests = run.requests;
       run.report.reason = run.reason;
@@ -587,6 +605,23 @@ export async function createController({ token, configuration, fakeProvider, nam
     validateFiles(input.files);
     if (input.workspaceAccess !== undefined && input.workspaceAccess !== 'read-only')
       throw Error('invalid_profile');
+    if (
+      input.allowedPaths !== undefined &&
+      (input.workspaceAccess ||
+        !Array.isArray(input.allowedPaths) ||
+        input.allowedPaths.length < 1 ||
+        input.allowedPaths.length > 12 ||
+        new Set(input.allowedPaths).size !== input.allowedPaths.length ||
+        input.allowedPaths.some((path) => !input.files.some((file) => file.path === path)))
+    )
+      throw Error('invalid_scope');
+    if (
+      input.artifactVerification !== undefined &&
+      (input.artifactVerification !== true ||
+        (input.workspaceAccess !== 'read-only' &&
+          !input.allowedPaths?.every((path) => /\.md$/i.test(path))))
+    )
+      throw Error('invalid_profile');
     for (const [key, min, max] of [
       ['maxRequests', 1, 20],
       ['maxOutputTokens', 64, 8192],
@@ -624,6 +659,7 @@ export async function createController({ token, configuration, fakeProvider, nam
       role: input.role,
       files: input.files,
       workspaceAccess: input.workspaceAccess,
+      ...(input.teamMessaging === true && { teamMessaging: true }),
       model: input.model,
       deadlineAt: input.deadlineAt,
     };
@@ -792,6 +828,10 @@ export async function createController({ token, configuration, fakeProvider, nam
             return;
           }
           run.phase = 'verification';
+          if (input.artifactVerification) {
+            await finish(run, 'completed');
+            return;
+          }
           const readOnly = input.workspaceAccess === 'read-only';
           const verificationStarted = performance.now();
           const verifiesNodeTests = !readOnly && !typescript;

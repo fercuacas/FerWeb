@@ -464,13 +464,19 @@ function JobView({
     </section>
   );
 }
-export function ProjectJobs({ project }: { project: Project }) {
+export function ProjectJobs({
+  project,
+  initialJobId,
+}: {
+  project: Project;
+  initialJobId?: string | undefined;
+}) {
   const result = jobsApi.useJobsQuery(project.id, {
       pollingInterval: 2000,
       refetchOnFocus: true,
       skipPollingIfUnfocused: true,
     }),
-    [selected, setSelected] = useState<string | null>(null);
+    [selected, setSelected] = useState<string | null>(initialJobId ?? null);
   return (
     <section className="project-jobs">
       <h2>Trabajos en segundo plano</h2>
@@ -499,7 +505,9 @@ export function ProjectJobs({ project }: { project: Project }) {
                 {names[job.state]} ·{' '}
                 {job.kind === 'simulation-v1'
                   ? `${job.completedSteps}/${job.configuration.simulation.steps}`
-                  : 'Codex'}
+                  : job.configuration.recipe
+                    ? `Codex · ${job.configuration.recipe.key} v${job.configuration.recipe.version}`
+                    : 'Codex'}
               </small>
             </button>
           ))}

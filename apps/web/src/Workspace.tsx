@@ -23,6 +23,7 @@ import { ProjectLaboratory } from './Laboratory';
 import { ProjectJobs } from './Jobs';
 import { AgentsPage } from './Agents';
 import { ProjectPlans } from './TeamPlans';
+import { TaskRecipes } from './TaskRecipes';
 import { ProjectKnowledge } from './ProjectKnowledge';
 
 const statusLabels = { todo: 'Por hacer', in_progress: 'En curso', done: 'Hecho' };
@@ -330,6 +331,7 @@ function TaskForm({
           )}
         </div>
       </form>
+      {task && <TaskRecipes project={projectId} task={task} archived={readOnly} />}
     </Modal>
   );
 }
@@ -530,9 +532,9 @@ function Board({ project }: { project: Project }) {
   );
 }
 
-function ProjectPage({ id }: { id: string }) {
+function ProjectPage({ id, jobId }: { id: string; jobId: string | undefined }) {
   const [tab, setTab] = useState<'tasks' | 'github' | 'chat' | 'laboratory' | 'jobs' | 'knowledge'>(
-    'tasks',
+    jobId ? 'jobs' : 'tasks',
   );
   const result = workspaceApi.useProjectQuery(id, { refetchOnFocus: true });
   const [edit, setEdit] = useState(false);
@@ -632,7 +634,7 @@ function ProjectPage({ id }: { id: string }) {
       ) : tab === 'laboratory' ? (
         <ProjectLaboratory key={id} project={project} />
       ) : (
-        <ProjectJobs key={id} project={project} />
+        <ProjectJobs key={id} project={project} initialJobId={jobId} />
       )}
       {edit && <ProjectEditor project={project} onClose={() => setEdit(false)} />}{' '}
       {archive && <ArchiveProject project={project} onClose={() => setArchive(false)} />}
@@ -752,13 +754,16 @@ function ProjectList() {
 export function Workspace({ route, user }: { route: string; user: User }) {
   const [logout, { isLoading, error }] = authApi.useLogoutMutation();
   const dispatch = useDispatch<AppDispatch>();
-  const id = route.match(/^\/projects\/([^/]+)$/)?.[1];
+  const [, id, jobId] = route.match(/^\/projects\/([^/]+)(?:\/jobs\/([^/]+))?$/) ?? [];
   const agentsRoute = route.match(/^\/agents(?:\/([^/]+))?$/);
   const githubRoute = route.split('?')[0] === '/github';
   const agentsHref = id ? `#/agents/${id}` : agentsRoute ? `#${route}` : '#/agents';
   useEffect(() => {
     dispatch(workspaceUi.actions.resetFilters());
   }, [id, dispatch]);
+  useEffect(() => {
+    if (jobId) dispatch(workspaceUi.actions.selectTask(null));
+  }, [jobId, dispatch]);
   async function leave() {
     try {
       await logout().unwrap();
@@ -852,7 +857,7 @@ export function Workspace({ route, user }: { route: string; user: User }) {
         <main id="workspace-main" tabIndex={-1}>
           {error && <Notice>{errorMessage(error)}</Notice>}
           {id ? (
-            <ProjectPage key={id} id={id} />
+            <ProjectPage key={jobId ?? id} id={id} jobId={jobId} />
           ) : agentsRoute ? (
             <AgentsPage id={agentsRoute[1]} />
           ) : githubRoute ? (

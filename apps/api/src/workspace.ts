@@ -30,6 +30,8 @@ import { JobService } from './modules/jobs/service.js';
 import { createJobRouter } from './modules/jobs/routes.js';
 import { CodingService } from './modules/jobs/coding-service.js';
 import { codingRouter } from './modules/jobs/coding-routes.js';
+import { recipeRouter } from './modules/jobs/recipe-routes.js';
+import { RecipeService } from './modules/jobs/recipe-service.js';
 import { RunnerClient } from './modules/jobs/runner-client.js';
 import { describeChat, describeCoding } from './execution-capabilities.js';
 import { AgentCatalog } from './modules/agents/catalog.js';
@@ -152,6 +154,7 @@ export function createWorkspaceRouter({
   router.use(agentEvaluationRouter(evaluations));
   router.use(learningRouter(new ProjectLearning(pool, codingService, evaluations)));
   router.use(codingRouter(codingService));
+  router.use(recipeRouter(new RecipeService(codingService)));
   router.use(memoryRouter(codingService.memory));
   router.get('/projects', async (_request, response) => {
     response.json({ projects: await projects.list(owner(response)) });

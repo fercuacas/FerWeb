@@ -371,6 +371,12 @@ El proyecto archivado permite leer y exportar. La revalidación usa la autorizac
 
 La migración 022 añade propuestas y su historial. Los proyectos archivados permiten consultar. Los requisitos de revisión, adopción y retención se detallan en el [laboratorio](laboratory.md#lecciones-y-cumplimiento-p14).
 
+## Recetas de tarea P15
+
+La ruta base es `/projects/:projectId/tasks/:taskId/recipes`. `GET` devuelve el catálogo y cabeceras de planes. `POST` prepara una copia con `requestId`, `key`, `version`, `taskVersion` y `paths`. Según la receta también recibe `model`, `profile`, `agent`, `sourceJobId` o `format`. El servidor valida los campos en función del efecto y la tarea.
+
+`GET /:planId` revalida el acceso al repositorio y devuelve la copia con su huella, vista previa e identificador de trabajo si existe. `POST /:planId/execute` recibe `{hash}` y responde 202 con el mismo plan y el trabajo vinculado. Repetir esa solicitud devuelve el trabajo original. Un cambio de tarea, snapshot, perfil o huella bloquea una admisión nueva. Los trabajos incluyen una referencia `configuration.recipe` con ID, huella, clave y versión. [Recorrido y límites](codex.md#recetas-de-tarea-p15).
+
 ## Referencias de diseño
 
 - [Node.js crypto](https://nodejs.org/api/crypto.html).
