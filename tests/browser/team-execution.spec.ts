@@ -89,6 +89,17 @@ test('sequential team UI executes approved task, restores deliveries and reports
   await form.getByLabel('Modo del plan').selectOption('team');
   await form.getByRole('button', { name: 'Preparar copia del plan' }).click();
   const plan = page.getByRole('region', { name: 'Detalle del plan' });
+  await plan.getByText('Revisión visual del plan', { exact: true }).press('Enter');
+  await plan
+    .getByRole('combobox', { name: 'Elemento de revisión', exact: true })
+    .selectOption('step:implement');
+  await plan.getByLabel('Texto de revisión').fill('Conservar la comprobación de la suma.');
+  await plan.getByRole('button', { name: 'Añadir comentario' }).press('Enter');
+  await expect(plan.getByText('Conservar la comprobación de la suma.')).toBeVisible();
+  await plan.getByRole('button', { name: /^Responder a la anotación/ }).click();
+  await plan.getByLabel('Texto de revisión').fill('La entrega incluirá la prueba.');
+  await plan.getByRole('button', { name: 'Guardar respuesta' }).press('Enter');
+  await expect(plan.getByText('La entrega incluirá la prueba.')).toBeVisible();
   await plan.getByRole('checkbox', { name: /He revisado esta copia/ }).check();
   await plan.getByRole('button', { name: 'Aprobar este plan' }).click();
   const launch = plan.getByRole('button', { name: 'Ejecutar equipo secuencial' });
@@ -100,11 +111,37 @@ test('sequential team UI executes approved task, restores deliveries and reports
     timeout: 40000,
   });
   await expect(run.getByRole('button', { name: 'Informe Codex · review' })).toBeVisible();
-  await page.reload();
-  await page.getByRole('button', { name: 'Trabajos', exact: true }).click();
-  const teams = page.getByRole('region', { name: 'Equipos en segundo plano' });
-  await teams.getByRole('button', { name: /^Ver equipo/ }).click();
+  await page.getByRole('button', { name: /P06 browser team/ }).press('Enter');
+  const taskDetail = page.getByRole('dialog', { name: 'Detalle de tarea' });
+  await taskDetail.getByText('Seguimiento de equipos de la tarea', { exact: true }).press('Enter');
+  await taskDetail.getByRole('link', { name: /^Completado/ }).click();
   await expect(run.getByText('Equipo: Completado', { exact: true })).toBeVisible();
+  await expect(run.getByText(/Propietario.*Tarea de producto Pendiente/)).toBeVisible();
+  await expect(run.getByText(/Último latido de la etapa/)).toHaveCount(2);
+  await run.getByRole('button', { name: 'Informe Codex · implement' }).press('Enter');
+  await run.getByRole('link', { name: 'Abrir enlace directo al informe' }).click();
+  await page.reload();
+  const child = run.getByRole('region', { name: 'Ejecución de código' });
+  await expect(child.getByText('src/add.cjs', { exact: true })).toBeVisible();
+  await child.getByText('Revisión visual del diff', { exact: true }).press('Enter');
+  await child
+    .getByRole('combobox', { name: 'Elemento de revisión' })
+    .selectOption({ label: 'src/add.cjs' });
+  await child.getByLabel('Texto de revisión').fill('Validar la suma del archivo.');
+  await child.getByRole('button', { name: 'Añadir comentario' }).click();
+  await expect(child.getByText('Validar la suma del archivo.')).toBeVisible();
+  const teamEndpoint = new RegExp('/api/projects/' + project.id + '/team-executions/[^/]+$');
+  const rejectTeam = (route: import('@playwright/test').Route) =>
+    route.fulfill({
+      status: 403,
+      json: { error: { code: 'team_source_denied', message: 'Acceso a fuentes retirado.' } },
+    });
+  await page.route(teamEndpoint, rejectTeam);
+  await expect(run.getByText('Acceso a fuentes retirado.')).toBeVisible({ timeout: 8000 });
+  await expect(child).toHaveCount(0);
+  await page.unroute(teamEndpoint, rejectTeam);
+  await run.getByRole('button', { name: 'Reintentar equipo' }).click();
+  await expect(child.getByText('src/add.cjs', { exact: true })).toBeVisible();
   await run.getByText('Entrega de implement', { exact: true }).click();
   await expect(
     run

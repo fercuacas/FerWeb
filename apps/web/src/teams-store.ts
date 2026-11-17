@@ -55,6 +55,18 @@ export const teamsApi = workspaceApi.injectEndpoints({
       providesTags: ['TeamExecution'],
       keepUnusedDataFor: 0,
     }),
+    taskTeamExecutions: b.query<
+      z.infer<typeof teamExecutionsResponse>,
+      { project: string; task: string }
+    >({
+      query: ({ project, task }) => ({
+        url: `/projects/${project}/team-executions`,
+        params: { taskId: task },
+      }),
+      transformResponse: (data) => teamExecutionsResponse.parse(data),
+      providesTags: ['TeamExecution'],
+      keepUnusedDataFor: 0,
+    }),
     teamExecution: b.query<z.infer<typeof teamExecutionResponse>, Scope>({
       query: ({ project, id }) => `/projects/${project}/team-executions/${id}`,
       transformResponse: (data) => teamExecutionResponse.parse(data),

@@ -103,6 +103,7 @@ export const workspaceApi = createApi({
     'Laboratory',
     'Job',
     'Recipe',
+    'Canvas',
     'Agent',
     'Skill',
     'Budget',

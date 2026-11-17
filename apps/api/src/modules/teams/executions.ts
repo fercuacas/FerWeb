@@ -26,6 +26,7 @@ const dto = (row: QueryResultRow) =>
   teamExecution.parse({
     id: row.id,
     projectId: row.project_id,
+    taskId: row.snapshot.plan.task.id,
     planId: row.plan_id,
     planHash: row.snapshot.hash,
     title: row.snapshot.plan.task.title,
@@ -74,12 +75,15 @@ export class TeamExecutions {
     if (!row) throw missing();
     return row;
   }
-  async list(owner: string, project: string) {
+  async list(owner: string, project: string, task?: string) {
     await this.coding.projects.get(owner, project);
+    if (task) await this.coding.projects.getTask(owner, project, task);
     const rows = (
       await this.pool.query(
-        'SELECT r.* FROM team_executions r JOIN projects p ON p.id=r.project_id WHERE p.owner_id=$1 AND p.id=$2 ORDER BY r.created_at DESC,r.id LIMIT 100',
-        [owner, project],
+        `SELECT r.* FROM team_executions r JOIN projects p ON p.id=r.project_id
+         WHERE p.owner_id=$1 AND p.id=$2 AND ($3::text IS NULL OR r.snapshot->'plan'->'task'->>'id'=$3)
+         ORDER BY r.created_at DESC,r.id LIMIT 100`,
+        [owner, project, task ?? null],
       )
     ).rows;
     return { executions: rows.map(dto) };
@@ -129,6 +133,8 @@ export class TeamExecutions {
   }
   async read(owner: string, project: string, id: string) {
     const row = await this.owned(owner, project, id);
+    if (row.snapshot.plan.reviewTarget)
+      await this.coding.read(owner, project, row.snapshot.plan.reviewTarget.jobId);
     for (const item of row.snapshot.plan.contexts ?? [])
       await this.coding.contextPacks!.read(owner, project, item.receipt.id);
     if (row.snapshot.plan.memory?.length)
@@ -143,7 +149,18 @@ export class TeamExecutions {
       );
     const steps = (
       await this.pool.query(
-        'SELECT s.*,j.state,j.error_code,c.context_receipt_id FROM team_execution_steps s LEFT JOIN jobs j ON j.id=s.job_id LEFT JOIN coding_runs c ON c.job_id=s.job_id WHERE s.execution_id=$1 ORDER BY s.position',
+        `SELECT s.*,j.state,j.error_code,j.last_heartbeat_at,c.context_receipt_id,b.request_limit,
+         CASE WHEN j.state='running' THEN COALESCE(e.stopped_at IS NULL AND e.last_seen_at>clock_timestamp()-interval '5 seconds' AND j.lease_until>clock_timestamp(),false) END AS connected,
+         CASE WHEN b.job_id IS NOT NULL THEN (SELECT count(*)::int FROM execution_request_admissions a WHERE a.job_id=j.id) END AS admitted,
+         observed.message AS progress_label, observed.created_at AS progress_at
+         FROM team_execution_steps s LEFT JOIN jobs j ON j.id=s.job_id
+         LEFT JOIN coding_runs c ON c.job_id=s.job_id
+         LEFT JOIN job_executors e ON e.id=j.executor_id
+         LEFT JOIN execution_budget_steps b ON b.job_id=s.job_id
+         LEFT JOIN LATERAL (
+           SELECT message,created_at FROM job_events WHERE job_id=j.id AND attempt=j.attempt AND type='coding_progress' ORDER BY sequence DESC LIMIT 1
+         ) observed ON true
+         WHERE s.execution_id=$1 ORDER BY s.position`,
         [id],
       )
     ).rows;
@@ -162,6 +179,12 @@ export class TeamExecutions {
         [id],
       )
     ).rows[0].n;
+    const identity = (
+      await this.pool.query(
+        'SELECT u.email,t.status FROM app_users u LEFT JOIN tasks t ON t.project_id=$2 AND t.id=$3 WHERE u.id=$1',
+        [owner, project, row.snapshot.plan.task.id],
+      )
+    ).rows[0];
     const latestIteration = Math.max(...steps.map((s) => s.iteration));
     const required = steps
       .filter((s) => s.iteration === latestIteration)
@@ -177,6 +200,8 @@ export class TeamExecutions {
       .filter((step) => !step.delivery?.verified)
       .map((step) => step.step_key);
     return teamExecutionResponse.parse({
+      owner: identity.email,
+      taskStatus: identity.status,
       gathering: {
         complete: row.state === 'completed' && !missingSteps.length && conflicts === 0,
         received,
@@ -194,6 +219,14 @@ export class TeamExecutions {
         jobId: step.job_id,
         state: step.state ?? (active(row.state) ? 'pending' : 'skipped'),
         errorCode: step.error_code ?? null,
+        lastHeartbeatAt: step.last_heartbeat_at?.toISOString() ?? null,
+        workerConnected: step.connected,
+        progress: step.progress_at
+          ? { label: step.progress_label, at: step.progress_at.toISOString() }
+          : null,
+        admittedRequests: step.admitted,
+        reservedRequests: step.request_limit,
+        contextReceiptId: step.context_receipt_id,
         delivery: step.delivery,
       })),
       events: events.map((event) => ({
@@ -283,6 +316,7 @@ export class TeamExecutions {
       if (
         !frozen ||
         frozen.execution_id ||
+        frozen.changes_requested ||
         frozen.approval_hash !== input.hash ||
         task?.version !== plan.snapshot.task.version ||
         !source ||

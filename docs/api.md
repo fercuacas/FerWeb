@@ -377,6 +377,14 @@ La ruta base es `/projects/:projectId/tasks/:taskId/recipes`. `GET` devuelve el 
 
 `GET /:planId` revalida el acceso al repositorio y devuelve la copia con su huella, vista previa e identificador de trabajo si existe. `POST /:planId/execute` recibe `{hash}` y responde 202 con el mismo plan y el trabajo vinculado. Repetir esa solicitud devuelve el trabajo original. Un cambio de tarea, snapshot, perfil o huella bloquea una admisión nueva. Los trabajos incluyen una referencia `configuration.recipe` con ID, huella, clave y versión. [Recorrido y límites](codex.md#recetas-de-tarea-p15).
 
+## Centro de control P16
+
+`GET /projects/:projectId/team-executions?taskId=<uuid>` filtra el historial por tarea autorizada. El detalle añade propietario, estado de producto y, por etapa, latido, conexión observada, última fase, peticiones admitidas, reserva y recibo de contexto. Los campos sin medición son `null`.
+
+`GET /projects/:projectId/canvas/:kind/:targetId` devuelve la versión, huella, elementos y hasta 200 anotaciones ordenadas por secuencia. `kind` admite `plan`, `recipe` y `diff`. `POST` recibe `requestId`, `hash`, `element`, `action` y `text` cuando procede. `reply` requiere `replyTo` del mismo elemento y huella. `request_changes` sobre un plan sin iniciar invalida su aprobación. La aprobación de ejecución se tramita con la ruta de equipos existente. El proyecto archivado permite la lectura.
+
+`GET /projects/:projectId/canvas/diff/:targetId/html-source?element=<id>&hash=<sha256>` entrega la fuente autorizada de un archivo HTML final como descarga de texto. [Revisión visual](reviews.md#revisión-visual-p16).
+
 ## Referencias de diseño
 
 - [Node.js crypto](https://nodejs.org/api/crypto.html).

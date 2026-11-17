@@ -11,6 +11,7 @@ import { ExecutionDetails } from './ExecutionDetails';
 import { budgetsApi } from './budgets-store';
 import { BudgetUsage } from './Budgets';
 import { githubApi } from './github-store';
+import { ContextReceiptView } from './ContextPacks';
 
 const names = {
   pending: 'Pendiente',
@@ -253,7 +254,7 @@ export function TeamLauncher({ project, plan }: { project: Project; plan: TeamPl
     </div>
   );
 }
-function StepReport({ project, id }: { project: string; id: string }) {
+function StepReport({ project, id, archived }: { project: string; id: string; archived: boolean }) {
   const query = jobsApi.useJobQuery(
     { project, id },
     { pollingInterval: 2000, skipPollingIfUnfocused: true },
@@ -272,6 +273,7 @@ function StepReport({ project, id }: { project: string; id: string }) {
         <CodingView
           project={project}
           job={job}
+          archived={archived}
           cancelling={result.isLoading}
           onCancel={() =>
             void cancel({ project, id })
@@ -297,14 +299,24 @@ function TeamBudget({ project, id }: { project: string; id: string }) {
     <p>Cargando consumo…</p>
   );
 }
-export function TeamRunDetails({ project, id }: { project: Project; id: string }) {
+export function TeamRunDetails({
+  project,
+  id,
+  initialStepId,
+}: {
+  project: Project;
+  id: string;
+  initialStepId?: string | undefined;
+}) {
   const query = teamsApi.useTeamExecutionQuery(
     { project: project.id, id },
     { pollingInterval: 1500, refetchOnFocus: true, skipPollingIfUnfocused: true },
   );
   const [cancel, result] = teamsApi.useCancelTeamExecutionMutation();
-  const [report, setReport] = useState('');
+  const [selectedStep, setSelectedStep] = useState(initialStepId ?? '');
   const data = query.error ? undefined : query.currentData;
+  const report = data?.steps.find((step) => step.id === selectedStep);
+  const teamUrl = `#/projects/${project.id}/teams/${id}`;
   return (
     <section className="agent-history" aria-label="Ejecución del equipo">
       {query.isLoading && <p role="status">Cargando ejecución de equipo…</p>}
@@ -325,6 +337,16 @@ export function TeamRunDetails({ project, id }: { project: Project; id: string }
           </p>
           <p>
             ID: {data.execution.id} · Repositorio: {data.execution.repository}
+          </p>
+          <p>
+            Propietario {data.owner} · Tarea de producto{' '}
+            {data.taskStatus
+              ? { todo: 'Pendiente', in_progress: 'En curso', done: 'Hecha' }[data.taskStatus]
+              : 'Estado desconocido'}
+          </p>
+          <p>
+            {data.steps.filter((step) => step.delivery?.verified).length} de {data.steps.length}{' '}
+            etapas con entrega verificada · <a href={teamUrl}>Abrir seguimiento del equipo</a>
           </p>
           <p className="skill-text">
             Commit: {data.execution.commit} · Plan: {data.execution.planHash}
@@ -374,80 +396,127 @@ export function TeamRunDetails({ project, id }: { project: Project; id: string }
               Cancelar equipo
             </button>
           )}
-          <ol>
-            {data.steps.map((step, index) => (
-              <li key={step.id}>
-                <h4>
-                  {data.plan.steps[index % data.plan.steps.length]?.title} · {names[step.state]}
-                  {data.plan.template.definition.reviewMode && ` · Ronda ${step.iteration}`}
-                </h4>
-                <p>
-                  Depende de:{' '}
-                  {data.plan.steps[index % data.plan.steps.length]?.dependsOn.join(', ') ||
-                    'ninguna etapa'}
-                </p>
-                <p>
-                  Rol: {data.plan.steps[index % data.plan.steps.length]?.agent.name} v
-                  {data.plan.steps[index % data.plan.steps.length]?.agent.version}
-                </p>
-                <ul>
-                  {data.plan.steps[index % data.plan.steps.length]?.exitCriteria.map(
-                    (criterion, i) => (
-                      <li key={i}>{criterion}</li>
-                    ),
+          <ol className="control-steps">
+            {data.steps.map((step) => {
+              const definition = data.plan.steps.find((item) => item.key === step.key);
+              const waiting = (definition?.dependsOn ?? []).filter(
+                (key) =>
+                  !data.steps.some(
+                    (item) =>
+                      item.key === key &&
+                      item.iteration === step.iteration &&
+                      item.delivery?.verified,
+                  ),
+              );
+              return (
+                <li key={step.id}>
+                  <h4>
+                    {definition?.title ?? step.key} · {names[step.state]}
+                    {data.plan.template.definition.reviewMode && ` · Ronda ${step.iteration}`}
+                  </h4>
+                  <p>Depende de: {definition?.dependsOn.join(', ') || 'ninguna etapa'}</p>
+                  <p>
+                    Rol: {definition?.agent.name} v{definition?.agent.version}
+                  </p>
+                  {step.state === 'pending' && waiting.length > 0 && (
+                    <p>Entregas pendientes de {waiting.join(', ')}.</p>
                   )}
-                </ul>
-                {step.errorCode && <p>Motivo de la etapa: {step.errorCode}</p>}
-                {step.delivery && (
-                  <details>
-                    <summary>Entrega de {step.key}</summary>
-                    <p>{step.delivery.result || 'Sin resumen del agente.'}</p>
-                    {step.delivery.verified && !project.archivedAt && (
-                      <SaveDeliveryMemory
-                        project={project.id}
-                        executionId={id}
-                        stepId={step.id}
-                        content={step.delivery.result}
-                      />
-                    )}
-                    <p>
-                      {step.delivery.verified
-                        ? 'Controlador: pruebas y recogida confirmadas.'
-                        : 'Entrega sin verificación suficiente para continuar.'}
-                    </p>
-                    <p className="skill-text">
-                      Entrada: {step.delivery.inputHash} · Salida:{' '}
-                      {step.delivery.outputHash ?? 'Desconocida'}
-                    </p>
-                    <ul>
-                      {step.delivery.tests.map((test, i) => (
-                        <li key={i}>
-                          {test.command} · salida {test.exitCode ?? 'desconocida'} · {test.origin}
-                        </li>
-                      ))}
-                    </ul>
+                  {step.jobId && (
+                    <>
+                      <p>
+                        Último latido de la etapa{' '}
+                        {step.lastHeartbeatAt ? (
+                          <time dateTime={step.lastHeartbeatAt}>
+                            {new Date(step.lastHeartbeatAt).toLocaleString()}
+                          </time>
+                        ) : (
+                          'Sin registrar'
+                        )}
+                        {step.workerConnected === false && ' · Conexión del ejecutor sin confirmar'}
+                        {step.workerConnected === true && ' · Lease vigente y ejecutor conectado'}
+                      </p>
+                      <p>
+                        Peticiones admitidas {step.admittedRequests ?? 'Desconocidas'} · Reserva{' '}
+                        {step.reservedRequests ?? 'Desconocida'}
+                      </p>
+                      {step.progress && (
+                        <p>
+                          {step.progress.label} ·{' '}
+                          <time dateTime={step.progress.at}>
+                            {new Date(step.progress.at).toLocaleString()}
+                          </time>
+                        </p>
+                      )}
+                    </>
+                  )}
+                  {step.contextReceiptId && (
                     <details>
-                      <summary>Fuentes y hashes</summary>
+                      <summary>Fuentes de contexto de la etapa</summary>
+                      <ContextReceiptView project={project.id} id={step.contextReceiptId} />
+                    </details>
+                  )}
+                  <ul>
+                    {definition?.exitCriteria.map((criterion, i) => (
+                      <li key={i}>{criterion}</li>
+                    ))}
+                  </ul>
+                  {step.errorCode && <p>Motivo de la etapa: {step.errorCode}</p>}
+                  {step.delivery && (
+                    <details>
+                      <summary>Entrega de {step.key}</summary>
+                      <p>{step.delivery.result || 'Sin resumen del agente.'}</p>
+                      {step.delivery.verified && !project.archivedAt && (
+                        <SaveDeliveryMemory
+                          project={project.id}
+                          executionId={id}
+                          stepId={step.id}
+                          content={step.delivery.result}
+                        />
+                      )}
+                      <p>
+                        {step.delivery.verified
+                          ? 'Controlador: pruebas y recogida confirmadas.'
+                          : 'Entrega sin verificación suficiente para continuar.'}
+                      </p>
+                      <p className="skill-text">
+                        Entrada: {step.delivery.inputHash} · Salida:{' '}
+                        {step.delivery.outputHash ?? 'Desconocida'}
+                      </p>
                       <ul>
-                        {step.delivery.sources.map((source) => (
-                          <li className="skill-text" key={source.path}>
-                            {source.path} · {source.hash}
+                        {step.delivery.tests.map((test, i) => (
+                          <li key={i}>
+                            {test.command} · salida {test.exitCode ?? 'desconocida'} · {test.origin}
                           </li>
                         ))}
                       </ul>
+                      <details>
+                        <summary>Fuentes y hashes</summary>
+                        <ul>
+                          {step.delivery.sources.map((source) => (
+                            <li className="skill-text" key={source.path}>
+                              {source.path} · {source.hash}
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
+                      <ul>
+                        {step.delivery.doubts.map((doubt, i) => (
+                          <li key={i}>{doubt}</li>
+                        ))}
+                      </ul>
                     </details>
-                    <ul>
-                      {step.delivery.doubts.map((doubt, i) => (
-                        <li key={i}>{doubt}</li>
-                      ))}
-                    </ul>
-                  </details>
-                )}
-                {step.jobId && (
-                  <button onClick={() => setReport(step.jobId!)}>Informe Codex · {step.key}</button>
-                )}
-              </li>
-            ))}
+                  )}
+                  {step.jobId && (
+                    <button
+                      aria-pressed={selectedStep === step.id}
+                      onClick={() => setSelectedStep(step.id)}
+                    >
+                      Informe Codex · {step.key}
+                    </button>
+                  )}
+                </li>
+              );
+            })}
           </ol>
           <h4>Historial persistente</h4>
           <ol>
@@ -457,7 +526,22 @@ export function TeamRunDetails({ project, id }: { project: Project; id: string }
               </li>
             ))}
           </ol>
-          {report && <StepReport key={report} project={project.id} id={report} />}
+          {report?.jobId && (
+            <>
+              <p>
+                <a href={teamUrl + '/steps/' + report.id}>Abrir enlace directo al informe</a>
+              </p>
+              <StepReport
+                key={report.jobId}
+                project={project.id}
+                id={report.jobId}
+                archived={!!project.archivedAt}
+              />
+            </>
+          )}
+          {selectedStep && !report?.jobId && (
+            <p role="status">Informe de etapa aún no disponible en esta ejecución.</p>
+          )}
           <p>
             Las pruebas observadas no acreditan todos los criterios de aceptación. La revisión
             agregada y publicación de equipos corresponden a fases posteriores.
@@ -468,13 +552,21 @@ export function TeamRunDetails({ project, id }: { project: Project; id: string }
     </section>
   );
 }
-export function ProjectTeamRuns({ project }: { project: Project }) {
+export function ProjectTeamRuns({
+  project,
+  initialTeamId,
+  initialStepId,
+}: {
+  project: Project;
+  initialTeamId?: string | undefined;
+  initialStepId?: string | undefined;
+}) {
   const query = teamsApi.useTeamExecutionsQuery(project.id, {
     pollingInterval: 2000,
     refetchOnFocus: true,
     skipPollingIfUnfocused: true,
   });
-  const [selected, setSelected] = useState('');
+  const [selected, setSelected] = useState(initialTeamId ?? '');
   const data = query.error ? undefined : query.currentData;
   return (
     <section className="team-surface" aria-label="Equipos en segundo plano">
@@ -507,9 +599,56 @@ export function ProjectTeamRuns({ project }: { project: Project }) {
               </li>
             ))}
           </ul>
-          {selected && <TeamRunDetails key={selected} project={project} id={selected} />}
+          {selected && (
+            <TeamRunDetails
+              key={selected}
+              project={project}
+              id={selected}
+              initialStepId={selected === initialTeamId ? initialStepId : undefined}
+            />
+          )}
         </>
       )}
     </section>
+  );
+}
+
+export function TaskTeamHistory({ project, task }: { project: string; task: string }) {
+  const [open, setOpen] = useState(false);
+  const result = teamsApi.useTaskTeamExecutionsQuery(
+    { project, task },
+    {
+      skip: !open,
+      pollingInterval: 4000,
+      refetchOnFocus: true,
+      refetchOnMountOrArgChange: true,
+      skipPollingIfUnfocused: true,
+    },
+  );
+  const entries = result.error ? undefined : result.currentData?.executions;
+  return (
+    <details onToggle={(event) => setOpen(event.currentTarget.open)}>
+      <summary>Seguimiento de equipos de la tarea</summary>
+      {open && result.isLoading && <p role="status">Cargando ejecuciones…</p>}
+      {open && result.error && (
+        <p role="alert">
+          {errorMessage(result.error)}{' '}
+          <button onClick={() => void result.refetch()}>Reintentar seguimiento</button>
+        </p>
+      )}
+      {open && entries?.length === 0 && <p>Esta tarea todavía no tiene ejecuciones de equipo.</p>}
+      {open && !!entries?.length && (
+        <ul>
+          {entries.map((item) => (
+            <li key={item.id}>
+              <a href={`#/projects/${project}/teams/${item.id}`}>
+                {names[item.state]} · {new Date(item.createdAt).toLocaleString()} ·{' '}
+                {item.id.slice(0, 8)}
+              </a>
+            </li>
+          ))}
+        </ul>
+      )}
+    </details>
   );
 }

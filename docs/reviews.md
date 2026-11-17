@@ -42,6 +42,14 @@ La plantilla autoriza una o dos rondas como máximo. Una segunda ronda solo corr
 
 Se reutilizan planes, cola, presupuesto, mensajes y entregas SQL de P05–P07. La migración 017 añade el vínculo de aprobación y el índice por trabajo revisado; 018 identifica rondas y admite las ocho etapas máximas del workflow. Se conservan las revisiones E9 sin análisis dimensional y su recorrido individual. No se publica el conjunto de un equipo ni se habilitan escritores paralelos.
 
+## Revisión visual P16
+
+Abre **Revisión visual del plan** en el detalle de un plan de equipo o una receta. Elige la copia completa, una etapa o un archivo cuando el plan los contiene. Desde el informe de Codex, **Revisión visual del diff** admite anotaciones sobre el conjunto o sobre un archivo. Cada comentario o respuesta queda en PostgreSQL con autor, fecha, elemento y huella exacta. Una respuesta referencia una anotación de esa misma copia.
+
+En un plan de equipo sin iniciar, **Solicitar cambios** invalida la aprobación de esa copia. Prepara y aprueba otra copia para ejecutar. Una modificación de la tarea también vuelve obsoleta la aprobación anterior. Las aprobaciones visuales de recetas y diffs quedan en el historial de revisión. La confirmación de ejecución y la aprobación de publicación de E9 tienen sus propias acciones. Cuando cambia el artefacto, su huella cambia y el panel conserva las anotaciones anteriores como históricas.
+
+El diff presenta HTML como texto escapado. En archivos HTML presentes en la instantánea final, la fuente completa se ofrece como descarga `text/plain` con nombre `.html.txt`, CSP restrictiva y `nosniff`. El servidor revalida el acceso y la huella antes de servirla. El navegador presenta solo texto en el origen autenticado. En proyectos archivados se pueden consultar las revisiones y descargar fuentes autorizadas. [Diseño de Plan Canvas en ECC](https://github.com/affaan-m/ECC/blob/main/commands/plan-canvas.md).
+
 ## Permisos de la App
 
 La lectura E3 sigue admitiendo **Contents: read**, **Issues: read** y **Pull requests: read**. Para publicar, el propietario debe habilitar **Contents: write** y **Pull requests: write** en la GitHub App y aceptar el cambio en su instalación; el usuario autorizado debe tener `push` en ese repositorio. Reautoriza/reconecta si GitHub lo requiere. No se solicitan permisos generales de organización ni `Workflows: write`; esta entrega rechaza publicar cambios en `.github/workflows/`.

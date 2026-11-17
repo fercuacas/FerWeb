@@ -13,6 +13,7 @@ import {
   agentEvaluationList,
   recipePlan,
   recipeOverview,
+  canvasResponse,
   learningHealth,
   learningProposal,
   learningCompliance,
@@ -3125,6 +3126,202 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
         );
         const saved = await request('GET', route + '/' + research.id, undefined, cookie);
         assert.equal(recipePlan.parse(await saved.json()).jobId, researchJob);
+      },
+    );
+    await t.test(
+      'P16 restores team telemetry, anchors review threads, invalidates decisions and serves HTML as text',
+      async () => {
+        if (!worker || worker.exitCode !== null || worker.signalCode !== null) await startWorker();
+        const run = await startTeam('P16 control room');
+        const teamId = run.data.execution.id;
+        const team = await teamTerminal(teamId);
+        assert.equal(team.execution.state, 'completed');
+        assert.equal(team.owner, owner.email);
+        assert.equal(team.taskStatus, 'todo');
+        assert.ok(
+          team.steps.every(
+            (step) =>
+              step.lastHeartbeatAt &&
+              step.progress &&
+              step.admittedRequests &&
+              step.workerConnected === null,
+          ),
+        );
+        const root = `/projects/${project}`;
+        const canvas = root + '/canvas';
+        const read = async (path: string) => {
+          const response = await request('GET', path, undefined, cookie);
+          assert.equal(response.status, 200, await response.clone().text());
+          return canvasResponse.parse(await response.json());
+        };
+        const add = async (path: string, body: unknown) => {
+          const response = await request('POST', path, body, cookie);
+          assert.equal(response.status, 201, await response.clone().text());
+          return canvasResponse.parse(await response.json());
+        };
+        const listings = await request(
+          'GET',
+          root + '/team-executions?taskId=' + team.plan.task.id,
+          undefined,
+          cookie,
+        );
+        assert.deepEqual(
+          (await listings.json()).executions.map((item: { id: string }) => item.id),
+          [teamId],
+        );
+        assert.equal(
+          (
+            await request(
+              'GET',
+              root + '/team-executions?taskId=' + team.plan.task.id,
+              undefined,
+              foreign,
+            )
+          ).status,
+          404,
+        );
+        const prepared = await request(
+          'POST',
+          root + '/team-plans',
+          {
+            requestId: randomUUID(),
+            taskId: team.plan.task.id,
+            taskVersion: team.plan.task.version,
+            templateId: team.plan.template.id,
+            templateVersion: team.plan.template.version,
+            mode: 'team',
+            executionId: 'codex-v1',
+            model: team.plan.model,
+          },
+          cookie,
+        );
+        const plan = teamPlanResponse.parse(await prepared.json()).plan;
+        const planPath = canvas + '/plan/' + plan.id;
+        const target = await read(planPath);
+        const fields = {
+          requestId: randomUUID(),
+          hash: target.hash,
+          element: 'step:implement',
+          action: 'comment',
+          text: 'Comprueba la suma con un negativo.',
+        };
+        const note = await add(planPath, fields);
+        assert.equal(note.entries[0]?.author, owner.email);
+        assert.equal((await add(planPath, fields)).entries.length, 1);
+        const reply = await add(planPath, {
+          ...fields,
+          requestId: randomUUID(),
+          action: 'reply',
+          replyTo: note.entries[0]?.id,
+          text: 'Incluido en el criterio de revisión.',
+        });
+        assert.equal((await read(planPath)).entries[1]?.replyTo, reply.entries[0]?.id);
+        assert.equal((await request('GET', planPath, undefined, foreign)).status, 404);
+        const approvePath = root + '/team-plans/' + plan.id + '/approve';
+        const approval = { hash: plan.hash, version: 1 };
+        assert.equal((await request('POST', approvePath, approval, cookie)).status, 200);
+        assert.equal((await read(planPath)).decision, 'approve');
+        await add(planPath, {
+          ...fields,
+          requestId: randomUUID(),
+          action: 'request_changes',
+          text: 'Ajusta el alcance antes de ejecutar.',
+        });
+        assert.equal((await read(planPath)).decision, 'request_changes');
+        assert.equal((await request('POST', approvePath, approval, cookie)).status, 409);
+        assert.equal(
+          (
+            await request(
+              'POST',
+              root + '/team-plans/' + plan.id + '/execute',
+              {
+                ...approval,
+                requestId: randomUUID(),
+                commit: team.execution.commit,
+              },
+              cookie,
+            )
+          ).status,
+          409,
+        );
+        const jobId = team.steps[0]!.jobId!;
+        const diffPath = canvas + '/diff/' + jobId;
+        const stored = (
+          await pool.query('SELECT report,files FROM coding_runs WHERE job_id=$1', [jobId])
+        ).rows[0];
+        const original = await read(diffPath);
+        const approved = await add(diffPath, {
+          requestId: randomUUID(),
+          hash: original.hash,
+          element: 'overview',
+          action: 'approve',
+        });
+        assert.equal(approved.decision, 'approve');
+        assert.equal(
+          (await pool.query('SELECT 1 FROM coding_reviews WHERE job_id=$1', [jobId])).rowCount,
+          0,
+        );
+        const html =
+          '<!doctype html><title>Fixture P16</title><script>document.title = "activo"</script>\n';
+        const added = differences(stored.files, [
+          ...stored.files,
+          { path: 'preview.html', content: html },
+        ]);
+        await pool.query('UPDATE coding_runs SET report=$2 WHERE job_id=$1', [
+          jobId,
+          JSON.stringify({ ...stored.report, diff: [...stored.report.diff, ...added] }),
+        ]);
+        try {
+          const changed = await read(diffPath);
+          assert.notEqual(changed.hash, original.hash);
+          assert.equal(changed.decision, null);
+          assert.equal(changed.entries[0]?.hash, original.hash);
+          assert.equal(
+            (
+              await request(
+                'POST',
+                diffPath,
+                {
+                  ...fields,
+                  requestId: randomUUID(),
+                  hash: original.hash,
+                  element: 'overview',
+                },
+                cookie,
+              )
+            ).status,
+            409,
+          );
+          const element = changed.elements.find((item) => item.title === 'preview.html')!.id;
+          const download =
+            diffPath + '/html-source?' + new URLSearchParams({ element, hash: changed.hash });
+          const file = await request('GET', download, undefined, cookie);
+          assert.equal(file.status, 200);
+          assert.match(file.headers.get('content-type')!, /^text\/plain/);
+          assert.match(file.headers.get('content-security-policy')!, /default-src 'none'/);
+          assert.equal(file.headers.get('x-content-type-options'), 'nosniff');
+          assert.match(file.headers.get('content-disposition')!, /attachment.*html.txt/);
+          assert.equal(await file.text(), html);
+          assert.equal((await request('GET', download, undefined, foreign)).status, 404);
+        } finally {
+          await pool.query('UPDATE coding_runs SET report=$2 WHERE job_id=$1', [
+            jobId,
+            JSON.stringify(stored.report),
+          ]);
+        }
+        fixture.state.denied = true;
+        try {
+          assert.equal((await request('GET', diffPath, undefined, cookie)).status, 403);
+          assert.equal(
+            (await request('GET', root + '/team-executions/' + teamId, undefined, cookie)).status,
+            403,
+          );
+        } finally {
+          fixture.state.denied = false;
+          await github.connect(owner.id, 71);
+          const link = (await github.read(owner.id, project)).link!;
+          await github.sync(owner.id, project, link.version);
+        }
       },
     );
     await t.test(

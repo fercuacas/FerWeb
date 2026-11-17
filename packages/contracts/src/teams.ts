@@ -232,6 +232,7 @@ export const teamPlan = z.object({
   approval: z
     .object({ hash: z.string(), version: z.literal(1), approvedAt: z.iso.datetime() })
     .nullable(),
+  changesRequested: z.boolean().default(false),
   executionId: z.uuid().nullable(),
   snapshot: teamPlanSnapshot,
 });
@@ -278,6 +279,7 @@ export const teamDelivery = z.object({
 export const teamExecution = z.object({
   id: z.uuid(),
   projectId: z.uuid(),
+  taskId: z.uuid(),
   planId: z.uuid(),
   planHash: z.string(),
   title: z.string(),
@@ -291,6 +293,8 @@ export const teamExecution = z.object({
   finishedAt: z.iso.datetime().nullable(),
 });
 export const teamExecutionResponse = z.object({
+  owner: z.email(),
+  taskStatus: z.enum(['todo', 'in_progress', 'done']).nullable(),
   gathering: z.object({
     complete: z.boolean(),
     received: z.array(z.string()),
@@ -309,6 +313,12 @@ export const teamExecutionResponse = z.object({
       jobId: z.uuid().nullable(),
       state: z.enum(['pending', 'running', 'completed', 'failed', 'cancelled', 'skipped']),
       errorCode: z.string().nullable(),
+      lastHeartbeatAt: z.iso.datetime().nullable(),
+      workerConnected: z.boolean().nullable(),
+      progress: z.object({ label: z.string(), at: z.iso.datetime() }).nullable(),
+      admittedRequests: z.number().int().nonnegative().nullable(),
+      reservedRequests: z.number().int().nonnegative().nullable(),
+      contextReceiptId: z.uuid().nullable(),
       delivery: teamDelivery.nullable(),
     }),
   ),

@@ -13,6 +13,7 @@ import { codingApi } from './coding-store';
 import { githubApi } from './github-store';
 import { workspaceApi, errorMessage } from './workspace-store';
 import { CodingReview, CodingComparison } from './CodingReview';
+import { ReviewCanvas } from './ReviewCanvas';
 import { ExecutionDetails } from './ExecutionDetails';
 import { budgetsApi } from './budgets-store';
 import { attributionNames, BudgetUsage } from './Budgets';
@@ -416,12 +417,14 @@ export function CodingView({
   onCancel,
   cancelling,
   onSelect,
+  archived = false,
 }: {
   project: string;
   job: Job;
   onCancel: () => void;
   cancelling: boolean;
   onSelect: (id: string) => void;
+  archived?: boolean;
 }) {
   const active = ['pending', 'running'].includes(job.state),
     run = codingApi.useCodingRunQuery(
@@ -576,6 +579,12 @@ export function CodingView({
               <pre>{f.patch}</pre>
             </details>
           ))}
+          {['completed', 'failed'].includes(job.state) &&
+            report.diffComplete &&
+            report.terminationConfirmed &&
+            report.diff.length > 0 && (
+              <ReviewCanvas project={project} kind="diff" id={job.id} archived={archived} />
+            )}
           <h4>Comandos y pruebas</h4>
           <p>
             Los comandos del agente proceden de eventos Codex. La verificación adicional la lanza el

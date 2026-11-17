@@ -334,10 +334,12 @@ function JobView({
   project,
   id,
   onSelect,
+  archived,
 }: {
   project: string;
   id: string;
   onSelect: (id: string) => void;
+  archived: boolean;
 }) {
   const [poll, setPoll] = useState(true),
     result = jobsApi.useJobQuery(
@@ -364,6 +366,7 @@ function JobView({
           onSelect={onSelect}
           project={project}
           job={job}
+          archived={archived}
           onCancel={() => {
             void cancel({ project, id })
               .unwrap()
@@ -467,9 +470,13 @@ function JobView({
 export function ProjectJobs({
   project,
   initialJobId,
+  initialTeamId,
+  initialStepId,
 }: {
   project: Project;
   initialJobId?: string | undefined;
+  initialTeamId?: string | undefined;
+  initialStepId?: string | undefined;
 }) {
   const result = jobsApi.useJobsQuery(project.id, {
       pollingInterval: 2000,
@@ -487,7 +494,12 @@ export function ProjectJobs({
       {!project.archivedAt && <JobForm project={project.id} onCreated={setSelected} />}
       <ProjectBudgets key={project.id} project={project} />
       <ProjectPlans key={project.id} project={project} />
-      <ProjectTeamRuns key={`teams-${project.id}`} project={project} />
+      <ProjectTeamRuns
+        key={`teams-${project.id}`}
+        project={project}
+        initialTeamId={initialTeamId}
+        initialStepId={initialStepId}
+      />
       {!project.archivedAt && <CodingForm project={project.id} onCreated={setSelected} />}
       <Failure error={result.error} />
       {result.isLoading && <p role="status">Cargando trabajos…</p>}
@@ -513,7 +525,13 @@ export function ProjectJobs({
           ))}
         </nav>
         {selected ? (
-          <JobView key={selected} project={project.id} id={selected} onSelect={setSelected} />
+          <JobView
+            key={selected}
+            project={project.id}
+            id={selected}
+            onSelect={setSelected}
+            archived={!!project.archivedAt}
+          />
         ) : (
           <p>Selecciona un trabajo o encola una simulación.</p>
         )}

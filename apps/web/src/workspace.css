@@ -906,3 +906,44 @@ body:has(dialog[open]) {
 .task-recipe-preview pre {
   white-space: pre-wrap;
 }
+.review-canvas,
+.control-steps > li {
+  margin-block: 1rem;
+  padding: 0.85rem;
+  border: 1px solid #d8dfce;
+  border-radius: 8px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.review-canvas summary {
+  cursor: pointer;
+}
+.canvas-form,
+.review-canvas label {
+  display: grid;
+  gap: 0.5rem;
+}
+.review-canvas textarea {
+  width: 100%;
+  font: inherit;
+}
+.canvas-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+}
+.review-canvas .canvas-confirm {
+  display: flex;
+  align-items: center;
+}
+.review-canvas .canvas-confirm input {
+  width: auto;
+  min-height: 0;
+}
+.canvas-entries li {
+  margin-block: 0.65rem;
+}
+.canvas-entries small {
+  display: block;
+}

@@ -17,12 +17,18 @@ import { TeamContextOptions, ContextReceiptView } from './ContextPacks';
 import type { contextPackConfigure } from '@ferweb/contracts';
 import type { z } from 'zod';
 import { MemoryPicker, type MemorySelection } from './ProjectKnowledge';
+import { ReviewCanvas } from './ReviewCanvas';
 
 export function PlanDetails({ project, id }: { project: Project; id: string }) {
-  const query = teamsApi.useTeamPlanQuery({ project: project.id, id });
+  const query = teamsApi.useTeamPlanQuery({ project: project.id, id }, { refetchOnFocus: true });
   const [approve, result] = teamsApi.useApproveTeamPlanMutation();
   const [confirmed, setConfirmed] = useState('');
   const plan = query.error ? undefined : query.currentData?.plan;
+  const task = workspaceApi.useTaskQuery(
+    plan ? { projectId: project.id, id: plan.snapshot.task.id } : skipToken,
+    { refetchOnFocus: true },
+  );
+  const current = !task.error && task.currentData?.task.version === plan?.snapshot.task.version;
   return (
     <section className="agent-history" aria-label="Detalle del plan">
       {query.isLoading && <p role="status">Cargando plan…</p>}
@@ -47,6 +53,9 @@ export function PlanDetails({ project, id }: { project: Project; id: string }) {
             · Copia inmutable v{plan.snapshot.version}
           </p>
           <p className="skill-text">Hash: {plan.hash}</p>
+          <p>
+            <a href={`#/projects/${project.id}/plans/${plan.id}`}>Abrir enlace directo al plan</a>
+          </p>
           {plan.snapshot.contexts?.map((item) => (
             <section key={item.step}>
               <h4>Contexto del rol: {item.step}</h4>
@@ -137,45 +146,61 @@ export function PlanDetails({ project, id }: { project: Project; id: string }) {
               </li>
             ))}
           </ol>
-          {!project.archivedAt && plan.state === 'prepared' && (
-            <>
-              <label>
-                <input
-                  type="checkbox"
-                  checked={confirmed === plan.hash}
-                  onChange={(e) => setConfirmed(e.target.checked ? plan.hash : '')}
-                />
-                He revisado esta copia, sus roles, skills, criterios y presupuesto
-              </label>
-              <button
-                className="primary-button"
-                disabled={
-                  confirmed !== plan.hash ||
-                  result.isLoading ||
-                  !plan.snapshot.execution.available ||
-                  !plan.snapshot.model
-                }
-                onClick={() =>
-                  void approve({
-                    project: project.id,
-                    id,
-                    body: { hash: plan.hash, version: plan.snapshot.version },
-                  })
-                    .unwrap()
-                    .catch(() => {})
-                }
-              >
-                Aprobar este plan
-              </button>
-            </>
+          <ReviewCanvas
+            project={project.id}
+            kind="plan"
+            id={plan.id}
+            archived={!!project.archivedAt}
+            executed={!!plan.executionId}
+          />
+          {plan.changesRequested && (
+            <p>Se solicitaron cambios. Prepara una copia nueva para volver a aprobar.</p>
           )}
-          {plan.approval && (
+          {task.currentData && !current && (
+            <p>La tarea tiene otra versión. Prepara un plan con la versión vigente.</p>
+          )}
+          {!project.archivedAt &&
+            plan.state === 'prepared' &&
+            !plan.changesRequested &&
+            current && (
+              <>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={confirmed === plan.hash}
+                    onChange={(e) => setConfirmed(e.target.checked ? plan.hash : '')}
+                  />
+                  He revisado esta copia, sus roles, skills, criterios y presupuesto
+                </label>
+                <button
+                  className="primary-button"
+                  disabled={
+                    confirmed !== plan.hash ||
+                    result.isLoading ||
+                    !plan.snapshot.execution.available ||
+                    !plan.snapshot.model
+                  }
+                  onClick={() =>
+                    void approve({
+                      project: project.id,
+                      id,
+                      body: { hash: plan.hash, version: plan.snapshot.version },
+                    })
+                      .unwrap()
+                      .catch(() => {})
+                  }
+                >
+                  Aprobar este plan
+                </button>
+              </>
+            )}
+          {plan.approval && current && (
             <p>
               Aprobación vinculada al hash de esta copia. Si cambias tarea, roles, skills o
               plantilla, prepara y aprueba un plan nuevo.
             </p>
           )}
-          {!project.archivedAt && plan.state === 'approved' && (
+          {!project.archivedAt && plan.state === 'approved' && current && (
             <TeamLauncher project={project} plan={plan} />
           )}
           {plan.executionId && <TeamRunDetails project={project} id={plan.executionId} />}

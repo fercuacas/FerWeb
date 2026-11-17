@@ -5,6 +5,7 @@ import { codingApi } from './coding-store';
 import { jobsApi } from './jobs-store';
 import { recipeApi } from './recipe-store';
 import { errorMessage } from './workspace-store';
+import { ReviewCanvas } from './ReviewCanvas';
 
 const modeLabel = {
   read: 'Un agente · Solo lectura',
@@ -257,6 +258,13 @@ function PlanDetail({
         </p>
       )}
       {preview && <pre>{preview}</pre>}
+      <ReviewCanvas
+        project={project}
+        kind="recipe"
+        id={id}
+        archived={archived}
+        executed={!!plan.jobId}
+      />
       {source && (
         <p>
           <a href={jobLink(source.jobId)}>

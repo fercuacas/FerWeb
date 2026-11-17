@@ -212,6 +212,14 @@ La receta documental sirve para revisar rutas existentes como `docs/development.
 
 La migración 023 guarda la copia de la receta y vincula el trabajo en la misma transacción que lo encola. Repetir la confirmación devuelve el mismo trabajo. Para volver a ejecutar, prepara una copia nueva. Los planes antiguos conservan su definición y se pueden abrir si el repositorio sigue autorizado. En proyectos archivados está disponible la consulta.
 
+## Centro de control P16
+
+Desde **Tareas → Detalle de tarea → Seguimiento de equipos de la tarea** se abre una ejecución guardada en Trabajos. Los enlaces directos al equipo, al informe de una etapa y al plan recuperan la selección al recargar. La vista distingue el estado actual de la tarea de producto, el estado persistido del equipo y el resultado de cada etapa.
+
+Cada etapa muestra rol y versión, dependencias pendientes, avance observado por el controlador, último latido registrado por el worker y peticiones admitidas con su reserva. Los trabajos históricos anteriores a la migración 024 pueden carecer de latidos. La conexión del ejecutor solo se comprueba mientras la etapa está en marcha y requiere lease vigente y un contacto reciente con el ejecutor. Una etapa sin trabajo aún carece de esas mediciones.
+
+El presupuesto, los recibos de contexto, las entregas, sus pruebas y sus huellas conservan su procedencia. El historial del equipo usa secuencias persistentes y la vista reemplaza la lectura completa en cada actualización. El canal de mensajes de especialistas sigue usando su cursor. Si falla la revalidación, se ocultan el detalle y el informe de la etapa y se ofrece reintentar. [Revisión visual](reviews.md#revisión-visual-p16).
+
 ## Supervisión, cancelación e informe
 
 La pestaña Trabajos consulta eventos persistentes y resultados. Se guarda informe parcial durante la ejecución. Al cancelar se conserva la solicitud SQL, el worker pide detener al controlador, este bloquea nuevas peticiones al modelo, recoge el estado final y mata el contenedor completo, incluidos descendientes separados del shell. Se confirma la parada mediante Docker; si no puede observarse, queda desconocida. Cancelar no revierte llamadas facturables previas ni garantiza la parada/facturación remota de OpenAI.

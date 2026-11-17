@@ -47,13 +47,19 @@ function planDto(row: QueryResultRow) {
   return teamPlan.parse({
     id: row.id,
     hash: row.hash,
-    state: row.execution_id ? 'executed' : row.approved_at ? 'approved' : 'prepared',
+    state: row.execution_id
+      ? 'executed'
+      : row.approved_at && !row.changes_requested
+        ? 'approved'
+        : 'prepared',
     createdAt: row.created_at.toISOString(),
     executionId: row.execution_id ?? null,
+    changesRequested: row.changes_requested ?? false,
     snapshot: row.snapshot,
-    approval: row.approved_at
-      ? { hash: row.approval_hash, version: 1, approvedAt: row.approved_at.toISOString() }
-      : null,
+    approval:
+      row.approved_at && !row.changes_requested
+        ? { hash: row.approval_hash, version: 1, approvedAt: row.approved_at.toISOString() }
+        : null,
   });
 }
 function compatible(
@@ -249,7 +255,7 @@ export class TeamService {
     await this.projects.get(owner, project);
     const rows = (
       await this.pool.query(
-        `SELECT r.id,r.hash,r.created_at,r.approved_at,r.approval_hash,r.task_id,r.execution_id,
+        `SELECT r.id,r.hash,r.created_at,r.approved_at,r.approval_hash,r.task_id,r.execution_id,r.changes_requested,
        r.snapshot->'task'->>'title' AS title,r.snapshot->'reviewTarget'->>'jobId' AS review_job_id,r.snapshot->'template'->'definition'->>'name' AS template_name,
        (r.snapshot->'template'->>'version')::int AS template_version
        FROM prepared_team_plans r JOIN projects p ON p.id=r.project_id
@@ -263,12 +269,18 @@ export class TeamService {
           id: row.id,
           reviewJobId: row.review_job_id ?? null,
           hash: row.hash,
-          state: row.execution_id ? 'executed' : row.approved_at ? 'approved' : 'prepared',
+          state: row.execution_id
+            ? 'executed'
+            : row.approved_at && !row.changes_requested
+              ? 'approved'
+              : 'prepared',
           createdAt: row.created_at.toISOString(),
-          approval: row.approved_at
-            ? { hash: row.approval_hash, version: 1, approvedAt: row.approved_at.toISOString() }
-            : null,
+          approval:
+            row.approved_at && !row.changes_requested
+              ? { hash: row.approval_hash, version: 1, approvedAt: row.approved_at.toISOString() }
+              : null,
           executionId: row.execution_id ?? null,
+          changesRequested: row.changes_requested,
           taskId: row.task_id,
           title: row.title,
           templateName: row.template_name,
@@ -289,6 +301,7 @@ export class TeamService {
   }
   async readPlan(owner: string, project: string, id: string) {
     const plan = planDto(await this.planRow(this.pool, owner, project, id));
+    if (digest(canonical(plan.snapshot)) !== plan.hash) throw conflict();
     for (const item of plan.snapshot.contexts ?? [])
       await this.coding.contextPacks!.read(owner, project, item.receipt.id);
     if (plan.snapshot.reviewTarget)
@@ -517,6 +530,7 @@ export class TeamService {
     input: z.infer<typeof approveTeamPlanInput>,
   ) {
     const initial = planDto(await this.planRow(this.pool, owner, project, id));
+    if (initial.changesRequested) throw conflict();
     for (const item of initial.snapshot.contexts ?? [])
       await this.coding.contextPacks!.assertCurrent(owner, project, item.receipt);
     if (initial.snapshot.memory?.length)
@@ -532,12 +546,12 @@ export class TeamService {
       const row = await this.planRow(db, owner, project, id);
       const plan = planDto(row);
       if (
+        plan.changesRequested ||
         plan.hash !== input.hash ||
         plan.snapshot.version !== input.version ||
         digest(canonical(plan.snapshot)) !== input.hash
       )
         throw conflict();
-      if (plan.approval) return { plan };
       if (
         !plan.snapshot.execution.available ||
         !plan.snapshot.model ||
@@ -549,6 +563,14 @@ export class TeamService {
           'plan_blocked',
           'Configura el ejecutor y prepara un plan con un modelo disponible.',
         );
+      const task = (
+        await db.query('SELECT version FROM tasks WHERE project_id=$1 AND id=$2 FOR SHARE', [
+          project,
+          plan.snapshot.task.id,
+        ])
+      ).rows[0];
+      if (task?.version !== plan.snapshot.task.version) throw conflict();
+      if (plan.approval) return { plan };
       const updated = (
         await db.query(
           'UPDATE prepared_team_plans SET approved_at=COALESCE(approved_at,now()),approval_hash=hash WHERE id=$1 RETURNING *',

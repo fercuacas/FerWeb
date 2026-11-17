@@ -287,7 +287,7 @@ export class JobQueue {
         fence = randomUUID();
       const updated = (
         await db.query(
-          "UPDATE jobs SET state='running',attempt=attempt+1,executor_id=$2,fence=$3,lease_until=clock_timestamp()+$4::int*interval '1 millisecond',first_started_at=COALESCE(first_started_at,clock_timestamp()),deadline_at=COALESCE(deadline_at,clock_timestamp()+$5::int*interval '1 millisecond'),error_code=NULL,error_message=NULL WHERE id=$1 RETURNING *",
+          "UPDATE jobs SET state='running',attempt=attempt+1,executor_id=$2,fence=$3,last_heartbeat_at=NULL,lease_until=clock_timestamp()+$4::int*interval '1 millisecond',first_started_at=COALESCE(first_started_at,clock_timestamp()),deadline_at=COALESCE(deadline_at,clock_timestamp()+$5::int*interval '1 millisecond'),error_code=NULL,error_message=NULL WHERE id=$1 RETURNING *",
           [row.id, executor, fence, this.leaseMs, cfg.limits.timeoutMs],
         )
       ).rows[0];
@@ -309,7 +309,7 @@ export class JobQueue {
       this.guard(row, claim);
       const updated = (
         await db.query(
-          "UPDATE jobs SET lease_until=clock_timestamp()+$2::int*interval '1 millisecond' WHERE id=$1 RETURNING lease_until,deadline_at",
+          "UPDATE jobs SET last_heartbeat_at=clock_timestamp(),lease_until=clock_timestamp()+$2::int*interval '1 millisecond' WHERE id=$1 RETURNING lease_until,deadline_at",
           [claim.id, this.leaseMs],
         )
       ).rows[0];

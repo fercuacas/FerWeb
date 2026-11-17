@@ -32,6 +32,8 @@ import { CodingService } from './modules/jobs/coding-service.js';
 import { codingRouter } from './modules/jobs/coding-routes.js';
 import { recipeRouter } from './modules/jobs/recipe-routes.js';
 import { RecipeService } from './modules/jobs/recipe-service.js';
+import { ReviewCanvas } from './modules/jobs/canvas.js';
+import { canvasRouter } from './modules/jobs/canvas-routes.js';
 import { RunnerClient } from './modules/jobs/runner-client.js';
 import { describeChat, describeCoding } from './execution-capabilities.js';
 import { AgentCatalog } from './modules/agents/catalog.js';
@@ -149,12 +151,15 @@ export function createWorkspaceRouter({
   router.use(agentRouter(new AgentCatalog(pool)));
   router.use(skillRouter(new SkillLibrary(pool)));
   const teamExecutions = new TeamExecutions(pool, codingService);
-  router.use(teamRouter(new TeamService(pool, codingService), teamExecutions));
+  const teams = new TeamService(pool, codingService);
+  router.use(teamRouter(teams, teamExecutions));
   const evaluations = new AgentEvaluations(pool, codingService, teamExecutions);
   router.use(agentEvaluationRouter(evaluations));
   router.use(learningRouter(new ProjectLearning(pool, codingService, evaluations)));
   router.use(codingRouter(codingService));
-  router.use(recipeRouter(new RecipeService(codingService)));
+  const recipes = new RecipeService(codingService);
+  router.use(recipeRouter(recipes));
+  router.use(canvasRouter(new ReviewCanvas(codingService, teams, recipes)));
   router.use(memoryRouter(codingService.memory));
   router.get('/projects', async (_request, response) => {
     response.json({ projects: await projects.list(owner(response)) });

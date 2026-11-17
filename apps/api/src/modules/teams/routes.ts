@@ -89,7 +89,9 @@ export function teamRouter(service: TeamService, executions: TeamExecutions) {
       );
   });
   router.get('/projects/:projectId/team-executions', async (req, res) =>
-    res.json(await executions.list(...scope(req, res))),
+    res.json(
+      await executions.list(...scope(req, res), z.uuid().optional().parse(req.query.taskId)),
+    ),
   );
   router.get('/projects/:projectId/team-executions/:executionId', async (req, res) =>
     res.json(await executions.read(...scope(req, res), z.uuid().parse(req.params.executionId))),

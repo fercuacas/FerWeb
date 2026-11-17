@@ -22,7 +22,8 @@ import { ProjectConversations } from './Conversations';
 import { ProjectLaboratory } from './Laboratory';
 import { ProjectJobs } from './Jobs';
 import { AgentsPage } from './Agents';
-import { ProjectPlans } from './TeamPlans';
+import { PlanDetails, ProjectPlans } from './TeamPlans';
+import { TaskTeamHistory } from './TeamRuns';
 import { TaskRecipes } from './TaskRecipes';
 import { ProjectKnowledge } from './ProjectKnowledge';
 
@@ -332,6 +333,7 @@ function TaskForm({
         </div>
       </form>
       {task && <TaskRecipes project={projectId} task={task} archived={readOnly} />}
+      {task && <TaskTeamHistory project={projectId} task={task.id} />}
     </Modal>
   );
 }
@@ -532,9 +534,21 @@ function Board({ project }: { project: Project }) {
   );
 }
 
-function ProjectPage({ id, jobId }: { id: string; jobId: string | undefined }) {
+function ProjectPage({
+  id,
+  jobId,
+  teamId,
+  stepId,
+  planId,
+}: {
+  id: string;
+  jobId: string | undefined;
+  teamId: string | undefined;
+  stepId: string | undefined;
+  planId: string | undefined;
+}) {
   const [tab, setTab] = useState<'tasks' | 'github' | 'chat' | 'laboratory' | 'jobs' | 'knowledge'>(
-    jobId ? 'jobs' : 'tasks',
+    jobId || teamId || planId ? 'jobs' : 'tasks',
   );
   const result = workspaceApi.useProjectQuery(id, { refetchOnFocus: true });
   const [edit, setEdit] = useState(false);
@@ -634,7 +648,16 @@ function ProjectPage({ id, jobId }: { id: string; jobId: string | undefined }) {
       ) : tab === 'laboratory' ? (
         <ProjectLaboratory key={id} project={project} />
       ) : (
-        <ProjectJobs key={id} project={project} initialJobId={jobId} />
+        <>
+          {planId && <PlanDetails key={planId} project={project} id={planId} />}
+          <ProjectJobs
+            key={id}
+            project={project}
+            initialJobId={jobId}
+            initialTeamId={teamId}
+            initialStepId={stepId}
+          />
+        </>
       )}
       {edit && <ProjectEditor project={project} onClose={() => setEdit(false)} />}{' '}
       {archive && <ArchiveProject project={project} onClose={() => setArchive(false)} />}
@@ -754,7 +777,10 @@ function ProjectList() {
 export function Workspace({ route, user }: { route: string; user: User }) {
   const [logout, { isLoading, error }] = authApi.useLogoutMutation();
   const dispatch = useDispatch<AppDispatch>();
-  const [, id, jobId] = route.match(/^\/projects\/([^/]+)(?:\/jobs\/([^/]+))?$/) ?? [];
+  const [, id, jobId, teamId, stepId, planId] =
+    route.match(
+      /^\/projects\/([^/]+)(?:\/jobs\/([^/]+)|\/teams\/([^/]+)(?:\/steps\/([^/]+))?|\/plans\/([^/]+))?$/,
+    ) ?? [];
   const agentsRoute = route.match(/^\/agents(?:\/([^/]+))?$/);
   const githubRoute = route.split('?')[0] === '/github';
   const agentsHref = id ? `#/agents/${id}` : agentsRoute ? `#${route}` : '#/agents';
@@ -762,8 +788,8 @@ export function Workspace({ route, user }: { route: string; user: User }) {
     dispatch(workspaceUi.actions.resetFilters());
   }, [id, dispatch]);
   useEffect(() => {
-    if (jobId) dispatch(workspaceUi.actions.selectTask(null));
-  }, [jobId, dispatch]);
+    if (jobId || teamId || planId) dispatch(workspaceUi.actions.selectTask(null));
+  }, [jobId, teamId, planId, dispatch]);
   async function leave() {
     try {
       await logout().unwrap();
@@ -857,7 +883,14 @@ export function Workspace({ route, user }: { route: string; user: User }) {
         <main id="workspace-main" tabIndex={-1}>
           {error && <Notice>{errorMessage(error)}</Notice>}
           {id ? (
-            <ProjectPage key={jobId ?? id} id={id} jobId={jobId} />
+            <ProjectPage
+              key={route}
+              id={id}
+              jobId={jobId}
+              teamId={teamId}
+              stepId={stepId}
+              planId={planId}
+            />
           ) : agentsRoute ? (
             <AgentsPage id={agentsRoute[1]} />
           ) : githubRoute ? (

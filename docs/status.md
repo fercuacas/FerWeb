@@ -1,6 +1,6 @@
 # Estado actual de FerWeb
 
-Actualizado: **2026-11-11**. Evidencias anteriores en [history.md](history.md), solo bajo demanda.
+Actualizado: **2026-11-17**. Evidencias anteriores en [history.md](history.md), solo bajo demanda.
 
 ## Disponible
 
@@ -14,12 +14,13 @@ Actualizado: **2026-11-11**. Evidencias anteriores en [history.md](history.md), 
 - P13: comparación de agente único y equipo sobre ejecuciones registradas, verificador local para la fixture de suma, revisión humana y exportación JSON. [Laboratorio](laboratory.md#evaluación-de-agente-único-y-equipo-p13).
 - P14: propuestas de lección, revisión y adopción reversible en memoria. Salud de ejecuciones y comprobación de pruebas por escenario. [Lecciones](laboratory.md#lecciones-y-cumplimiento-p14).
 - P15: nueve recetas versionadas por tarea, vistas previas y ejecuciones vinculadas con alcance confirmado. [Recetas](codex.md#recetas-de-tarea-p15).
+- P16: seguimiento por etapa con enlaces directos y revisión visual con anotaciones ligadas a la huella. [Centro de control](codex.md#centro-de-control-p16), [revisión](reviews.md#revisión-visual-p16).
 
 ## Verificado
 
-- P15, `npm run docker:check`: **10 Python, 18 básicas, 102 pruebas/subcasos de integración y 21 Chromium**, tipos, compilación, formato y smoke. Registro privado `.local/p15-docker-check.log`.
-- Pruebas dirigidas P15: investigación en solo lectura, corrección acotada, rechazo de diff fuera de alcance, planes locales y navegación con teclado y en móvil.
-- Instancia local: siete servicios saludables, migración **023**, autoridad `ferweb_postgres_data`, web `http://127.0.0.1:5173`.
+- P16, `npm run docker:check`: **10 Python, 18 básicas, 103 pruebas/subcasos de integración y 21 Chromium**, tipos, compilación, formato y smoke. Registro privado `.local/p16-docker-check.log`.
+- Pruebas dirigidas P16: seguimiento desde tarea, recarga del informe, comentario y respuesta, invalidación de aprobación, revocación y descarga de HTML como texto.
+- Instancia local: siete servicios saludables, migración **024**, autoridad `ferweb_postgres_data`, web `http://127.0.0.1:5173`.
 
 ## Límites y siguiente paso
 
@@ -29,4 +30,4 @@ El recibo registra el canal P10. La comprobación TypeScript/React es estática 
 
 Despliegue permanente pendiente: host/HTTPS, copias cifradas externas, aceptación con App/modelos, monitorización y pruebas prolongadas. Global dos trabajos; por proyecto uno por defecto. [CI](https://github.com/fercuacas/FerWeb/actions).
 
-Sigue P16. [Plan](plans/ecc-codex-prompts/progress.md).
+Sigue P17. [Plan](plans/ecc-codex-prompts/progress.md).
