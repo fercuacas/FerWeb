@@ -8,6 +8,7 @@ import { modelPayload, attachUsageMeter, providerUsage } from '../../runner/poli
 import { validateFiles, differences } from '../../runner/files.mjs';
 import { selectDockerApiVersion } from '../../runner/docker.mjs';
 import { publicationTree } from '../src/modules/jobs/review-artifacts.js';
+import { integrate, workspaceHash } from '../src/modules/teams/integration.js';
 import { fileURLToPath } from 'node:url';
 import { controllerReviewTest } from '@ferweb/contracts';
 import {
@@ -15,6 +16,113 @@ import {
   gradeAddition,
   gradeAdditionArtifact,
 } from '../src/modules/laboratory/evaluation-grader.js';
+
+test('P17 trusted integration preserves additions, deletions and exact bytes, stops conflicting files and rejects invalid scope and resolutions', () => {
+  const base = [
+    { path: 'src/a.js', content: 'base\n' },
+    { path: 'docs/old.txt', content: 'old' },
+  ];
+  const branches = [
+    {
+      step: 'writer-one',
+      paths: ['src/a.js', 'docs/old.txt'],
+      files: [{ path: 'src/a.js', content: 'first\r\n' }],
+    },
+    {
+      step: 'writer-two',
+      paths: ['src/b.js'],
+      files: [...base, { path: 'src/b.js', content: 'new without newline' }],
+    },
+  ];
+  const merged = integrate(base, branches);
+  assert.equal(merged.state, 'ready');
+  assert.deepEqual(merged.files, [
+    { path: 'src/a.js', content: 'first\r\n' },
+    { path: 'src/b.js', content: 'new without newline' },
+  ]);
+  assert.equal(merged.artifact.resultHash, workspaceHash(merged.files!));
+  const reversed = integrate(base, [...branches].reverse());
+  assert.equal(reversed.artifact.resultHash, merged.artifact.resultHash);
+  const overlapping = [
+    branches[0]!,
+    {
+      step: 'writer-two',
+      paths: ['src/a.js'],
+      files: [{ path: 'src/a.js', content: 'second\n' }, base[1]!],
+    },
+  ];
+  const blocked = integrate(base, overlapping);
+  assert.equal(blocked.state, 'conflict');
+  assert.equal(blocked.files, null);
+  assert.deepEqual(blocked.artifact.conflicts, [
+    { path: 'src/a.js', steps: ['writer-one', 'writer-two'] },
+  ]);
+  const resolved = integrate(
+    base,
+    overlapping,
+    [{ path: 'src/a.js', step: 'writer-one' }],
+    blocked.hash,
+  );
+  assert.equal(resolved.artifact.version, 2);
+  assert.equal(resolved.artifact.previousHash, blocked.hash);
+  const baseChoice = integrate(base, overlapping, [{ path: 'src/a.js', step: null }], blocked.hash);
+  assert.deepEqual(baseChoice.files, [base[0]!]);
+  assert.equal(
+    resolved.artifact.resultHash,
+    workspaceHash([{ path: 'src/a.js', content: 'first\r\n' }]),
+  );
+  assert.throws(() =>
+    integrate(base, overlapping, [{ path: 'src/a.js', step: 'unknown' }], blocked.hash),
+  );
+  assert.throws(() => integrate(base, [{ ...branches[0]!, paths: ['src/a.js'] }, branches[1]!]));
+  assert.throws(() =>
+    integrate(base, [
+      branches[0]!,
+      {
+        step: 'writer-two',
+        paths: ['../outside'],
+        files: [...base, { path: '../outside', content: 'unsafe' }],
+      },
+    ]),
+  );
+  assert.throws(() =>
+    integrate(base, [
+      branches[0]!,
+      {
+        step: 'writer-two',
+        paths: ['src/a.js/child'],
+        files: [...base, { path: 'src/a.js/child', content: 'collision' }],
+      },
+    ]),
+  );
+});
+
+test('P17 dependency proximity warns about relative imports across writer scopes without deciding compatibility', () => {
+  const base = [
+    { path: 'ui/view.ts', content: 'export const view=0;' },
+    { path: 'lib/value.ts', content: 'export const value=0;' },
+  ];
+  const merged = integrate(base, [
+    {
+      step: 'writer-one',
+      paths: ['ui/view.ts'],
+      files: [
+        {
+          path: 'ui/view.ts',
+          content: "import {value} from '../lib/value'; export const view=value;",
+        },
+        base[1]!,
+      ],
+    },
+    {
+      step: 'writer-two',
+      paths: ['lib/value.ts'],
+      files: [base[0]!, { path: 'lib/value.ts', content: 'export const value=1;' }],
+    },
+  ]);
+  assert.equal(merged.state, 'ready');
+  assert.ok(merged.artifact.warnings.some((w) => w.startsWith('Dependencia relativa')));
+});
 
 test('P13 held-out grader fails before the fix, passes an independent fix and rejects injected code', async () => {
   const broken = await readFile(

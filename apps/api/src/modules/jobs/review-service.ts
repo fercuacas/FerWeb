@@ -12,6 +12,7 @@ import type { z } from 'zod';
 import { HttpError } from '../../http-error.js';
 import type { CodingService } from './coding-service.js';
 import { canonical, digest, publicationTree } from './review-artifacts.js';
+import { workspaceHash } from '../teams/integration.js';
 import { dimensionReviews, dimensionHash } from './dimension-reviews.js';
 
 const conflict = (message: string) => new HttpError(409, 'review_conflict', message);
@@ -108,7 +109,41 @@ export class ReviewService {
       report.jobId !== row.job_id
     )
       throw conflict('No se ha confirmado un resultado final válido.');
-    return publicationTree(report, row.files, row.source_tree);
+    if (
+      row.integration_base &&
+      (!report.integration ||
+        report.integration.baseHash !== workspaceHash(row.integration_base) ||
+        report.integration.resultHash !== workspaceHash(row.files))
+    )
+      throw conflict('La integración no coincide con la evidencia verificada.');
+    return publicationTree(report, row.integration_base ?? row.files, row.source_tree);
+  }
+  private async integrationReady(id: string) {
+    const step = (
+      await this.pool.query(
+        'SELECT s.execution_id,r.state,r.snapshot,i.state AS integration_state,i.verifier_job_id,i.report_hash,c.report,i.artifact,i.hash,c.integration_base,c.files FROM team_execution_steps s JOIN team_executions r ON r.id=s.execution_id JOIN coding_runs c ON c.job_id=s.job_id LEFT JOIN LATERAL (SELECT * FROM team_integrations WHERE execution_id=r.id ORDER BY version DESC LIMIT 1) i ON true WHERE s.job_id=$1',
+        [id],
+      )
+    ).rows[0];
+    if (step && !step.integration_base)
+      throw new HttpError(
+        409,
+        'team_managed_step',
+        'La publicación del resultado de equipo requiere revisión agregada.',
+      );
+    if (
+      step &&
+      (step.snapshot.plan.template.definition.strategy !== 'writers' ||
+        step.state !== 'completed' ||
+        step.integration_state !== 'verified' ||
+        step.verifier_job_id !== id ||
+        step.report_hash !== digest(canonical(step.report)) ||
+        digest(canonical(step.artifact)) !== step.hash ||
+        !step.integration_base ||
+        workspaceHash(step.integration_base) !== step.artifact.baseHash ||
+        workspaceHash(step.files) !== step.artifact.resultHash)
+    )
+      throw conflict('Solo el resultado integrado y verificado admite revisión y publicación.');
   }
   async read(owner: string, project: string, id: string) {
     const run = await this.run(owner, project, id),
@@ -128,6 +163,8 @@ export class ReviewService {
   }
   async save(owner: string, project: string, id: string, input: z.infer<typeof reviewInput>) {
     const run = await this.run(owner, project, id);
+    // Individual approvals can be drafted, but never authorize an integrated result.
+    if (run.integration_base) await this.integrationReady(id);
     this.ready(run);
     if (input.approved && !(await this.currentMemory(owner, project, run)))
       throw conflict('La memoria utilizada ya no está vigente. Ejecuta con una selección actual.');
@@ -187,13 +224,8 @@ export class ReviewService {
     return this.read(owner, project, id);
   }
   async publish(owner: string, project: string, id: string, version: number) {
-    const team = await this.coding.read(owner, project, id);
-    if (team.teamExecutionId)
-      throw new HttpError(
-        409,
-        'team_managed_step',
-        'La publicación del resultado de equipo requiere revisión agregada.',
-      );
+    await this.coding.read(owner, project, id);
+    await this.integrationReady(id);
     const run = await this.run(owner, project, id),
       tree = this.ready(run);
     if (!(await this.currentMemory(owner, project, run)))

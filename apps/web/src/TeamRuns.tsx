@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import type { z } from 'zod';
-import type { teamMessage } from '@ferweb/contracts';
+import type { teamMessage, teamIntegration } from '@ferweb/contracts';
 import type { Project, TeamPlan } from '@ferweb/contracts';
 import { teamsApi } from './teams-store';
 import { jobsApi } from './jobs-store';
@@ -32,8 +32,8 @@ export function TeamPolicySettings({ project }: { project: Project }) {
     <section className="agent-history" aria-label="Concurrencia de especialistas">
       <h3>Concurrencia de especialistas</h3>
       <p>
-        Por defecto, un trabajo por proyecto. El máximo global sigue siendo dos. Solo especialistas
-        del mismo equipo con fuentes de solo lectura pueden coincidir.
+        Por defecto, un trabajo por proyecto. El máximo global sigue siendo dos. Pueden coincidir
+        especialistas de lectura o escritores con copias aisladas del mismo equipo.
       </p>
       {query.isLoading && <p>Cargando configuración…</p>}
       {query.error && (
@@ -212,9 +212,11 @@ export function TeamLauncher({ project, plan }: { project: Project; plan: TeamPl
           <p className="skill-text">Commit a congelar: {commit}</p>
           <p>
             Se crearán {plan.snapshot.steps.length} etapas{' '}
-            {plan.snapshot.template.definition.strategy === 'specialists'
-              ? 'de especialistas de solo lectura y resumen'
-              : 'secuenciales'}{' '}
+            {plan.snapshot.template.definition.strategy === 'writers'
+              ? 'de escritores aislados e integración'
+              : plan.snapshot.template.definition.strategy === 'specialists'
+                ? 'de especialistas de solo lectura y resumen'
+                : 'secuenciales'}{' '}
             con un presupuesto de {plan.snapshot.limits.maxRequests} peticiones y{' '}
             {plan.snapshot.limits.timeoutMs / 1000} segundos. El proveedor y los roles son los de
             esta copia aprobada.
@@ -244,14 +246,139 @@ export function TeamLauncher({ project, plan }: { project: Project; plan: TeamPl
                 .catch(() => {});
             }}
           >
-            {plan.snapshot.template.definition.strategy === 'specialists'
-              ? 'Ejecutar especialistas'
-              : 'Ejecutar equipo secuencial'}
+            {plan.snapshot.template.definition.strategy === 'writers'
+              ? 'Ejecutar escritores'
+              : plan.snapshot.template.definition.strategy === 'specialists'
+                ? 'Ejecutar especialistas'
+                : 'Ejecutar equipo secuencial'}
           </button>
         </>
       )}
       {result.error && <p role="alert">{errorMessage(result.error)}</p>}
     </div>
+  );
+}
+function IntegrationView({
+  project,
+  id,
+  stepId,
+  integration,
+  active,
+}: {
+  project: Project;
+  id: string;
+  stepId: string;
+  integration: z.infer<typeof teamIntegration>;
+  active: boolean;
+}) {
+  const [choices, setChoices] = useState<Record<string, string>>({});
+  const [confirmed, setConfirmed] = useState(false);
+  const [resolve, result] = teamsApi.useResolveTeamIntegrationMutation();
+  const artifact = integration.artifact;
+  return (
+    <section aria-label="Integración de escritores">
+      <h4>
+        Integración v{artifact.version} ·{' '}
+        {integration.state === 'conflict'
+          ? 'Conflictos pendientes'
+          : integration.state === 'ready'
+            ? 'Pendiente de pruebas'
+            : integration.state === 'verified'
+              ? 'Verificada'
+              : 'Fallida'}
+      </h4>
+      <p className="skill-text">
+        Artefacto: {integration.hash}
+        <br />
+        Base: {artifact.baseHash}
+        <br />
+        Resultado: {artifact.resultHash ?? 'Bloqueado por conflictos'}
+      </p>
+      <p>
+        La comparación conserva altas, bajas y contenido exactos. Cambios distintos en un mismo
+        archivo requieren una selección; las advertencias de proximidad no garantizan
+        compatibilidad.
+      </p>
+      {artifact.warnings.map((warning, i) => (
+        <p key={i}>{warning}</p>
+      ))}
+      <details>
+        <summary>Entregas y huellas de archivos</summary>
+        <pre className="skill-text">{JSON.stringify(artifact, null, 2)}</pre>
+      </details>
+      {integration.verifierJobId && (
+        <p>
+          <a href={`#/projects/${project.id}/teams/${id}/steps/${stepId}`}>
+            Verificación y revisión del resultado
+          </a>{' '}
+          · Informe {integration.reportHash}
+        </p>
+      )}
+      {integration.state === 'conflict' && (
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            void resolve({
+              project: project.id,
+              id,
+              body: {
+                hash: integration.hash,
+                choices: artifact.conflicts.map((c) => ({
+                  path: c.path,
+                  step: choices[c.path] === '__base__' ? null : choices[c.path]!,
+                })),
+              },
+            })
+              .unwrap()
+              .catch(() => {});
+          }}
+        >
+          {artifact.conflicts.map((conflict) => (
+            <label key={conflict.path}>
+              Resolver {conflict.path}
+              <select
+                required
+                disabled={!active || !!project.archivedAt}
+                value={choices[conflict.path] ?? ''}
+                onChange={(e) => {
+                  setChoices({ ...choices, [conflict.path]: e.target.value });
+                  setConfirmed(false);
+                }}
+              >
+                <option value="">Selecciona una versión</option>
+                <option value="__base__">Conservar base</option>
+                {conflict.steps.map((step) => (
+                  <option key={step} value={step}>
+                    Entrega de {step}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ))}
+          <label>
+            <input
+              type="checkbox"
+              checked={confirmed}
+              disabled={!active || !!project.archivedAt}
+              onChange={(e) => setConfirmed(e.target.checked)}
+            />
+            Confirmo esta resolución para crear una versión nueva y verificarla
+          </label>
+          <button
+            disabled={
+              !active ||
+              !!project.archivedAt ||
+              !confirmed ||
+              artifact.conflicts.some((c) => !choices[c.path]) ||
+              result.isLoading
+            }
+          >
+            Guardar resolución y verificar
+          </button>
+          {result.error && <p role="alert">{errorMessage(result.error)}</p>}
+        </form>
+      )}
+    </section>
   );
 }
 function StepReport({ project, id, archived }: { project: string; id: string; archived: boolean }) {
@@ -355,13 +482,39 @@ export function TeamRunDetails({
             {data.plan.template.definition.reviewMode
               ? `Hasta ${data.plan.maxIterations} rondas de revisión`
               : 'Una pasada'}{' '}
-            {data.plan.template.definition.strategy === 'specialists'
-              ? `de especialistas · Concurrencia aprobada ${data.plan.limits.concurrency}`
-              : 'secuencial · Un solo trabajo activo por proyecto'}{' '}
+            {data.plan.template.definition.strategy === 'writers'
+              ? `de escritores aislados · Concurrencia aprobada ${data.plan.limits.concurrency}`
+              : data.plan.template.definition.strategy === 'specialists'
+                ? `de especialistas · Concurrencia aprobada ${data.plan.limits.concurrency}`
+                : 'secuencial · Un solo trabajo activo por proyecto'}{' '}
             · Sin reintentos automáticos de código
           </p>
           <ExecutionDetails option={data.plan.execution} />
           <TeamBudget project={project.id} id={data.execution.budgetId} />
+          {data.integrations?.map((integration, index) => (
+            <div key={integration.hash}>
+              {index === data.integrations!.length - 1 ? (
+                <IntegrationView
+                  key={integration.hash}
+                  project={project}
+                  id={id}
+                  stepId={
+                    data.steps.find((step) => step.jobId === integration.verifierJobId)?.id ?? ''
+                  }
+                  integration={integration}
+                  active={
+                    ['pending', 'running'].includes(data.execution.state) &&
+                    !data.execution.cancelRequested
+                  }
+                />
+              ) : (
+                <details>
+                  <summary>Integración anterior v{integration.artifact.version}</summary>
+                  <pre className="skill-text">{JSON.stringify(integration, null, 2)}</pre>
+                </details>
+              )}
+            </div>
+          ))}
           {data.plan.template.definition.strategy === 'specialists' && (
             <>
               <section aria-label="Resultados reunidos">

@@ -10,6 +10,7 @@ import {
   type executeTeamPlanInput,
   teamPolicy,
   type updateTeamPolicyInput,
+  type resolveTeamIntegrationInput,
 } from '@ferweb/contracts';
 import { HttpError } from '../../http-error.js';
 import type { CodingService } from '../jobs/coding-service.js';
@@ -17,6 +18,7 @@ import { canonical, digest } from '../jobs/review-artifacts.js';
 import { TeamService } from './service.js';
 import { TeamMessages, systemTeamMessage } from './messages.js';
 import { gatherDimensionalReview } from '../jobs/dimension-reviews.js';
+import { integrate, workspaceHash, type WriterBranch } from './integration.js';
 
 const active = (state: string) => ['pending', 'running'].includes(state);
 const missing = () => new HttpError(404, 'not_found', 'No se ha encontrado la ejecución.');
@@ -200,6 +202,18 @@ export class TeamExecutions {
       .filter((step) => !step.delivery?.verified)
       .map((step) => step.step_key);
     return teamExecutionResponse.parse({
+      integrations: (
+        await this.pool.query(
+          'SELECT artifact,hash,state,verifier_job_id,report_hash FROM team_integrations WHERE execution_id=$1 ORDER BY version',
+          [id],
+        )
+      ).rows.map((r) => ({
+        artifact: r.artifact,
+        hash: r.hash,
+        state: r.state,
+        verifierJobId: r.verifier_job_id,
+        reportHash: r.report_hash,
+      })),
       owner: identity.email,
       taskStatus: identity.status,
       gathering: {
@@ -403,6 +417,82 @@ export class TeamExecutions {
     for (const step of jobs) await this.coding.jobs.queue.cancel(step.job_id, project);
     return this.read(owner, project, id);
   }
+  async resolve(
+    owner: string,
+    project: string,
+    id: string,
+    input: z.infer<typeof resolveTeamIntegrationInput>,
+  ) {
+    const run = await this.owned(owner, project, id);
+    await this.teams.validateSnapshot(owner, project, teamPlanSnapshot.parse(run.snapshot.plan));
+    const { link } = await this.coding.github.read(owner, project);
+    if (
+      !link ||
+      link.revoked ||
+      link.stale ||
+      link.version !== run.link_version ||
+      link.snapshot?.commit !== run.commit_sha
+    )
+      throw conflict('team_source_changed');
+    await this.coding.jobs.queue.tx(async (db) => {
+      const p = (
+        await db.query('SELECT archived_at FROM projects WHERE id=$1 AND owner_id=$2 FOR UPDATE', [
+          project,
+          owner,
+        ])
+      ).rows[0];
+      const parent = (
+        await db.query(
+          'SELECT r.*,b.deadline_at,b.cancelled_at FROM team_executions r JOIN execution_budgets b ON b.id=r.budget_id WHERE r.id=$1 FOR UPDATE OF r,b',
+          [id],
+        )
+      ).rows[0];
+      const current = (
+        await db.query(
+          'SELECT * FROM team_integrations WHERE execution_id=$1 ORDER BY version DESC LIMIT 1 FOR UPDATE',
+          [id],
+        )
+      ).rows[0];
+      if (
+        !p ||
+        p.archived_at ||
+        !active(parent.state) ||
+        parent.cancel_requested ||
+        parent.cancelled_at ||
+        parent.deadline_at <= new Date() ||
+        current?.hash !== input.hash ||
+        current.state !== 'conflict'
+      )
+        throw conflict('team_integration_changed');
+      const result = integrate(current.base_files, current.branches, input.choices, current.hash);
+      if (
+        digest(canonical(current.artifact)) !== current.hash ||
+        result.artifact.baseHash !== current.artifact.baseHash ||
+        canonical(result.artifact.branches) !== canonical(current.artifact.branches)
+      )
+        throw conflict('team_integration_changed');
+      await db.query(
+        'INSERT INTO team_integrations(execution_id,version,artifact,hash,state,base_files,branches,merged_files) VALUES($1,2,$2,$3,$4,$5,$6,$7)',
+        [
+          id,
+          JSON.stringify(result.artifact),
+          result.hash,
+          result.state,
+          JSON.stringify(current.base_files),
+          JSON.stringify(current.branches),
+          JSON.stringify(result.files),
+        ],
+      );
+      await teamEvent(
+        db,
+        id,
+        'integration_resolved',
+        'Resolución guardada; pendiente de verificación independiente.',
+        { hash: result.hash, previousHash: current.hash },
+      );
+    });
+    return this.read(owner, project, id);
+  }
   private async close(
     id: string,
     state: 'completed' | 'failed' | 'cancelled',
@@ -417,6 +507,11 @@ export class TeamExecutions {
         'UPDATE team_executions SET state=$2,error_code=COALESCE(error_code,$3),finished_at=now() WHERE id=$1',
         [id, effective, code],
       );
+      if (effective !== 'completed')
+        await db.query(
+          "UPDATE team_integrations SET state='failed' WHERE execution_id=$1 AND state='ready'",
+          [id],
+        );
       await teamEvent(db, id, effective, 'Equipo terminado. Consulta entregas, pruebas y dudas.', {
         code,
       });
@@ -435,12 +530,6 @@ export class TeamExecutions {
       } catch (error) {
         // Validation failure is terminal. Retrying code or inference is never a recovery policy.
         const code = error instanceof HttpError ? error.code : 'team_coordinator_failed';
-        const jobs = (
-          await this.pool.query(
-            "SELECT j.id FROM jobs j JOIN team_execution_steps s ON s.job_id=j.id WHERE s.execution_id=$1 AND j.state IN ('pending','running')",
-            [run.id],
-          )
-        ).rows;
         await this.coding.jobs.queue.tx(async (db) => {
           const row = (
             await db.query('SELECT state FROM team_executions WHERE id=$1 FOR UPDATE', [run.id])
@@ -462,8 +551,18 @@ export class TeamExecutions {
             { code },
           );
         });
+        // Admission is closed before finding children: another coordinator may
+        // have admitted one while this failure was being handled.
+        const jobs = (
+          await this.pool.query(
+            "SELECT j.id FROM jobs j JOIN team_execution_steps s ON s.job_id=j.id WHERE s.execution_id=$1 AND j.state IN ('pending','running')",
+            [run.id],
+          )
+        ).rows;
         for (const job of jobs) await this.coding.jobs.queue.cancel(job.id, run.project_id);
-        if (!jobs.length) await this.close(run.id, 'failed', code);
+        // Collect every terminal delivery before closing, including siblings
+        // that ended in the same tick as the first failed child.
+        if (!jobs.length) await this.advance({ ...run, cancel_requested: true, error_code: code });
       }
     }
     return { checked: rows.length };
@@ -477,6 +576,7 @@ export class TeamExecutions {
     ).rows;
     const snapshot = teamPlanSnapshot.parse(run.snapshot.plan);
     const specialists = snapshot.template.definition.strategy === 'specialists';
+    const writers = snapshot.template.definition.strategy === 'writers';
     const stopping = run.cancel_requested || run.archived_at || run.cancelled_at;
     if (stopping) {
       for (const step of steps.filter((item) => item.job_id && active(item.state)))
@@ -500,6 +600,31 @@ export class TeamExecutions {
     const iteration = Math.max(...steps.map((s) => s.iteration));
     const currentSteps = steps.filter((s) => s.iteration === iteration);
     if (currentSteps.every((step) => step.delivery?.verified)) {
+      if (writers) {
+        const final = currentSteps.at(-1)!;
+        const integration = (
+          await this.pool.query(
+            'SELECT * FROM team_integrations WHERE execution_id=$1 ORDER BY version DESC LIMIT 1',
+            [run.id],
+          )
+        ).rows[0];
+        if (
+          !integration ||
+          !['ready', 'verified'].includes(integration.state) ||
+          workspaceHash(codingWorkspace.parse(final.output_files)) !==
+            integration.artifact.resultHash ||
+          canonical(final.report.integration) !==
+            canonical({
+              baseHash: integration.artifact.baseHash,
+              resultHash: integration.artifact.resultHash,
+            })
+        )
+          throw conflict('team_integration_changed');
+        await this.pool.query(
+          "UPDATE team_integrations SET state='verified',verifier_job_id=$3,report_hash=$4 WHERE execution_id=$1 AND version=$2 AND state='ready'",
+          [run.id, integration.version, final.job_id, digest(canonical(final.report))],
+        );
+      }
       if (
         snapshot.reviewTarget &&
         iteration < snapshot.maxIterations &&
@@ -537,15 +662,16 @@ export class TeamExecutions {
       return;
     }
     const completed = currentSteps.filter((step) => step.delivery?.verified);
-    const current = specialists
-      ? currentSteps.find(
-          (item) =>
-            !item.job_id &&
-            snapshot.steps[(item.position - 1) % snapshot.steps.length]!.dependsOn.every((key) =>
-              completed.some((done) => done.step_key === key),
-            ),
-        )
-      : steps.find((step) => !step.delivery);
+    const current =
+      specialists || writers
+        ? currentSteps.find(
+            (item) =>
+              !item.job_id &&
+              snapshot.steps[(item.position - 1) % snapshot.steps.length]!.dependsOn.every((key) =>
+                completed.some((done) => done.step_key === key),
+              ),
+          )
+        : steps.find((step) => !step.delivery);
     if (!current || current.job_id) return;
     if (run.deadline_at && run.deadline_at <= new Date()) throw conflict('budget_timeout');
     await this.teams.validateSnapshot(run.owner_id, run.project_id, snapshot);
@@ -561,9 +687,74 @@ export class TeamExecutions {
     const step = snapshot.steps[(current.position - 1) % snapshot.steps.length]!;
     if (step.dependsOn.some((key) => !completed.some((item) => item.step_key === key)))
       throw conflict('team_dependency_missing');
-    const previous = specialists ? undefined : steps[current.position - 2];
+    const previous = specialists || writers ? undefined : steps[current.position - 2];
     if (previous && digest(canonical(previous.output_files)) !== previous.delivery.outputHash)
       throw conflict('team_delivery_changed');
+    let integration: QueryResultRow | undefined;
+    if (writers && current.position === steps.length) {
+      integration = (
+        await this.pool.query(
+          'SELECT * FROM team_integrations WHERE execution_id=$1 ORDER BY version DESC LIMIT 1',
+          [run.id],
+        )
+      ).rows[0];
+      if (!integration) {
+        const roots = steps.slice(0, -1),
+          base = codingWorkspace.parse(roots[0]!.files);
+        const branches: WriterBranch[] = roots.map((root) => {
+          if (
+            workspaceHash(codingWorkspace.parse(root.files)) !== workspaceHash(base) ||
+            digest(canonical(root.output_files)) !== root.delivery.outputHash
+          )
+            throw conflict('team_delivery_changed');
+          return {
+            step: root.step_key,
+            paths: snapshot.steps.find((s) => s.key === root.step_key)!.paths!,
+            files: codingWorkspace.parse(root.output_files),
+          };
+        });
+        const result = integrate(base, branches);
+        await this.coding.jobs.queue.tx(async (db) => {
+          const parent = (
+            await db.query(
+              'SELECT state,cancel_requested FROM team_executions WHERE id=$1 FOR UPDATE',
+              [run.id],
+            )
+          ).rows[0];
+          if (!active(parent.state) || parent.cancel_requested) throw conflict();
+          const saved = await db.query(
+            'INSERT INTO team_integrations(execution_id,version,artifact,hash,state,base_files,branches,merged_files) VALUES($1,1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING RETURNING version',
+            [
+              run.id,
+              JSON.stringify(result.artifact),
+              result.hash,
+              result.state,
+              JSON.stringify(base),
+              JSON.stringify(branches),
+              JSON.stringify(result.files),
+            ],
+          );
+          if (saved.rowCount)
+            await teamEvent(
+              db,
+              run.id,
+              'integration_' + result.state,
+              result.state === 'conflict'
+                ? 'Conflictos detenidos: selecciona una resolución.'
+                : 'Cambios integrados; pendiente de pruebas independientes.',
+              { hash: result.hash },
+            );
+        });
+        return;
+      }
+      if (integration.state !== 'ready') return;
+      if (
+        digest(canonical(integration.artifact)) !== integration.hash ||
+        workspaceHash(codingWorkspace.parse(integration.merged_files)) !==
+          integration.artifact.resultHash
+      )
+        throw conflict('team_integration_changed');
+    }
     await this.coding.create(
       run.owner_id,
       run.project_id,
@@ -599,11 +790,16 @@ export class TeamExecutions {
         stepId: current.id,
         snapshot,
         stepKey: step.key,
-        ...(snapshot.reviewTarget
-          ? { files: snapshot.reviewTarget.files }
-          : previous
-            ? { files: codingWorkspace.parse(previous.output_files) }
-            : {}),
+        ...(integration
+          ? {
+              files: codingWorkspace.parse(integration.merged_files),
+              integrationBase: codingWorkspace.parse(integration.base_files),
+            }
+          : snapshot.reviewTarget
+            ? { files: snapshot.reviewTarget.files }
+            : previous
+              ? { files: codingWorkspace.parse(previous.output_files) }
+              : {}),
         deliveries: completed.map((item) => teamDelivery.parse(item.delivery)),
       },
     );
@@ -629,7 +825,15 @@ export class TeamExecutions {
       report.terminationConfirmed === true &&
       !report.controls?.events.some((event) => event.status !== 'passed') &&
       !!output?.length &&
-      report.tests.some((test) => test.origin === origin && test.exitCode === 0) &&
+      (snapshot.template.definition.strategy === 'writers' &&
+      current.position < snapshot.steps.length
+        ? !!report.controls?.events.some(
+            (event) =>
+              event.id === 'verification' &&
+              event.status === 'passed' &&
+              event.code === 'artifact_scope_verified',
+          )
+        : report.tests.some((test) => test.origin === origin && test.exitCode === 0)) &&
       (!specialists ||
         (report.diff.length === 0 &&
           fingerprint(output) === fingerprint(codingWorkspace.parse(current.files))));
@@ -645,6 +849,12 @@ export class TeamExecutions {
         .map(({ command, exitCode, origin }) => ({ command, exitCode, origin })),
       doubts: [
         ...(report?.limitations ?? []),
+        ...(snapshot.template.definition.strategy === 'writers' &&
+        current.position < snapshot.steps.length
+          ? [
+              'Esta entrega verifica el alcance; las pruebas independientes corresponden a la combinación final.',
+            ]
+          : []),
         'Los criterios de salida y las afirmaciones del agente requieren revisión humana.',
       ],
       verified,

@@ -121,6 +121,7 @@ export function PlanDetails({ project, id }: { project: Project; id: string }) {
                   {step.agent.name} v{step.agent.version} · Máximo {step.maxRequests} peticiones ·
                   Depende de: {step.dependsOn.join(', ') || 'ninguna etapa'}
                 </p>
+                {step.paths && <p>Rutas aprobadas: {step.paths.join(', ')}</p>}
                 <p>
                   Capacidades:{' '}
                   {step.requiredCapabilities.map((key) => capabilityLabels[key]).join(', ')}
@@ -241,6 +242,7 @@ function PlansContent({ project }: { project: Project }) {
     (item) => item.version === (version || detail.template.latest.version),
   );
   const specialists = template?.definition.strategy === 'specialists';
+  const writers = template?.definition.strategy === 'writers';
   const execution =
     !capabilities.error && capabilities.currentData
       ? codingOption(capabilities.currentData, template?.definition.toolProfile, specialists)
@@ -251,6 +253,7 @@ function PlansContent({ project }: { project: Project }) {
   const classification = task ? classifyPlanTask(task) : null;
   const single =
     !specialists &&
+    !writers &&
     (mode === 'single' || (mode === 'auto' && classification?.recommendedMode === 'single'));
   const orderedSteps = template
     ? teamStepOrder(template.definition.steps)!.map((key) =>
@@ -279,8 +282,8 @@ function PlansContent({ project }: { project: Project }) {
           taskVersion: task.version,
           templateId: template.id,
           templateVersion: template.version,
-          mode: specialists ? 'team' : mode,
-          ...(!specialists && mode === 'single' && { singleStep }),
+          mode: specialists || writers ? 'team' : mode,
+          ...(!specialists && !writers && mode === 'single' && { singleStep }),
           executionId: 'codex-v1',
           model: effectiveModel || null,
         },
@@ -390,8 +393,8 @@ function PlansContent({ project }: { project: Project }) {
             <label>
               Modo del plan
               <select
-                disabled={specialists}
-                value={specialists ? 'team' : mode}
+                disabled={specialists || writers}
+                value={specialists || writers ? 'team' : mode}
                 onChange={(e) => setMode(e.target.value as typeof mode)}
               >
                 <option value="auto">Automático según tamaño</option>
@@ -399,7 +402,7 @@ function PlansContent({ project }: { project: Project }) {
                 <option value="team">Equipo completo</option>
               </select>
             </label>
-            {!specialists && mode === 'single' && (
+            {!specialists && !writers && mode === 'single' && (
               <label>
                 Etapa del agente único
                 <select required value={singleStep} onChange={(e) => setStep(e.target.value)}>
@@ -434,7 +437,13 @@ function PlansContent({ project }: { project: Project }) {
               como solo lectura y el límite del proyecto debe permitir la concurrencia solicitada.
             </p>
           )}
-          {classification && !specialists && (
+          {writers && (
+            <p>
+              Escritores con copias separadas y rutas exactas. Los solapamientos requieren
+              resolución si las entregas difieren; la combinación pasa pruebas y revisión propias.
+            </p>
+          )}
+          {classification && !specialists && !writers && (
             <p>
               Clasificación orientativa por longitud y número de criterios:{' '}
               {{ small: 'pequeña', medium: 'mediana', large: 'grande' }[classification.size]}.
@@ -480,7 +489,7 @@ function PlansContent({ project }: { project: Project }) {
               !memoryValid ||
               !task ||
               !template ||
-              (!specialists && mode === 'single' && !singleStep)
+              (!specialists && !writers && mode === 'single' && !singleStep)
             }
           >
             Preparar copia del plan

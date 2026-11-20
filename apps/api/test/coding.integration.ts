@@ -49,6 +49,7 @@ import { TeamService } from '../src/modules/teams/service.js';
 import { ProjectLearning } from '../src/modules/laboratory/learning.js';
 import { learningObservation } from '../src/modules/laboratory/learning-observations.js';
 import { githubFixture } from '../../../tests/fixtures/github.mjs';
+import { publicationFixture } from '../../../tests/fixtures/publication.mjs';
 import { codingCorpus } from '../../../tests/fixtures/coding.mjs';
 import { addSource } from '../../../tests/fixtures/retrieval.mjs';
 import { skillFixtureText, skillManifestFixture } from '../../../tests/fixtures/skills.mjs';
@@ -63,7 +64,7 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
   let created = false,
     server: import('node:http').Server | undefined,
     worker: ChildProcess | undefined;
-  const fixture = codingCorpus(githubFixture()),
+  const fixture = publicationFixture(codingCorpus(githubFixture())),
     github = new GitHubService(pool, fixture.config, fixture.transport),
     coding = new CodingService(pool, github, runner);
   async function waitFor<T>(action: () => Promise<T | false>, timeout = 40000): Promise<T> {
@@ -369,6 +370,7 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
             'review-diff',
             'specialists-review',
             'dimensional-review',
+            'parallel-writers',
           ],
         );
         const roles = `/projects/${project}/agents`;
@@ -3321,6 +3323,387 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
           await github.connect(owner.id, 71);
           const link = (await github.read(owner.id, project)).link!;
           await github.sync(owner.id, project, link.version);
+        }
+      },
+    );
+    await t.test(
+      'P17 isolated writers integrate exact changes, resolve conflicts, verify independently and stop on parent limits and source loss',
+      async () => {
+        if (!worker || worker.exitCode !== null || worker.signalCode !== null) await startWorker();
+        const post = async (path: string, body: unknown) => {
+          const response = await request('POST', path, body, cookie);
+          assert.ok(response.ok, await response.clone().text());
+          return response.json();
+        };
+        const roles = [];
+        for (const template of ['implementer', 'tester'])
+          roles.push((await post(`/projects/${project}/agents`, { template })).role);
+        const currentPolicy = await (
+          await request('GET', `/projects/${project}/team-policy`, undefined, cookie)
+        ).json();
+        assert.equal(
+          (
+            await request(
+              'PATCH',
+              `/projects/${project}/team-policy`,
+              { version: currentPolicy.version, parallelism: 2 },
+              cookie,
+            )
+          ).status,
+          200,
+        );
+        addSource(fixture, 'docs/p17-obsolete.txt', 'remove exactly');
+        await github.sync(owner.id, project, (await github.read(owner.id, project)).link!.version);
+        const runningIds: string[] = [];
+        async function launch(
+          title: string,
+          secondPath = 'src/label.cjs',
+          profile?: 'typescript-react-v1',
+          requests = 3,
+          timeoutMs = 120000,
+        ) {
+          const taskRow = await task(title);
+          const definition: TeamDefinition = {
+            name: title,
+            strategy: 'writers',
+            ...(profile && { toolProfile: profile }),
+            description: 'Isolated P17 fixture.',
+            maxIterations: 1,
+            limits: { maxRequests: requests * 2 + 2, timeoutMs, concurrency: 2 },
+            steps: [
+              {
+                key: 'writer-one',
+                title: 'First writer',
+                role: { id: roles[0].id, version: 1 },
+                dependsOn: [],
+                paths: [
+                  'src/add.cjs',
+                  'docs/p17-obsolete.txt',
+                  ...(profile ? ['src/Counter.tsx'] : []),
+                ],
+                exitCriteria: ['Only approved paths.'],
+                requiredCapabilities: ['text', 'workspaceWrite'],
+                maxRequests: requests,
+              },
+              {
+                key: 'writer-two',
+                title: 'Second writer',
+                role: { id: roles[0].id, version: 1 },
+                dependsOn: [],
+                paths: [secondPath],
+                exitCriteria: ['Only approved paths.'],
+                requiredCapabilities: ['text', 'workspaceWrite'],
+                maxRequests: requests,
+              },
+              {
+                key: 'integrate',
+                title: 'Verify combined result',
+                role: { id: roles[1].id, version: 1 },
+                dependsOn: ['writer-one', 'writer-two'],
+                exitCriteria: ['Preserve files exactly and verify.'],
+                requiredCapabilities: ['text'],
+                maxRequests: 2,
+              },
+            ],
+          };
+          if (profile) {
+            const custom = await post(`/projects/${project}/agents`, {
+              name: 'P17 TypeScript writer',
+              purpose: 'Verify isolated writers.',
+              instructions: 'Use approved paths only.',
+              outputFormat: 'Evidence.',
+              requiredCapabilities: ['text', 'workspaceWrite'],
+              allowedToolProfiles: [profile],
+            });
+            const verifier = await post(`/projects/${project}/agents`, {
+              name: 'P17 TypeScript verifier',
+              purpose: 'Verify the combination.',
+              instructions: 'Do not edit files.',
+              outputFormat: 'Evidence.',
+              requiredCapabilities: ['text'],
+              allowedToolProfiles: [profile],
+            });
+            definition.steps[0]!.role = { id: custom.role.id, version: 1 };
+            definition.steps[1]!.role = { id: custom.role.id, version: 1 };
+            definition.steps[2]!.role = { id: verifier.role.id, version: 1 };
+          }
+          const { template } = await post(`/projects/${project}/team-templates`, { definition });
+          const { plan } = await post(`/projects/${project}/team-plans`, {
+            requestId: randomUUID(),
+            taskId: taskRow.id,
+            taskVersion: taskRow.version,
+            templateId: template.id,
+            templateVersion: 1,
+            mode: 'team',
+            executionId: 'codex-v1',
+            model: 'fixture-codex',
+          });
+          await post(`/projects/${project}/team-plans/${plan.id}/approve`, {
+            hash: plan.hash,
+            version: 1,
+          });
+          const data = teamExecutionResponse.parse(
+            await post(`/projects/${project}/team-plans/${plan.id}/execute`, {
+              requestId: randomUUID(),
+              hash: plan.hash,
+              version: 1,
+              commit: 'a'.repeat(40),
+            }),
+          );
+          runningIds.push(data.execution.id);
+          return data.execution.id;
+        }
+        try {
+          const writesBefore = fixture.state.writes.length;
+          const id = await launch('P17 disjoint'),
+            done = await teamTerminal(id);
+          assert.equal(done.execution.state, 'completed', done.execution.errorCode ?? '');
+          assert.ok(done.steps.every((s) => s.delivery?.verified));
+          assert.equal(done.steps[0]!.delivery!.inputHash, done.steps[1]!.delivery!.inputHash);
+          const integration = done.integrations!.at(-1)!;
+          assert.equal(integration.state, 'verified');
+          const result = await report(done.steps[2]!.jobId!);
+          assert.equal(result.integrationPublishable, true);
+          assert.equal(result.report!.integration!.resultHash, integration.artifact.resultHash);
+          assert.ok(
+            result.report!.tests.some(
+              (t) => t.origin === 'controller-verification' && t.exitCode === 0,
+            ),
+          );
+          assert.deepEqual(
+            result.report!.diff.map((f) => f.path),
+            ['docs/p17-obsolete.txt', 'src/add.cjs', 'src/label.cjs'],
+          );
+          assert.equal(fixture.state.writes.length, writesBefore);
+          assert.equal(
+            (
+              await request(
+                'POST',
+                `/projects/${project}/coding/${done.steps[0]!.jobId}/review/publish`,
+                { version: 1 },
+                cookie,
+              )
+            ).status,
+            409,
+          );
+          const finalId = result.jobId;
+          const review = {
+            version: 0,
+            approved: true,
+            title: 'P17 integration',
+            body: 'Combined isolated writers.',
+            branch: `ferweb/p17-${finalId}`,
+            notes: 'Reviewed integrated bytes and independent tests.',
+          };
+          assert.equal(
+            (await request('PUT', `/projects/${project}/coding/${finalId}/review`, review, cookie))
+              .status,
+            200,
+          );
+          const stored = (
+            await pool.query('SELECT report FROM coding_runs WHERE job_id=$1', [finalId])
+          ).rows[0].report;
+          await pool.query(
+            "UPDATE coding_runs SET report=jsonb_set(report,'{summary}','\"changed after approval\"') WHERE job_id=$1",
+            [finalId],
+          );
+          assert.equal(
+            (
+              await request(
+                'POST',
+                `/projects/${project}/coding/${finalId}/review/publish`,
+                { version: 1 },
+                cookie,
+              )
+            ).status,
+            409,
+          );
+          await pool.query('UPDATE coding_runs SET report=$2 WHERE job_id=$1', [
+            finalId,
+            JSON.stringify(stored),
+          ]);
+          const published = await request(
+            'POST',
+            `/projects/${project}/coding/${finalId}/review/publish`,
+            { version: 1 },
+            cookie,
+          );
+          assert.equal(published.status, 200, await published.clone().text());
+          const conflictId = await launch('P17 conflict', 'src/add.cjs');
+          const blocked = await waitFor(async () => {
+            const data = await teamDetail(conflictId);
+            return data.integrations?.at(-1)?.state === 'conflict' ? data : false;
+          });
+          assert.equal(blocked.steps[2]!.jobId, null);
+          const resolution = {
+            hash: blocked.integrations![0]!.hash,
+            choices: [{ path: 'src/add.cjs', step: 'writer-one' }],
+          };
+          const resolvePath = `/projects/${project}/team-executions/${conflictId}/integration/resolve`;
+          assert.equal((await request('POST', resolvePath, resolution, foreign)).status, 404);
+          assert.equal(
+            (await request('POST', resolvePath, { ...resolution, hash: '0'.repeat(64) }, cookie))
+              .status,
+            409,
+          );
+          assert.equal(
+            (
+              await request(
+                'POST',
+                resolvePath,
+                { ...resolution, choices: [{ path: 'src/add.cjs', step: 'unknown' }] },
+                cookie,
+              )
+            ).status,
+            409,
+          );
+          await post(resolvePath, resolution);
+          assert.equal((await request('POST', resolvePath, resolution, cookie)).status, 409);
+          const resolved = await teamTerminal(conflictId);
+          assert.equal(resolved.execution.state, 'completed', resolved.execution.errorCode ?? '');
+          assert.equal(resolved.integrations!.length, 2);
+          assert.equal(resolved.integrations![1]!.artifact.previousHash, resolution.hash);
+          for (const title of [
+            'P17 scope',
+            'P17 partial failure',
+            'P17 verify fail',
+            'P17 verifier scope',
+          ]) {
+            const failed = await teamTerminal(await launch(title));
+            assert.equal(failed.execution.state, 'failed');
+            assert.ok(failed.steps.some((s) => !!s.delivery));
+            if (title === 'P17 verify fail' || title === 'P17 verifier scope')
+              assert.equal(failed.integrations!.at(-1)!.state, 'failed');
+            else assert.equal(failed.steps[2]!.jobId, null);
+          }
+          const capped = await teamTerminal(
+            await launch('P17 budget cap', 'src/label.cjs', undefined, 1),
+          );
+          assert.equal(capped.execution.state, 'failed');
+          assert.equal(capped.steps[2]!.jobId, null);
+          async function bothActive(id: string) {
+            return waitFor(async () => {
+              const rows = (
+                await pool.query(
+                  "SELECT j.id,c.report FROM team_execution_steps s JOIN jobs j ON j.id=s.job_id JOIN coding_runs c ON c.job_id=j.id WHERE s.execution_id=$1 AND j.state='running'",
+                  [id],
+                )
+              ).rows;
+              return rows.length === 2 && rows.every((r) => r.report?.modelRequests >= 1)
+                ? rows
+                : false;
+            });
+          }
+          const cancelId = await launch('P17 cancel writers');
+          await bothActive(cancelId);
+          await post(`/projects/${project}/team-executions/${cancelId}/cancel`, {});
+          const cancelled = await teamTerminal(cancelId);
+          assert.equal(cancelled.execution.state, 'cancelled');
+          assert.equal(cancelled.steps[2]!.jobId, null);
+          assert.ok(cancelled.steps.slice(0, 2).every((s) => s.delivery && !s.delivery.verified));
+          // Exercise the approved deadline. Mutating an already frozen SQL deadline
+          // races in-flight admissions and does not represent a supported API action.
+          const expiredId = await launch(
+            'P17 lease parent deadline',
+            'src/label.cjs',
+            undefined,
+            3,
+            20000,
+          );
+          await bothActive(expiredId);
+          const expired = await teamTerminal(expiredId);
+          assert.equal(expired.execution.state, 'failed');
+          assert.equal(expired.steps[2]!.jobId, null);
+          assert.ok(expired.steps.slice(0, 2).every((s) => s.delivery && !s.delivery.verified));
+          const changedId = await launch('P17 lease base changed');
+          await bothActive(changedId);
+          await github.sync(
+            owner.id,
+            project,
+            (await github.read(owner.id, project)).link!.version,
+          );
+          assert.equal((await teamTerminal(changedId)).execution.state, 'failed');
+          const revokedId = await launch('P17 lease revoked');
+          await bothActive(revokedId);
+          fixture.state.denied = true;
+          await waitFor(
+            async () =>
+              (await pool.query('SELECT state FROM team_executions WHERE id=$1', [revokedId]))
+                .rows[0].state === 'failed',
+          );
+          assert.equal(
+            (
+              await request(
+                'GET',
+                `/projects/${project}/team-executions/${revokedId}`,
+                undefined,
+                cookie,
+              )
+            ).status,
+            403,
+          );
+          fixture.state.denied = false;
+          await github.connect(owner.id, 71);
+          if (!fixture.state.extraFiles.some((f) => f.path === 'src/Counter.tsx'))
+            for (const path of ['src/Counter.tsx', 'tsconfig.json'])
+              addSource(
+                fixture,
+                path,
+                await readFile(
+                  new URL('../../../tests/fixtures/typescript-repo/' + path, import.meta.url),
+                  'utf8',
+                ),
+              );
+          await github.sync(
+            owner.id,
+            project,
+            (await github.read(owner.id, project)).link!.version,
+          );
+          const typed = await teamTerminal(
+            await launch('P17 TypeScript writers', 'src/label.cjs', 'typescript-react-v1'),
+          );
+          assert.equal(typed.execution.state, 'completed', typed.execution.errorCode ?? '');
+          assert.ok(
+            (await report(typed.steps[2]!.jobId!)).report!.tests.some(
+              (t) => t.origin === 'controller-typecheck' && t.exitCode === 0,
+            ),
+          );
+        } finally {
+          fixture.state.denied = false;
+          for (const id of runningIds) {
+            const state = (await pool.query('SELECT state FROM team_executions WHERE id=$1', [id]))
+              .rows[0]?.state;
+            if (['pending', 'running'].includes(state)) {
+              await request(
+                'POST',
+                `/projects/${project}/team-executions/${id}/cancel`,
+                {},
+                cookie,
+              );
+              await waitFor(
+                async () =>
+                  !['pending', 'running'].includes(
+                    (await pool.query('SELECT state FROM team_executions WHERE id=$1', [id]))
+                      .rows[0].state,
+                  ),
+              );
+            }
+          }
+          await github.connect(owner.id, 71);
+          await github.sync(
+            owner.id,
+            project,
+            (await github.read(owner.id, project)).link!.version,
+          );
+          const policy = await (
+            await request('GET', `/projects/${project}/team-policy`, undefined, cookie)
+          ).json();
+          await request(
+            'PATCH',
+            `/projects/${project}/team-policy`,
+            { version: policy.version, parallelism: 1 },
+            cookie,
+          );
         }
       },
     );

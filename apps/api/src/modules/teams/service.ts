@@ -391,8 +391,12 @@ export class TeamService {
         throw conflict();
       reviewTarget = freezeReviewTarget(source);
     }
-    if (selected.definition.strategy === 'specialists' && input.mode !== 'team')
-      throw new HttpError(422, 'team_mode_required', 'Especialistas requiere el equipo completo.');
+    if (selected.definition.strategy && input.mode !== 'team')
+      throw new HttpError(
+        422,
+        'team_mode_required',
+        'Esta estrategia requiere el equipo completo.',
+      );
     const caps = await this.coding.capabilities(owner, project);
     const execution = codingOption(
       caps,

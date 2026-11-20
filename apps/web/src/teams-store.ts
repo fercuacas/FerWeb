@@ -12,6 +12,7 @@ import {
   type approveTeamPlanInput,
   teamPolicy,
   type updateTeamPolicyInput,
+  type resolveTeamIntegrationInput,
   teamMessagesResponse,
 } from '@ferweb/contracts';
 import type { z } from 'zod';
@@ -23,6 +24,18 @@ const plans = (project: string) => `/projects/${project}/team-plans`;
 const mutation = teamTemplateResponse.pick({ template: true });
 export const teamsApi = workspaceApi.injectEndpoints({
   endpoints: (b) => ({
+    resolveTeamIntegration: b.mutation<
+      z.infer<typeof teamExecutionResponse>,
+      Scope & { body: z.infer<typeof resolveTeamIntegrationInput> }
+    >({
+      query: ({ project, id, body }) => ({
+        url: `/projects/${project}/team-executions/${id}/integration/resolve`,
+        method: 'POST',
+        body,
+      }),
+      transformResponse: (data) => teamExecutionResponse.parse(data),
+      invalidatesTags: ['TeamExecution', 'Job'],
+    }),
     teamPolicy: b.query<z.infer<typeof teamPolicy>, string>({
       query: (project) => `/projects/${project}/team-policy`,
       transformResponse: (data) => teamPolicy.parse(data),

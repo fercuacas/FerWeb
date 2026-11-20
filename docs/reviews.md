@@ -2,7 +2,7 @@
 
 ## Recorrido desde la web
 
-Esta publicación y repetición individual corresponde a trabajos Codex independientes. P08 añade revisión por dimensiones del diff de un trabajo, incluidos hijos con cambios; estos siguen sin publicar ni repetirse por separado. La publicación del resultado de un equipo completo permanece pendiente. [Equipo secuencial](codex.md#equipo-secuencial-duradero-p06)
+Esta publicación y repetición individual corresponde a trabajos Codex independientes. P08 añade revisión por dimensiones del diff de un trabajo, incluidos hijos con cambios. P17 permite publicar únicamente el verificador final de un equipo de escritores completado, con artefacto integrado e informe coincidentes. Los demás hijos siguen sin publicación ni repetición independiente. [Escritores e integración](codex.md#escritores-e-integración-p17).
 
 En un proyecto propio, vincula y sincroniza el repositorio, crea una tarea y abre **Trabajos → Nueva tarea con Codex**. La ejecución conserva tarea, criterios, archivos y commit inicial. El visor muestra diff por archivo, comandos, salidas y códigos de pruebas, uso disponible y limitaciones. Los resultados del agente y la verificación del controlador conservan su origen; superar pruebas no acredita por sí solo los criterios.
 
@@ -40,7 +40,7 @@ La plantilla autoriza una o dos rondas como máximo. Una segunda ronda solo corr
 
 `GET /review` reúne hasta diez revisiones duraderas, con estados `running/complete/incomplete/stale`. La revisión humana se vincula al informe y al resultado dimensional más reciente. Si este cambia, está incompleto o queda invalidado, la lectura deja de mostrar la aprobación como vigente y el servidor rechaza aprobar/publicar; permite conservar un borrador sin aprobar. Un recorrido completo no marca la casilla humana. Una revisión posterior válida puede resolver una anterior incompleta, que sigue visible en el historial. Guardar aprobación y **Publicar PR borrador** mantienen acciones separadas y nunca se ejecutan desde un acuerdo entre modelos.
 
-Se reutilizan planes, cola, presupuesto, mensajes y entregas SQL de P05–P07. La migración 017 añade el vínculo de aprobación y el índice por trabajo revisado; 018 identifica rondas y admite las ocho etapas máximas del workflow. Se conservan las revisiones E9 sin análisis dimensional y su recorrido individual. No se publica el conjunto de un equipo ni se habilitan escritores paralelos.
+Se reutilizan planes, cola, presupuesto, mensajes y entregas SQL de P05–P07. La migración 017 añade el vínculo de aprobación y el índice por trabajo revisado; 018 identifica rondas y admite las ocho etapas máximas del workflow. Se conservan las revisiones E9 sin análisis dimensional y su recorrido individual. La publicación integrada de escritores tiene el control adicional P17; una aprobación individual de una rama no lo satisface.
 
 ## Revisión visual P16
 

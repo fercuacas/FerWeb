@@ -36,9 +36,10 @@ export function freezeReviewTarget(row: QueryResultRow) {
     report.commit !== row.commit_sha
   )
     throw changed();
-  const tree = publicationTree(report, row.files, row.source_tree);
+  const base = row.integration_base ?? row.files;
+  const tree = publicationTree(report, base, row.source_tree);
   const files = new Map<string, string>(
-    codingWorkspace.parse(row.files).map((f) => [f.path, f.content]),
+    codingWorkspace.parse(base).map((f) => [f.path, f.content]),
   );
   for (const entry of tree) {
     if ('content' in entry) files.set(entry.path, entry.content!);
@@ -53,7 +54,7 @@ export function freezeReviewTarget(row: QueryResultRow) {
     filesHash: digest(canonical([...files].sort(([a], [b]) => a.localeCompare(b)))),
     diff: report.diff,
     files: codingWorkspace.parse([...files].map(([path, content]) => ({ path, content }))),
-    beforeFiles: codingWorkspace.parse(row.files),
+    beforeFiles: codingWorkspace.parse(base),
   };
   return reviewTarget.parse({ ...result, artifactHash: digest(canonical(result)) });
 }

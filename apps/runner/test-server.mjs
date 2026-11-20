@@ -26,6 +26,11 @@ async function fakeProvider(run, value, res) {
   const recipe = run.input.task.workRecipe;
   const readOnly = run.input.workspaceAccess === 'read-only';
   const dimension = run.input.task.dimensionalReview;
+  if (run.input.task.title === 'P17 partial failure' && teamStep?.key === 'writer-two') {
+    res.writeHead(503);
+    res.end('{"error":{"message":"simulated writer failure"}}');
+    return;
+  }
   if (dimension?.dimension === 'verify' && /P08 verifier failure/.test(run.input.task.title)) {
     res.writeHead(503);
     res.end('{"error":{"message":"simulated verifier failure"}}');
@@ -124,6 +129,31 @@ async function fakeProvider(run, value, res) {
           : `node --test; node tests/isolation-probe.cjs; node -e "require('node:fs').writeFileSync('src/add.cjs', 'exports.add = (a, b) => a + b${/P08 reproduced target/.test(run.input.task.title) ? ' + 1' : ''};\\n')"; node --test`;
     if (run.input.task.title === 'P10 bounded context')
       command = 'node tools/context-expand-probe.cjs && (' + command + ')';
+    if (teamStep?.paths && !cancel) {
+      if (teamStep.integrationVerification) command = 'node --test; node tests/isolation-probe.cjs';
+      else if (teamStep.key === 'writer-one') {
+        command =
+          run.input.task.title === 'P17 verify fail'
+            ? 'node -e "console.log(\'Unverified branch\')"'
+            : `node -e "const fs=require('node:fs');fs.writeFileSync('src/add.cjs','exports.add = (a, b) => a + b;\\n');${teamStep.paths.includes('docs/p17-obsolete.txt') ? "fs.unlinkSync('docs/p17-obsolete.txt');" : ''}${teamStep.paths.includes('src/Counter.tsx') ? "const p='src/Counter.tsx';fs.writeFileSync(p,fs.readFileSync(p,'utf8').replace('total=\\\"wrong\\\"','total={42}'));" : ''}"`;
+      } else if (teamStep.key === 'writer-two') {
+        const path = run.input.task.title === 'P17 scope' ? 'src/outside.cjs' : teamStep.paths[0];
+        const content =
+          path === 'src/add.cjs'
+            ? 'exports.add = (a, b) => a + b + 1;\n'
+            : "exports.label = 'P17';\r\n";
+        // JSON string literals cross a shell here; use a single-quoted Node program.
+        command =
+          "node -e '" +
+          `require("node:fs").writeFileSync(${JSON.stringify(path)},${JSON.stringify(content)})`.replaceAll(
+            "'",
+            "'\\''",
+          ) +
+          "'";
+      }
+      if (teamStep.integrationVerification && run.input.task.title === 'P17 verifier scope')
+        command = 'node -e \'require("node:fs").writeFileSync("src/outside.cjs","changed")\'';
+    }
     if (run.input.task.title === 'P12 guard')
       command = 'node tools/p12-probe.cjs guard && (' + command + ')';
     if (run.input.task.title === 'P12 alias')

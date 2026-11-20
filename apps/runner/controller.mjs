@@ -3,7 +3,7 @@ import { mkdir, writeFile, chmod, rm, readdir, readFile } from 'node:fs/promises
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { connectDocker, demux } from './docker.mjs';
-import { validateFiles, differences, hash } from './files.mjs';
+import { validateFiles, differences, hash, safePath } from './files.mjs';
 import { modelPayload, attachUsageMeter, providerUsage } from './policy.mjs';
 import { createControls, control, protectedChanges, removePlaceholders } from './controls.mjs';
 
@@ -312,7 +312,21 @@ export async function createController({ token, configuration, fakeProvider, nam
           );
           throw Error('recipe_scope_changed');
         }
-        run.report.diff = diff;
+        run.report.diff = run.input.integrationVerification
+          ? differences(run.input.diffBase, collected)
+          : diff;
+        if (run.input.integrationVerification) {
+          const fingerprint = (files) =>
+            hash(
+              JSON.stringify(
+                files.map((f) => [f.path, hash(f.content)]).sort(([a], [b]) => a.localeCompare(b)),
+              ),
+            );
+          run.report.integration = {
+            baseHash: fingerprint(run.input.diffBase),
+            resultHash: fingerprint(collected),
+          };
+        }
         if (JSON.stringify(run.report.diff).length > 600000) throw Error('diff_limit');
         run.report.diffComplete = true;
         control(run, 'artifact', 'passed', 'snapshot_collected', collectionStarted);
@@ -609,19 +623,41 @@ export async function createController({ token, configuration, fakeProvider, nam
       input.allowedPaths !== undefined &&
       (input.workspaceAccess ||
         !Array.isArray(input.allowedPaths) ||
-        input.allowedPaths.length < 1 ||
+        (input.allowedPaths.length < 1 && !input.integrationVerification) ||
         input.allowedPaths.length > 12 ||
         new Set(input.allowedPaths).size !== input.allowedPaths.length ||
-        input.allowedPaths.some((path) => !input.files.some((file) => file.path === path)))
+        input.allowedPaths.some(
+          (path) =>
+            !safePath(path) ||
+            (!input.writerScope && !input.files.some((file) => file.path === path)),
+        ))
     )
       throw Error('invalid_scope');
     if (
       input.artifactVerification !== undefined &&
       (input.artifactVerification !== true ||
-        (input.workspaceAccess !== 'read-only' &&
+        (!input.writerScope &&
+          input.workspaceAccess !== 'read-only' &&
           !input.allowedPaths?.every((path) => /\.md$/i.test(path))))
     )
       throw Error('invalid_profile');
+    if (
+      input.writerScope !== undefined &&
+      (input.writerScope !== true ||
+        !input.allowedPaths?.length ||
+        input.integrationVerification ||
+        !input.artifactVerification)
+    )
+      throw Error('invalid_scope');
+    if (input.integrationVerification !== undefined) {
+      if (
+        input.integrationVerification !== true ||
+        input.allowedPaths?.length !== 0 ||
+        input.artifactVerification
+      )
+        throw Error('invalid_scope');
+      validateFiles(input.diffBase);
+    } else if (input.diffBase !== undefined) throw Error('invalid_scope');
     for (const [key, min, max] of [
       ['maxRequests', 1, 20],
       ['maxOutputTokens', 64, 8192],
@@ -992,7 +1028,7 @@ export async function createController({ token, configuration, fakeProvider, nam
           reply(503, {});
           return;
         }
-        const run = await start(await body(req));
+        const run = await start(await body(req, 13000000));
         reply(202, { jobId: run.input.jobId });
         return;
       }

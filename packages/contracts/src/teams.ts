@@ -3,7 +3,7 @@ import { reviewTarget } from './review.js';
 import { memorySelections } from './memory.js';
 import { contextPackConfigure, contextReceiptReference } from './context-packs.js';
 import { agentCapability, agentSelection, agentTemplateId } from './agents.js';
-import { codingAgentSnapshot } from './coding.js';
+import { codingAgentSnapshot, codingPath } from './coding.js';
 import { codingToolProfile, executionOptionSchema } from './execution.js';
 import { executionBudgetLimits } from './usage.js';
 
@@ -19,6 +19,7 @@ export const teamPresetId = z.enum([
   'review-diff',
   'specialists-review',
   'dimensional-review',
+  'parallel-writers',
 ]);
 export const teamStep = z.strictObject({
   key,
@@ -28,6 +29,7 @@ export const teamStep = z.strictObject({
   exitCriteria: z.array(text.trim().min(1).max(500)).min(1).max(8),
   requiredCapabilities: z.array(agentCapability).min(1).max(7),
   maxRequests: z.number().int().min(1).max(20),
+  paths: z.array(z.string().refine(codingPath)).min(1).max(12).optional(),
 });
 export function teamStepOrder(steps: { key: string; dependsOn: string[] }[]) {
   const remaining = new Map(steps.map((step) => [step.key, step]));
@@ -46,7 +48,7 @@ export const teamDefinition = z
   .strictObject({
     name: text.trim().min(1).max(120),
     toolProfile: codingToolProfile.optional(),
-    strategy: z.literal('specialists').optional(),
+    strategy: z.enum(['specialists', 'writers']).optional(),
     reviewMode: z.literal('dimensions-v1').optional(),
     description: text.trim().max(1000),
     maxIterations: z.number().int().min(1).max(3),
@@ -54,6 +56,12 @@ export const teamDefinition = z
     steps: z.array(teamStep).min(1).max(6),
   })
   .superRefine((value, ctx) => {
+    if (value.strategy !== 'writers' && value.steps.some((s) => s.paths))
+      ctx.addIssue({
+        code: 'custom',
+        path: ['steps'],
+        message: 'Las rutas por escritor requieren la estrategia writers.',
+      });
     if (
       value.reviewMode &&
       (value.strategy !== 'specialists' ||
@@ -88,6 +96,31 @@ export const teamDefinition = z
           message:
             'Especialistas requiere etapas independientes de solo lectura y reunión final: una pasada, o hasta dos rondas de revisión P08.',
           path: ['steps'],
+        });
+    } else if (value.strategy === 'writers') {
+      const writers = value.steps.slice(0, -1),
+        verifier = value.steps.at(-1)!;
+      if (
+        writers.length < 2 ||
+        writers.length > 4 ||
+        value.maxIterations !== 1 ||
+        writers.some(
+          (s) =>
+            s.dependsOn.length ||
+            !s.paths?.length ||
+            new Set(s.paths).size !== s.paths.length ||
+            !s.requiredCapabilities.includes('workspaceWrite'),
+        ) ||
+        verifier.paths ||
+        verifier.requiredCapabilities.includes('workspaceWrite') ||
+        verifier.dependsOn.length !== writers.length ||
+        writers.some((s) => !verifier.dependsOn.includes(s.key))
+      )
+        ctx.addIssue({
+          code: 'custom',
+          path: ['steps'],
+          message:
+            'Escritores requiere de dos a cuatro etapas independientes con rutas exactas y un verificador final de solo consulta, en una pasada.',
         });
     } else if (value.limits.concurrency !== 1)
       ctx.addIssue({
@@ -131,7 +164,7 @@ export const teamDefinition = z
   });
 export const teamPreset = z.object({
   reviewMode: z.literal('dimensions-v1').optional(),
-  strategy: z.literal('specialists').optional(),
+  strategy: z.enum(['specialists', 'writers']).optional(),
   id: teamPresetId,
   name: z.string(),
   description: z.string(),
@@ -292,7 +325,55 @@ export const teamExecution = z.object({
   createdAt: z.iso.datetime(),
   finishedAt: z.iso.datetime().nullable(),
 });
+const fileHash = z.string().regex(/^[a-f0-9]{64}$/);
+export const integrationArtifact = z.object({
+  version: z.number().int().min(1),
+  baseHash: fileHash,
+  resultHash: fileHash.nullable(),
+  branches: z
+    .array(
+      z.object({
+        step: key,
+        inputHash: fileHash,
+        outputHash: fileHash,
+        changes: z
+          .array(
+            z.object({
+              path: z.string().refine(codingPath),
+              beforeHash: fileHash.nullable(),
+              afterHash: fileHash.nullable(),
+            }),
+          )
+          .max(100),
+      }),
+    )
+    .min(2)
+    .max(4),
+  conflicts: z
+    .array(z.object({ path: z.string().refine(codingPath), steps: z.array(key).min(2).max(4) }))
+    .max(100),
+  warnings: z.array(z.string().max(600)).max(100),
+  resolution: z
+    .array(z.object({ path: z.string().refine(codingPath), step: key.nullable() }))
+    .max(100),
+  previousHash: fileHash.nullable(),
+});
+export const teamIntegration = z.object({
+  artifact: integrationArtifact,
+  hash: fileHash,
+  state: z.enum(['conflict', 'ready', 'verified', 'failed']),
+  verifierJobId: z.uuid().nullable(),
+  reportHash: fileHash.nullable(),
+});
+export const resolveTeamIntegrationInput = z.strictObject({
+  hash: fileHash,
+  choices: z
+    .array(z.strictObject({ path: z.string().refine(codingPath), step: key.nullable() }))
+    .min(1)
+    .max(100),
+});
 export const teamExecutionResponse = z.object({
+  integrations: z.array(teamIntegration).max(2).optional(),
   owner: z.email(),
   taskStatus: z.enum(['todo', 'in_progress', 'done']).nullable(),
   gathering: z.object({

@@ -8,6 +8,7 @@ import {
   approveTeamPlanInput,
   executeTeamPlanInput,
   updateTeamPolicyInput,
+  resolveTeamIntegrationInput,
 } from '@ferweb/contracts';
 import { TeamService } from './service.js';
 import { TeamExecutions } from './executions.js';
@@ -100,5 +101,16 @@ export function teamRouter(service: TeamService, executions: TeamExecutions) {
     z.strictObject({}).parse(req.body);
     res.json(await executions.cancel(...scope(req, res), z.uuid().parse(req.params.executionId)));
   });
+  router.post(
+    '/projects/:projectId/team-executions/:executionId/integration/resolve',
+    async (req, res) =>
+      res.json(
+        await executions.resolve(
+          ...scope(req, res),
+          z.uuid().parse(req.params.executionId),
+          resolveTeamIntegrationInput.parse(req.body),
+        ),
+      ),
+  );
   return router;
 }

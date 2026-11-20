@@ -111,6 +111,12 @@ export const codingControls = z.object({
     .refine((events) => new Set(events.map((event) => event.id)).size === 4),
 });
 export const codingReport = z.object({
+  integration: z
+    .object({
+      baseHash: z.string().regex(/^[a-f0-9]{64}$/),
+      resultHash: z.string().regex(/^[a-f0-9]{64}$/),
+    })
+    .optional(),
   // Reports recorded before P12 have no control evidence.
   controls: codingControls.optional(),
   providerUsage: z
@@ -168,6 +174,7 @@ export const codingRunSchema = z.object({
   contextReceipt: contextReceiptReference.nullable(),
   memory: z.array(memoryEntry).max(3),
   teamExecutionId: z.uuid().nullable().optional(),
+  integrationPublishable: z.boolean().optional(),
   jobId: z.uuid(),
   task: z.record(z.string(), z.unknown()),
   commit: z.string(),

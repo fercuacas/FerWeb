@@ -153,4 +153,44 @@ export const teamPresets: TeamPreset[] = [
       },
     ],
   },
+  {
+    id: 'parallel-writers',
+    name: 'Escritores e integración',
+    strategy: 'writers',
+    description:
+      'Dos copias aisladas, rutas exactas configurables y verificación del resultado integrado.',
+    steps: [
+      {
+        key: 'writer-one',
+        title: 'Primer escritor',
+        specialty: 'implementer',
+        paths: ['src/feature.js'],
+        dependsOn: [],
+        exitCriteria: ['Conservar el alcance aprobado y explicar los cambios.'],
+        requiredCapabilities: ['text', 'toolCalls', 'workspaceWrite'],
+        maxRequests: 3,
+      },
+      {
+        key: 'writer-two',
+        title: 'Segundo escritor',
+        specialty: 'implementer',
+        paths: ['tests/feature.test.js'],
+        dependsOn: [],
+        exitCriteria: ['Conservar el alcance aprobado y explicar los cambios.'],
+        requiredCapabilities: ['text', 'toolCalls', 'workspaceWrite'],
+        maxRequests: 3,
+      },
+      {
+        key: 'integrate',
+        title: 'Verificar combinación',
+        specialty: 'tester',
+        dependsOn: ['writer-one', 'writer-two'],
+        exitCriteria: [
+          'Inspeccionar la combinación sin editar archivos; pruebas independientes superadas.',
+        ],
+        requiredCapabilities: ['text', 'toolCalls'],
+        maxRequests: 2,
+      },
+    ],
+  },
 ];

@@ -166,8 +166,16 @@ function TemplateEditor({
               const { strategy: _, reviewMode: _reviewMode, toolProfile, ...rest } = draft;
               setDraft({
                 ...rest,
+                steps: rest.steps.map(({ paths, ...step }) => ({
+                  ...step,
+                  ...(e.target.value === 'writers' && paths && { paths }),
+                })),
                 ...(e.target.value === 'specialists' && {
                   strategy: 'specialists' as const,
+                  maxIterations: 1,
+                }),
+                ...(e.target.value === 'writers' && {
+                  strategy: 'writers' as const,
                   maxIterations: 1,
                 }),
                 ...(e.target.value !== 'specialists' && toolProfile && { toolProfile }),
@@ -177,6 +185,7 @@ function TemplateEditor({
           >
             <option value="sequential">Cadena secuencial</option>
             <option value="specialists">Especialistas de solo lectura y resumen</option>
+            <option value="writers">Escritores aislados e integración</option>
           </select>
         </label>
         {draft.strategy !== 'specialists' && (
@@ -201,7 +210,7 @@ function TemplateEditor({
             </select>
           </label>
         )}
-        {draft.strategy === 'specialists' && (
+        {draft.strategy && (
           <label>
             Concurrencia solicitada
             <select
@@ -273,6 +282,13 @@ function TemplateEditor({
           depende de todas.
         </p>
       )}
+      {draft.strategy === 'writers' && (
+        <p>
+          Configura las rutas de cada escritor antes de aprobar. El último paso verifica la
+          combinación sin editarla. Puedes declarar la misma ruta en varios escritores: los cambios
+          distintos se detendrán para resolverlos.
+        </p>
+      )}
       {draft.steps.map((item, index) => (
         <fieldset key={item.key}>
           <legend>
@@ -293,6 +309,16 @@ function TemplateEditor({
             value={item.role}
             onChange={(role) => step(index, { role })}
           />
+          {draft.strategy === 'writers' && index < draft.steps.length - 1 && (
+            <label>
+              Rutas exactas del escritor (una por línea)
+              <textarea
+                required
+                value={item.paths?.join('\n') ?? ''}
+                onChange={(e) => step(index, { paths: e.target.value.split('\n') })}
+              />
+            </label>
+          )}
           <label>
             Criterios de salida (uno por línea)
             <textarea
@@ -440,6 +466,7 @@ function TemplateHistory({ project, id }: { project: Project; id: string }) {
               <li key={step.key}>
                 {step.title} · rol {step.role.id} v{step.role.version} · depende de{' '}
                 {step.dependsOn.join(', ') || 'ninguna etapa'}
+                {step.paths && <p>Rutas aprobadas: {step.paths.join(', ')}</p>}
                 <ul>
                   {step.exitCriteria.map((criterion, index) => (
                     <li key={index}>{criterion}</li>

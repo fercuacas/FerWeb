@@ -1,33 +1,30 @@
 # Estado actual de FerWeb
 
-Actualizado: **2026-11-17**. Evidencias anteriores en [history.md](history.md), solo bajo demanda.
+Actualizado: **2026-11-20**. Evidencias anteriores en [history.md](history.md), solo bajo demanda.
 
 ## Disponible
 
-- E1–E9: identidad/sesiones, proyectos/tareas, GitHub por commit, chat OpenAI/Ollama, Qdrant, laboratorio, cola, Codex aislado y revisión/PR explícita.
-- E10: comparación y adopción condicionada de estrategias; ninguna mejora real adoptada. [Laboratorio de contexto](context-optimization.md).
-- E11: imágenes fijadas, CI, Compose release, copias/restauración y observabilidad. [Revisión final](release-review.md), [operación](deployment.md).
+- E1–E11: identidad, proyectos/tareas, GitHub, chat OpenAI/Ollama, recuperación, laboratorio, cola, Codex aislado, revisión/PR y operación Docker. E10 sin mejoras reales adoptadas. [Operación](deployment.md).
 - P01–P09: capacidades, roles/skills, presupuestos, equipos/mensajes, revisiones y memoria versionada con procedencia. [Codex](codex.md), [memoria](memory.md).
-- P10: mapa Markdown, catálogo SQL/JSON, selección determinista, recuperación híbrida, recibos por fase y ampliaciones dirigidas. [Uso y límites](context-packs.md).
-- P11: perfil aislado TypeScript/React para trabajos y equipos secuenciales, con imagen fijada y comprobación de tipos del controlador. [Perfiles](codex.md#perfiles-de-herramientas-p11).
-- P12: controles de alcance, configuración, verificación y entrega con evidencia en el informe. [Controles](codex.md#controles-de-ejecución-p12).
-- P13: comparación de agente único y equipo sobre ejecuciones registradas, verificador local para la fixture de suma, revisión humana y exportación JSON. [Laboratorio](laboratory.md#evaluación-de-agente-único-y-equipo-p13).
-- P14: propuestas de lección, revisión y adopción reversible en memoria. Salud de ejecuciones y comprobación de pruebas por escenario. [Lecciones](laboratory.md#lecciones-y-cumplimiento-p14).
-- P15: nueve recetas versionadas por tarea, vistas previas y ejecuciones vinculadas con alcance confirmado. [Recetas](codex.md#recetas-de-tarea-p15).
-- P16: seguimiento por etapa con enlaces directos y revisión visual con anotaciones ligadas a la huella. [Centro de control](codex.md#centro-de-control-p16), [revisión](reviews.md#revisión-visual-p16).
+- P10: mapa Markdown, catálogo SQL/JSON, selección determinista, búsqueda híbrida y recibos por fase con ampliaciones. [Contexto](context-packs.md).
+- P11–P12: perfil TypeScript/React fijado, comprobación estática y controles del alcance, configuración, verificación y entrega. [Perfiles y controles](codex.md#perfiles-de-herramientas-p11).
+- P13–P14: comparación de agente/equipo, verificador local, revisión humana, lecciones y adopción reversible condicionada. [Laboratorio](laboratory.md).
+- P15: nueve recetas versionadas con vistas previas y alcance confirmado. [Recetas](codex.md#recetas-de-tarea-p15).
+- P16: seguimiento por etapa y revisión visual ligada a huella. [Centro de control](codex.md#centro-de-control-p16), [revisión](reviews.md#revisión-visual-p16).
+- P17: escritores con copias aisladas, integración versionada, resolución explícita, pruebas del conjunto y publicación E9 con aprobación propia. [Uso y límites](codex.md#escritores-e-integración-p17).
 
 ## Verificado
 
-- P16, `npm run docker:check`: **10 Python, 18 básicas, 103 pruebas/subcasos de integración y 21 Chromium**, tipos, compilación, formato y smoke. Registro privado `.local/p16-docker-check.log`.
-- Pruebas dirigidas P16: seguimiento desde tarea, recarga del informe, comentario y respuesta, invalidación de aprobación, revocación y descarga de HTML como texto.
-- Instancia local: siete servicios saludables, migración **024**, autoridad `ferweb_postgres_data`, web `http://127.0.0.1:5173`.
+- P17, `npm run docker:check`: **10 Python, 20 básicas, 104 pruebas/subcasos de integración y 22 Chromium**, tipos, compilación, formato y smoke. Registro privado `.local/p17-docker-check.log`.
+- Pruebas dirigidas: integración/resolución, alcance del verificador, plazo compartido con ambos escritores activos, informes tras fallos simultáneos, revocación, TypeScript y publicación simulada; móvil, teclado y recarga.
+- Instancia local: siete servicios saludables, migración **025**, autoridad `ferweb_postgres_data`, web `http://127.0.0.1:5173`.
 
 ## Límites y siguiente paso
 
-Pruebas con SQL, Qdrant, CLI y contenedores reales; GitHub y proveedores simulados. Inferencia real, ahorro y capacidad IA/GPU por medir. Los bytes de contexto no estiman tokens; las métricas ausentes permanecen desconocidas. Las citas requieren juicio humano.
+SQL, Qdrant, CLI y contenedores reales; GitHub y proveedores simulados. Inferencia real, ahorro y capacidad IA/GPU por medir. Métricas ausentes desconocidas; bytes de contexto no estiman tokens. Las citas requieren juicio humano.
 
-El recibo registra el canal P10. La comprobación TypeScript/React es estática y usa declaraciones incluidas. Chat/índice/laboratorio siguen en proceso. Codex usa Docker con kernel compartido y controlador privilegiado. [Límites](codex.md).
+La comparación P17 resuelve conflictos por archivo completo. TypeScript/React es estático. El recibo audita el canal P10. Chat/índice/laboratorio siguen en proceso. Docker comparte kernel y su controlador es privilegiado. [Límites](codex.md).
 
-Despliegue permanente pendiente: host/HTTPS, copias cifradas externas, aceptación con App/modelos, monitorización y pruebas prolongadas. Global dos trabajos; por proyecto uno por defecto. [CI](https://github.com/fercuacas/FerWeb/actions).
+Despliegue permanente pendiente: host/HTTPS, copias cifradas externas, aceptación con App/modelos y pruebas prolongadas. Máximo global dos trabajos; por proyecto uno por defecto. [CI](https://github.com/fercuacas/FerWeb/actions).
 
-Sigue P17. [Plan](plans/ecc-codex-prompts/progress.md).
+Sigue P18. [Plan](plans/ecc-codex-prompts/progress.md).

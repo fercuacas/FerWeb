@@ -274,11 +274,11 @@ export class JobQueue {
            LEFT JOIN team_executions team ON team.id=candidate.execution_id
            WHERE j.state='pending' AND NOT j.cancel_requested AND p.archived_at IS NULL AND j.available_at<=clock_timestamp()
            AND (SELECT count(*) FROM jobs busy WHERE busy.project_id=j.project_id AND busy.state='running') <
-             CASE WHEN j.configuration->>'workspaceAccess'='read-only' AND team.parallelism=2 THEN LEAST(team.parallelism,p.team_parallelism) ELSE 1 END
+             CASE WHEN (j.configuration->>'workspaceAccess'='read-only' OR team.snapshot->'plan'->'template'->'definition'->>'strategy'='writers') AND team.parallelism=2 THEN LEAST(team.parallelism,p.team_parallelism) ELSE 1 END
            AND NOT EXISTS(SELECT 1 FROM jobs busy LEFT JOIN team_execution_steps sibling ON sibling.job_id=busy.id
              WHERE busy.project_id=j.project_id AND busy.state='running' AND
                (candidate.execution_id IS NULL OR sibling.execution_id IS DISTINCT FROM candidate.execution_id OR
-                j.configuration->>'workspaceAccess' IS DISTINCT FROM 'read-only' OR busy.configuration->>'workspaceAccess' IS DISTINCT FROM 'read-only'))
+                ((team.snapshot->'plan'->'template'->'definition'->>'strategy') IS DISTINCT FROM 'writers' AND (j.configuration->>'workspaceAccess' IS DISTINCT FROM 'read-only' OR busy.configuration->>'workspaceAccess' IS DISTINCT FROM 'read-only'))))
            ORDER BY j.available_at,j.created_at,j.id LIMIT 1 FOR UPDATE OF j SKIP LOCKED`,
         )
       ).rows[0];

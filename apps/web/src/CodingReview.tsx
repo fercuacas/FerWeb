@@ -34,7 +34,7 @@ export function CodingReview({
               run={run}
               reviews={query.currentData.dimensions}
             />
-            {publicationAvailable && !run.teamExecutionId && (
+            {publicationAvailable && (!run.teamExecutionId || run.integrationPublishable) && (
               <ReviewEditor
                 key={`${run.jobId}:${query.currentData.review?.version ?? 0}:${query.currentData.review?.state ?? ''}:${query.currentData.review?.approved}:${query.currentData.dimensions[0]?.executionId}:${query.currentData.dimensions[0]?.state}`}
                 project={project}
