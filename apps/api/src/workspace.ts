@@ -16,6 +16,8 @@ import { currentUser, signIn, signOut } from './modules/identity/sessions.js';
 import { ProjectRepository } from './modules/projects/repository.js';
 import { GitHubService } from './modules/github/service.js';
 import { createGitHubRouter } from './modules/github/routes.js';
+import { TaskCoordination } from './modules/projects/coordination.js';
+import { taskCoordinationInput } from '@ferweb/contracts';
 import { ChatService } from './modules/chat/service.js';
 import { createChatRouter } from './modules/chat/routes.js';
 import { RetrievalService } from './modules/retrieval/service.js';
@@ -144,6 +146,20 @@ export function createWorkspaceRouter({
     );
   });
   router.use(createGitHubRouter(githubService));
+  const coordination = new TaskCoordination(pool);
+  router.get('/projects/:projectId/coordination', async (req, res) =>
+    res.json(await coordination.read(owner(res), uuid(req.params.projectId))),
+  );
+  router.patch('/projects/:projectId/tasks/:taskId/coordination', async (req, res) =>
+    res.json(
+      await coordination.save(
+        owner(res),
+        uuid(req.params.projectId),
+        uuid(req.params.taskId),
+        taskCoordinationInput.parse(req.body),
+      ),
+    ),
+  );
   router.use(createChatRouter(chatService));
   router.use(createRetrievalRouter(packRetrieval));
   if (laboratory) router.use(createLaboratoryRouter(laboratory));

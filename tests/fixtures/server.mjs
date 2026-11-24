@@ -17,6 +17,7 @@ import { once } from 'node:events';
 import { networkInterfaces } from 'node:os';
 import { codingCorpus } from './coding.mjs';
 import { publicationFixture } from './publication.mjs';
+import { coordinationFixture } from './coordination.mjs';
 import { CodingService } from '../../apps/api/dist/modules/jobs/coding-service.js';
 import { RunnerClient } from '../../apps/api/dist/modules/jobs/runner-client.js';
 
@@ -24,7 +25,9 @@ import { RunnerClient } from '../../apps/api/dist/modules/jobs/runner-client.js'
 const config = readConfig(),
   pool = createPool(config),
   migrations = await loadMigrations();
-const fixture = publicationFixture(codingCorpus(retrievalCorpus(githubFixture())));
+const fixture = coordinationFixture(
+  publicationFixture(codingCorpus(retrievalCorpus(githubFixture()))),
+);
 fixture.config.callbackUrl = config.APP_ORIGIN + '/api/github/callback';
 const github = new GitHubService(pool, fixture.config, fixture.transport);
 const ai = new AiClient(process.env.AI_TEST_URL, process.env.AI_TEST_TOKEN);

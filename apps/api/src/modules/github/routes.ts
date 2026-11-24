@@ -1,6 +1,14 @@
 import express from 'express';
 import { z } from 'zod';
-import { githubId, githubPath, githubLinkInput } from '@ferweb/contracts';
+import {
+  githubId,
+  githubPath,
+  githubLinkInput,
+  linkGitHubWorkInput,
+  prepareGitHubIssueInput,
+  gitHubIssueActionInput,
+} from '@ferweb/contracts';
+import { GitHubWork } from './work.js';
 import { HttpError } from '../../http-error.js';
 import { readToken } from '../identity/sessions.js';
 import type { GitHubService } from './service.js';
@@ -9,6 +17,43 @@ export function createGitHubRouter(service: GitHubService) {
   const router = express.Router();
   const owner = (response: express.Response) => (response.locals.user as { id: string }).id;
   const project = (request: express.Request) => z.uuid().parse(request.params.projectId);
+  const work = new GitHubWork(service);
+  router.get('/projects/:projectId/github/work', async (req, res) =>
+    res.json(await work.read(owner(res), project(req))),
+  );
+  router.post('/projects/:projectId/github/work/link', async (req, res) =>
+    res.json(await work.link(owner(res), project(req), linkGitHubWorkInput.parse(req.body))),
+  );
+  router.post('/projects/:projectId/github/work/issues/prepare', async (req, res) =>
+    res
+      .status(201)
+      .json(await work.prepare(owner(res), project(req), prepareGitHubIssueInput.parse(req.body))),
+  );
+  router.get('/projects/:projectId/github/work/actions/:actionId', async (req, res) =>
+    res.json({
+      action: await work.detail(owner(res), project(req), z.uuid().parse(req.params.actionId)),
+    }),
+  );
+  router.post('/projects/:projectId/github/work/actions/:actionId/execute', async (req, res) =>
+    res.json(
+      await work.execute(
+        owner(res),
+        project(req),
+        z.uuid().parse(req.params.actionId),
+        gitHubIssueActionInput.parse(req.body).hash,
+      ),
+    ),
+  );
+  router.post('/projects/:projectId/github/work/actions/:actionId/reconcile', async (req, res) =>
+    res.json(
+      await work.reconcile(
+        owner(res),
+        project(req),
+        z.uuid().parse(req.params.actionId),
+        gitHubIssueActionInput.parse(req.body).hash,
+      ),
+    ),
+  );
   router.get('/github/status', async (_request, response) => {
     response.json(await service.status(owner(response)));
   });

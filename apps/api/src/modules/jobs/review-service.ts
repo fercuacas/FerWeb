@@ -13,6 +13,7 @@ import { HttpError } from '../../http-error.js';
 import type { CodingService } from './coding-service.js';
 import { canonical, digest, publicationTree } from './review-artifacts.js';
 import { workspaceHash } from '../teams/integration.js';
+import { assertTaskReady } from '../projects/work-guard.js';
 import { dimensionReviews, dimensionHash } from './dimension-reviews.js';
 
 const conflict = (message: string) => new HttpError(409, 'review_conflict', message);
@@ -264,6 +265,7 @@ export class ReviewService {
       )
         throw conflict('Guarda y aprueba la revisión vigente antes de publicar.');
       if (row.state === 'published') return row;
+      await assertTaskReady(db, project, run.task_id, { checkClaim: false });
       if (row.busy) throw conflict('Ya hay una publicación en curso. Espera y actualiza.');
       return (
         await db.query(
@@ -275,6 +277,7 @@ export class ReviewService {
     if (review.state === 'published') return this.read(owner, project, id);
     const { api, fullName } = access;
     const base = async () => {
+      await assertTaskReady(this.pool, project, run.task_id, { checkClaim: false });
       if (!(await this.currentMemory(owner, project, run)))
         throw conflict('La memoria utilizada ha cambiado.');
       const current = await this.dimensions(owner, project, id);

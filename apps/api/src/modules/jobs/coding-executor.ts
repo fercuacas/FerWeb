@@ -42,16 +42,42 @@ export function codingExecutor(
         const bundle = await input(false);
         captureWorkspace = bundle.captureWorkspace === true;
         const lease = await queue.heartbeat(claim);
-        await runner.request(
-          '/runs',
-          {
-            ...bundle,
-            ...lease,
-            controlOrigin: process.env.FERWEB_RUNNER_API_ORIGIN ?? new URL(internalUrl).origin,
-          },
-          undefined,
-          10000,
-        );
+        // Container startup and its acknowledgement can outlast a short lease.
+        // Renew ownership without extending the original budget/deadline.
+        let launching: Promise<void> | undefined;
+        const startupHeartbeat = setInterval(() => {
+          if (launching || stopReason) return;
+          launching = (async () => {
+            const renewal = await queue.heartbeat(claim);
+            // The run may not be registered yet; the initial POST remains bounded.
+            await runner.request(path + '/heartbeat', renewal, claim.fence, 2000).catch(() => {});
+            if (Date.now() - authorizedAt > 3000) {
+              await input(true);
+              authorizedAt = Date.now();
+            }
+          })()
+            .catch((error) => {
+              stop(error instanceof JobControlError ? error.code : 'lease_lost');
+            })
+            .finally(() => {
+              launching = undefined;
+            });
+        }, 500);
+        try {
+          await runner.request(
+            '/runs',
+            {
+              ...bundle,
+              ...lease,
+              controlOrigin: process.env.FERWEB_RUNNER_API_ORIGIN ?? new URL(internalUrl).origin,
+            },
+            undefined,
+            20000,
+          );
+        } finally {
+          clearInterval(startupHeartbeat);
+          await launching;
+        }
         for (;;) {
           if (stopReason) throw new JobControlError(stopReason);
           const renewal = await queue.heartbeat(claim);

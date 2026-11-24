@@ -20,6 +20,7 @@ Rutas desde la raíz. Las instrucciones están junto al directorio indicado; sui
 | Login/sesión | `apps/api/src/modules/identity/`, `apps/web/src/workspace-store.ts` | [API](api.md) | `identity.test.ts`, `workspace.integration.ts`, `workspace.spec.ts` |
 | Proyectos/tareas | `apps/api/src/modules/projects/`, `apps/web/src/Workspace.tsx` | [API](api.md) | `workspace.integration.ts`, `workspace.spec.ts` |
 | GitHub | `apps/api/src/modules/github/`, `apps/web/src/GitHub.tsx` | [GitHub](github.md) | `github.integration.ts`, `github.spec.ts` |
+| Épicas, dependencias y coordinación GitHub | `projects/coordination.ts`, `projects/work-guard.ts`, `github/work.ts`, `TaskCoordination.tsx` | [Coordinación P18](github.md#épicas-dependencias-y-coordinación-p18) | `coordination.integration.ts`, `coding.integration.ts`, `review.integration.ts`, `work-coordination.spec.ts` |
 | Chat/streaming | `apps/api/src/modules/chat/`, `apps/web/src/Conversations.tsx` | [IA](ai.md) | `chat.integration.ts`, `chat.spec.ts` |
 | Embeddings/proveedores | `apps/ai/ferweb_ai/` | [IA](ai.md), [fuentes](retrieval.md) si aplica | Python; chat/recuperación si cambia protocolo |
 | Recuperación | `apps/api/src/modules/retrieval/`, `apps/web/src/RepositoryContext.tsx` | [Fuentes](retrieval.md) | `retrieval.integration.ts`, `retrieval.spec.ts` |

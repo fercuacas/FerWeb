@@ -19,6 +19,7 @@ import { TeamService } from './service.js';
 import { TeamMessages, systemTeamMessage } from './messages.js';
 import { gatherDimensionalReview } from '../jobs/dimension-reviews.js';
 import { integrate, workspaceHash, type WriterBranch } from './integration.js';
+import { assertTaskReady } from '../projects/work-guard.js';
 
 const active = (state: string) => ['pending', 'running'].includes(state);
 const missing = () => new HttpError(404, 'not_found', 'No se ha encontrado la ejecución.');
@@ -310,6 +311,10 @@ export class TeamExecutions {
         if (old.request_hash !== requestHash) throw conflict();
         return old.id as string;
       }
+      await assertTaskReady(db, project, plan.snapshot.task.id, {
+        templateId: plan.snapshot.template.id,
+        templateVersion: plan.snapshot.template.version,
+      });
       const frozen = (
         await db.query(
           'SELECT * FROM prepared_team_plans WHERE id=$1 AND project_id=$2 FOR UPDATE',

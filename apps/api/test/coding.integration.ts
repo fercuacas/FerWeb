@@ -3708,6 +3708,53 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
       },
     );
     await t.test(
+      'P18 dependency reopened during an active model request stops the container without retry',
+      async () => {
+        if (!worker || worker.exitCode !== null || worker.signalCode !== null) await startWorker();
+        const dependency = await task('P18 dependency');
+        await pool.query("UPDATE tasks SET status='done' WHERE id=$1", [dependency.id]);
+        const target = await task('P18 lease delayed startup dependency changed');
+        const saved = await request(
+          'PATCH',
+          `/projects/${project}/tasks/${target.id}/coordination`,
+          {
+            version: target.version,
+            kind: 'task',
+            parentEpicId: null,
+            dependsOn: [dependency.id],
+            blocker: null,
+            claim: { kind: 'none' },
+          },
+          cookie,
+        );
+        assert.equal(saved.status, 200, await saved.clone().text());
+        const version = (await pool.query('SELECT version FROM tasks WHERE id=$1', [target.id]))
+          .rows[0].version;
+        const run = await enqueue('Unused P18 fixture task', {
+          taskId: target.id,
+          taskVersion: version,
+        });
+        await waitFor(async () => {
+          const observed = await report(run.job.id),
+            state = await detail(run.job.id);
+          assert.ok(
+            ['pending', 'running'].includes(state.job.state),
+            `P18 execution ended before the model request: ${state.job.state}/${state.job.errorCode}`,
+          );
+          return observed.report?.modelRequests! >= 1;
+        });
+        await pool.query("UPDATE tasks SET status='todo',version=version+1 WHERE id=$1", [
+          dependency.id,
+        ]);
+        const done = await terminal(run.job.id);
+        assert.equal(done.job.state, 'failed');
+        assert.equal(done.attempts.length, 1);
+        assert.equal(done.attempts[0]!.terminationConfirmed, true);
+        assert.equal((await report(run.job.id)).report?.terminationConfirmed, true);
+        await pool.query("UPDATE tasks SET status='done' WHERE id=$1", [dependency.id]);
+      },
+    );
+    await t.test(
       'revoked repository permissions hide saved reports and stop active work',
       async () => {
         const run = await enqueue('Lease permission removal');

@@ -18,6 +18,7 @@ import { Brand } from './Brand';
 import type { AppDispatch, RootState } from './store';
 import { authApi, workspaceApi, workspaceUi, errorMessage } from './workspace-store';
 import { GitHubSettings, ProjectGitHub } from './GitHub';
+import { ProjectCoordination } from './TaskCoordination';
 import { ProjectConversations } from './Conversations';
 import { ProjectLaboratory } from './Laboratory';
 import { ProjectJobs } from './Jobs';
@@ -396,6 +397,7 @@ function Board({ project }: { project: Project }) {
   return (
     <>
       <ProjectPlans key={project.id} project={project} />
+      <ProjectCoordination project={project.id} archived={!!project.archivedAt} />
       <div className="board-toolbar">
         <label className="search-field">
           <span className="sr-only">Buscar tareas</span>

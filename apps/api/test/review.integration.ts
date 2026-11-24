@@ -308,6 +308,41 @@ test('review/publication: real HTTP and SQL, GitHub write double (reports explic
       },
     );
     await t.test(
+      'P18 dependency blocks E9 without remote writes and releases publication when complete',
+      async () => {
+        const id = await run();
+        await save(id);
+        const dependency = (
+          await pool.query(
+            "INSERT INTO tasks(project_id,title,description,priority,status) VALUES($1,'P18 review dependency','','medium','todo') RETURNING id",
+            [project],
+          )
+        ).rows[0].id;
+        await pool.query(
+          'INSERT INTO task_dependencies(project_id,task_id,dependency_id) VALUES($1,$2,$3)',
+          [project, task.id, dependency],
+        );
+        try {
+          const before = fixture.state.writes.length;
+          const blocked = await publish(id);
+          assert.equal(blocked.status, 409);
+          assert.equal((await blocked.json()).error.code, 'task_blocked');
+          assert.equal(fixture.state.writes.length, before);
+          await pool.query("UPDATE tasks SET status='done' WHERE id=$1", [dependency]);
+          assert.equal((await publish(id)).status, 200);
+          const publishedWrites = fixture.state.writes.length;
+          await pool.query("UPDATE tasks SET status='todo' WHERE id=$1", [dependency]);
+          assert.equal((await publish(id)).status, 200);
+          assert.equal(fixture.state.writes.length, publishedWrites);
+        } finally {
+          await pool.query(
+            'DELETE FROM task_dependencies WHERE project_id=$1 AND dependency_id=$2',
+            [project, dependency],
+          );
+        }
+      },
+    );
+    await t.test(
       'remote branch collision, changed reviewed report, incomplete artifacts and revocation fail closed',
       async () => {
         const collision = await run();

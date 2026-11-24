@@ -1,4 +1,4 @@
-# GitHub App: configuración y límites de E3
+# GitHub App: configuración, sincronización y coordinación
 
 FerWeb integra una **GitHub App**, con autorización web de usuario (OAuth + PKCE). No utiliza un PAT ni acepta un ID de instalación como prueba de propiedad. El backend consulta las instalaciones de esa App accesibles al usuario, permite conectar una de ellas y comprueba de nuevo los permisos al leer repositorios y datos guardados.
 
@@ -8,7 +8,7 @@ Se usa el token de usuario de la App para respetar la intersección entre permis
 
 1. En GitHub, Settings → Developer settings → GitHub Apps → New GitHub App. Elige un nombre y anota App ID, Client ID y slug. Genera un Client secret.
 2. Configura como callback de autorización `http://127.0.0.1:5173/api/github/callback`, o la URL HTTPS que corresponda a tu instancia. Debe coincidir exactamente con la configuración privada. No actives la autorización automática durante la instalación: FerWeb inicia su propio flujo con estado y PKCE desde el botón **Autorizar GitHub**.
-3. Para lectura: **Contents: Read-only**, **Issues: Read-only**, **Pull requests: Read-only** y **Metadata: Read-only**. Para publicar PR desde E9, habilita **Contents: Read and write** y **Pull requests: Read and write**, acepta el cambio en la instalación y usa un usuario con permiso de escritura. No se necesitan permisos generales de organización. [Revisión y publicación](reviews.md).
+3. Para lectura: **Contents: Read-only**, **Issues: Read-only**, **Pull requests: Read-only** y **Metadata: Read-only**. Para publicar PR desde E9, habilita **Contents: Read and write** y **Pull requests: Read and write**, acepta el cambio en la instalación y usa un usuario con permiso de escritura. Para crear issues revisadas desde P18, habilita además **Issues: Read and write** y acepta el permiso en la instalación. No se necesitan permisos generales de organización. [Revisión y publicación](reviews.md).
 4. Webhook Content type: `application/json`. Define un secreto aleatorio propio y suscribe **Push**, **Issues**, **Pull request**, **Repository**, **Create** y **Delete**. Los eventos de instalación, cambio de repositorios y revocación de autorización también se procesan. Consulta [eventos de GitHub](https://docs.github.com/en/webhooks/webhook-events-and-payloads).
 5. La URL del webhook es `https://<entrada-publica>/api/github/webhook`. GitHub no puede alcanzar el loopback del PC: necesitas un proxy HTTPS o un forwarder configurado por ti. No se ha publicado FerWeb ni creado un túnel como parte de E3. Ver [pruebas de webhooks](https://docs.github.com/en/webhooks/testing-and-troubleshooting-webhooks/testing-webhooks).
 6. Instala la App en tu usuario u organización seleccionando solo los repositorios necesarios. Las organizaciones con SAML/SSO pueden requerir una sesión SAML activa antes de autorizar.
@@ -71,7 +71,29 @@ Límites explícitos de E3:
 - Hasta cinco páginas de 100 elementos por lista de issues/PR; el endpoint issues también devuelve PR que FerWeb filtra. Las listas parciales se indican. El cuerpo de cada descripción se limita a 20 000 caracteres.
 - Solo archivos UTF-8 de hasta 1 MB, mostrados como texto. Se excluyen segmentos `.git`, `.local`, `node_modules`, `secrets`, `backups`, nombres que empiecen por `.env` y extensiones `.pem`, `.key`, `.p12`, `.pfx`, sin distinguir mayúsculas. Estas reglas no detectan todos los secretos que puedan estar escritos dentro de código permitido.
 - Solicitudes externas con timeout individual de ocho segundos y presupuesto de 45 segundos por operación. La web permite hasta 60 segundos. Se comunican límites de GitHub y fallos de red sin desactivar la autorización ni sustituir resultados por datos simulados.
-- Las rutas E3 son de lectura y no ejecutan código. E9 añade escritura exclusivamente desde la acción de publicación de una revisión aprobada; consulta [sus límites](reviews.md).
+- Las rutas E3 son de lectura y no ejecutan código. E9 publica una revisión aprobada; consulta [sus límites](reviews.md). P18 permite crear una issue mediante su propia vista previa y confirmación explícita.
+
+## Épicas, dependencias y coordinación P18
+
+En **Tareas** o **Repositorio GitHub**, abre **Épicas, dependencias y GitHub**. Selecciona una tarea y guarda su tipo, épica superior, dependencias, motivo de bloqueo y reclamación local. **Para mí** se deriva de la sesión; **Para un equipo** fija una plantilla y versión autorizadas del proyecto. No se aceptan propietarios arbitrarios. Cada cambio aumenta la versión de la tarea e invalida planes anteriores.
+
+FerWeb conserva la autoridad sobre esos campos y el estado de la tarea. Las dependencias forman un grafo sin ciclos, incluida la relación entre épicas e hijos. Avanzar a En curso/Hecha, iniciar o repetir Codex/equipos y publicar una PR requiere resolver los bloqueos y completar todas las dependencias transitivas; una épica requiere sus hijos completos. El ejecutor vuelve a comprobarlo durante el trabajo y detiene el contenedor si se bloquea una dependencia. Una reclamación de equipo solo admite ese equipo y versión. Reabrir una dependencia no reescribe silenciosamente el estado de otras tareas: la vista muestra qué impide avanzar.
+
+En **Vincular issues/PR y revisar acciones**, elige una tarea local y una observación sincronizada. El vínculo conserva ID de repositorio, ID remoto, número, procedencia y fecha. Vincular o sincronizar repetidamente no duplica el recurso ni cambia texto, propietario, estado o dependencias locales. Los cierres, etiquetas y responsables de GitHub se muestran como observaciones, sin conceder permisos. La vista enlaza los trabajos Codex, equipos y PR publicadas por E9.
+
+**Sincronizar ahora** actualiza observaciones de los vínculos del repositorio actual. Si una identidad no aparece en una lista completa se marca ausente; si la lista es parcial, está obsoleta o la creación es posterior al snapshot, queda pendiente de confirmar. La última observación se conserva con fecha. Cambiar de repositorio oculta los metadatos del anterior; cada lectura sensible revalida el acceso en GitHub. El proyecto archivado mantiene lectura autorizada y bloquea nuevas operaciones.
+
+### Crear y reconciliar una issue
+
+1. Selecciona una tarea local y revisa el título y el cuerpo. Pulsa **Preparar vista previa de issue**: persiste un borrador con repositorio, versiones, autor GitHub, contenido exacto y huella; todavía no escribe en GitHub. Incluye referencias a la tarea, épica, dependencias, últimas ejecuciones de equipo y un marcador único.
+2. Lee el contenido completo y marca **He revisado el contenido y el repositorio de esta issue**. **Crear issue revisada en GitHub** envía la huella y revalida versiones, acceso y permiso Issues de escritura. Esta acción de planificación puede realizarse con una tarea bloqueada; no autoriza ejecutarla ni cambia su estado.
+3. Si se pierde la respuesta, conserva la misma acción y pulsa **Reconciliar resultado remoto**. Se consulta GitHub sin repetir el POST. Solo una lista completa con una coincidencia exacta de contenido, marcador y autor confirma el resultado. Una ausencia o ambigüedad permanece incierta. La reserva dura tres minutos ante una interrupción en curso; al caducar puede reconciliarse con una nueva generación que invalida respuestas antiguas.
+
+Una tarea/repositorio admite una única creación intentada; ni otra vista previa permite saltarse una acción incierta o una issue ya vinculada. Las confirmaciones publicadas son idempotentes. Un cambio local invalida borradores aún no ejecutados; una reconciliación puede registrar el efecto remoto ya producido aunque hayan cambiado las condiciones locales. No se añaden comentarios, merge, force push, borrado, importación automática de tareas ni interpretación de instrucciones remotas. La publicación E9 conserva su aprobación, huellas y protección de base.
+
+El cliente de la App vive en el servidor. No se entregan tokens ni `gh` autenticado al sandbox. La creación usa el [endpoint oficial de issues](https://docs.github.com/en/rest/issues/issues#create-an-issue) con token de usuario de la App y permiso de repositorio **Issues: write**; no exige el permiso Contents de escritura usado por E9. La reconciliación consulta como máximo cinco páginas de cien resultados y filtra las PR incluidas en el [listado de issues](https://docs.github.com/en/rest/issues/issues#list-repository-issues).
+
+Persistencia aditiva: migración `026_task_coordination.sql`. API: `GET /projects/:id/coordination`, `PATCH /projects/:id/tasks/:taskId/coordination`; bajo `/projects/:id/github/work`, lectura de vínculos/acciones, `POST /link`, `POST /issues/prepare`, `GET /actions/:actionId` y `POST /actions/:actionId/{execute|reconcile}`. Las mutaciones validan contratos estrictos y propiedad del proyecto. Límites: mil tareas/vínculos, veinte dependencias directas, cien vistas previas por proyecto y doscientas ejecuciones recientes. Se requiere crear primero la tarea local; no se copia texto privado remoto a los campos de tareas accesibles sin GitHub.
 
 ## Qué se valida y qué falta
 

@@ -4,6 +4,7 @@ import type { Project, GitHubLink, GitHubSnapshot } from '@ferweb/contracts';
 import { githubApi, authorizeGitHub } from './github-store';
 import { errorMessage } from './workspace-store';
 import './github.css';
+import { ProjectCoordination } from './TaskCoordination';
 
 function Failure({ error }: { error: unknown }) {
   return error ? (
@@ -508,6 +509,7 @@ export function ProjectGitHub({ project }: { project: Project }) {
   const link = result.currentData?.link;
   return (
     <section className="github-panel" aria-label="Repositorio GitHub">
+      <ProjectCoordination project={project.id} archived={!!project.archivedAt} />
       <div className="workspace-page-heading">
         <div>
           <h2>Repositorio GitHub</h2>

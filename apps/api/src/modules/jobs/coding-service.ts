@@ -36,6 +36,7 @@ import { memoryNotice } from '../memory/codec.js';
 import { contextLimits } from '@ferweb/contracts';
 import type { ContextPackService } from '../context-packs/service.js';
 import { readRecipePlan, recipeTarget } from './recipe-service.js';
+import { assertTaskReady } from '../projects/work-guard.js';
 type TeamStepContext = {
   executionId: string;
   stepId: string;
@@ -405,6 +406,10 @@ export class CodingService {
         return prior.id as string;
       }
       if (current.archived_at) throw changed();
+      await assertTaskReady(db, project, input.taskId, {
+        templateId: team?.snapshot.template.id,
+        templateVersion: team?.snapshot.template.version,
+      });
       if (recipe) {
         const row = (
           await db.query(
@@ -600,6 +605,11 @@ export class CodingService {
       )
     ).rows[0];
     let teamTask: Record<string, unknown> | undefined;
+    const claimTemplate = team ? teamPlanSnapshot.parse(team.snapshot.plan).template : undefined;
+    await assertTaskReady(this.pool, row.project_id, row.task_snapshot.id, {
+      templateId: claimTemplate?.id,
+      templateVersion: claimTemplate?.version,
+    });
     let writerPaths: string[] | undefined;
     if (team) {
       const snapshot = teamPlanSnapshot.parse(team.snapshot.plan);
@@ -938,6 +948,7 @@ export class CodingService {
         if (old.request_hash !== hash) throw changed();
         return old.id as string;
       }
+      await assertTaskReady(db, project, source.task_id);
       if (agent) await this.agents.select(db, owner, project, agent);
       const counts = (
         await db.query(

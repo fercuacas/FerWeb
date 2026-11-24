@@ -1,5 +1,11 @@
 import { z } from 'zod';
-import { githubId, githubSha, githubEntrySchema, type GitHubSnapshot } from '@ferweb/contracts';
+import {
+  githubId,
+  githubSha,
+  githubEntrySchema,
+  githubItemSchema,
+  type GitHubSnapshot,
+} from '@ferweb/contracts';
 import { HttpError } from '../../http-error.js';
 import type { GitHubConfig } from './config.js';
 
@@ -176,6 +182,33 @@ export class GitHubClient {
         'Tu usuario no puede escribir en este repositorio.',
       );
   }
+  async createIssue(token: string, fullName: string, title: string, body: string) {
+    const row = decode(
+      z.object({
+        id,
+        number: id,
+        title: z.string(),
+        body: z.string().nullable(),
+        state: z.string(),
+        updated_at: z.string(),
+        user: z.object({ id }),
+      }),
+      (await this.post(`/repos/${fullName}/issues`, token, { title, body })).data,
+    );
+    return githubItemSchema.parse({
+      id: row.id,
+      authorId: row.user.id,
+      number: row.number,
+      title: row.title,
+      body: row.body ?? '',
+      state: row.state,
+      updatedAt: row.updated_at,
+      url: `https://github.com/${fullName}/issues/${row.number}`,
+    });
+  }
+  async issueCandidates(token: string, fullName: string) {
+    return this.items(token, fullName, 'issues', true);
+  }
   async branchHead(token: string, fullName: string, branch: string) {
     const row = decode(
       z.object({ name: z.string(), commit: z.object({ sha: githubSha }) }),
@@ -331,7 +364,7 @@ export class GitHubClient {
       'El repositorio no está accesible en esta instalación (límite de comprobación: 1000 repositorios).',
     );
   }
-  private async items(token: string, fullName: string, kind: 'issues' | 'pulls') {
+  private async items(token: string, fullName: string, kind: 'issues' | 'pulls', fullBody = false) {
     const items: GitHubSnapshot['issues'] = [];
     for (let page = 1; page <= 5; page++) {
       const result = await this.get(
@@ -341,6 +374,16 @@ export class GitHubClient {
       const rows = decode(
         z.array(
           z.object({
+            id: id.optional(),
+            user: z.object({ id }).nullable().optional(),
+            assignees: z
+              .array(z.object({ login: z.string() }))
+              .max(100)
+              .optional(),
+            labels: z
+              .array(z.union([z.string(), z.object({ name: z.string() })]))
+              .max(100)
+              .optional(),
             number: id,
             title: z.string().max(2000),
             body: z.string().nullable(),
@@ -356,9 +399,15 @@ export class GitHubClient {
       for (const row of rows)
         if (kind !== 'issues' || !row.pull_request)
           items.push({
+            ...(row.id && { id: row.id }),
+            ...(row.user && { authorId: row.user.id }),
+            ...(row.assignees && { assignees: row.assignees.map((a) => a.login) }),
+            ...(row.labels && {
+              labels: row.labels.map((l) => (typeof l === 'string' ? l : l.name)),
+            }),
             number: row.number,
             title: row.title,
-            body: (row.body ?? '').slice(0, 20_000),
+            body: fullBody ? (row.body ?? '') : (row.body ?? '').slice(0, 20_000),
             state: row.state,
             updatedAt: row.updated_at,
             url: `https://github.com/${fullName}/${kind === 'issues' ? 'issues' : 'pull'}/${row.number}`,

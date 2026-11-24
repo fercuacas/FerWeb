@@ -27,6 +27,10 @@ export const githubInstallationSchema = z.object({
   connected: z.boolean(),
 });
 export const githubItemSchema = z.object({
+  id: githubId.optional(),
+  authorId: githubId.optional(),
+  assignees: z.array(z.string().max(100)).max(100).optional(),
+  labels: z.array(z.string().max(100)).max(100).optional(),
   number: githubId,
   title: z.string(),
   body: z.string(),

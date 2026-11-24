@@ -324,5 +324,32 @@ const controller = await createController({
   namespace: process.env.RUNNER_NAMESPACE,
   volume: process.env.RUNNER_RUNTIME_VOLUME,
 });
+// Exercise a slow startup acknowledgement independently of host load. The run
+// is live during this delay, so the worker must keep both leases current.
+controller.server.prependListener('request', (req, res) => {
+  if (req.method !== 'POST' || req.url !== '/runs') return;
+  let body = '',
+    delayed = false;
+  req.on('data', (chunk) => {
+    body += chunk.toString();
+  });
+  req.on('end', () => {
+    try {
+      delayed = /P18 lease delayed startup/.test(JSON.parse(body).task?.title ?? '');
+    } catch {
+      /* The normal handler validates input. */
+    }
+  });
+  const end = res.end.bind(res);
+  res.end = (...args) => {
+    if (!delayed) return end(...args);
+    delayed = false;
+    const timer = setTimeout(() => {
+      if (!res.destroyed) end(...args);
+    }, 8000);
+    timer.unref();
+    return res;
+  };
+});
 controller.server.listen(8010, '0.0.0.0');
 process.on('SIGTERM', () => void controller.close().then(() => process.exit(0)));

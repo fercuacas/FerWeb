@@ -17,6 +17,7 @@ export * from './execution.js';
 export * from './review.js';
 export * from './context-strategies.js';
 export * from './github.js';
+export * from './coordination.js';
 export * from './chat.js';
 
 export const readinessSchema = z.object({

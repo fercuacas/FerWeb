@@ -9,6 +9,7 @@ import {
   type TaskFilters,
 } from '@ferweb/contracts';
 import { HttpError } from '../../http-error.js';
+import { assertTaskReady } from './work-guard.js';
 
 const notFound = () => new HttpError(404, 'not_found', 'No se ha encontrado el recurso.');
 const conflict = () =>
@@ -136,6 +137,14 @@ export class ProjectRepository {
           'El proyecto está archivado. Restaúralo antes de cambiar tareas.',
         );
       if (taskId) {
+        const previous = (
+          await client.query('SELECT status FROM tasks WHERE project_id=$1 AND id=$2', [
+            projectId,
+            taskId,
+          ])
+        ).rows[0];
+        if (previous && previous.status !== input.status && input.status !== 'todo')
+          await assertTaskReady(client, projectId, taskId, { checkClaim: false });
         const result = await client.query(
           `UPDATE tasks SET title=$3, description=$4, priority=$5, status=$6, acceptance_criteria=$7::jsonb,
           updated_at=now(), version=version+1 WHERE project_id=$1 AND id=$2 AND version=$8 RETURNING *`,

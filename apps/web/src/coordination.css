@@ -1,0 +1,34 @@
+.coordination-panel {
+  margin-block: 1rem;
+  min-width: 0;
+}
+.coordination-panel label {
+  display: block;
+  margin-block: 0.6rem;
+}
+.coordination-panel select,
+.coordination-panel textarea,
+.coordination-panel input:not([type='checkbox']) {
+  max-width: 100%;
+  width: 100%;
+}
+.coordination-panel button,
+.coordination-panel a {
+  overflow-wrap: anywhere;
+}
+.coordination-list {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  gap: 0.75rem;
+}
+.coordination-list > li {
+  border: 1px solid var(--border, #d6dece);
+  padding: 0.8rem;
+  border-radius: 0.6rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.coordination-panel fieldset {
+  min-width: 0;
+}

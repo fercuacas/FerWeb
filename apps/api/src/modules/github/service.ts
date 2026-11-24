@@ -6,6 +6,7 @@ import { tokenHash } from '../identity/sessions.js';
 import { CredentialCipher } from './crypto.js';
 import { GitHubClient, readableInstallation, visiblePath, type GitHubFetch } from './client.js';
 import type { GitHubConfig } from './config.js';
+import { observeGitHubWork } from './work.js';
 
 const absent = () => new HttpError(404, 'not_found', 'No se ha encontrado el recurso.');
 const changed = () =>
@@ -368,6 +369,68 @@ export class GitHubService {
     await check();
     return { api: access.api, token: access.token, fullName: access.fullName, check };
   }
+  // Server-only issue capability; no credentials enter DTOs, jobs or sandboxes.
+  async issueAccess(
+    owner: string,
+    project: string,
+    repositoryId: number,
+    linkVersion: number,
+    write: boolean,
+  ) {
+    const row = await this.linked(owner, project);
+    if (
+      !row ||
+      row.revoked ||
+      Number(row.repository_id) !== repositoryId ||
+      row.version !== linkVersion
+    )
+      throw changed();
+    const access = await this.authorized(owner, row);
+    if (write) {
+      const installation = (await access.api.installations(access.token)).find(
+        (i) => i.id === access.installation,
+      );
+      if (installation?.permissions.issues !== 'write')
+        throw new HttpError(
+          403,
+          'github_write_denied',
+          'La App necesita Issues con permiso de escritura.',
+        );
+    }
+    const identity = (
+      await this.pool.query('SELECT github_user_id FROM github_connections WHERE owner_id=$1', [
+        owner,
+      ])
+    ).rows[0];
+    const check = () =>
+      this.transaction(async (db) => {
+        if (write) await this.writable(db, owner, project);
+        else await this.project(owner, project);
+        await this.live(db, access);
+        const current = (
+          await db.query(
+            'SELECT version,generation,revoked,repository_id FROM github_links WHERE project_id=$1',
+            [project],
+          )
+        ).rows[0];
+        if (
+          !current ||
+          current.revoked ||
+          current.version !== row.version ||
+          current.generation !== row.generation ||
+          Number(current.repository_id) !== repositoryId
+        )
+          throw changed();
+      });
+    await check();
+    return {
+      api: access.api,
+      token: access.token,
+      fullName: access.fullName,
+      authorId: Number(identity.github_user_id),
+      check,
+    };
+  }
   async link(
     owner: string,
     project: string,
@@ -530,6 +593,7 @@ export class GitHubService {
         ],
       );
       if (!result.rows[0]) throw changed();
+      await observeGitHubWork(client, project, snapshot.repository.id, snapshot);
       return { link: dto(result.rows[0]) };
     });
   }
