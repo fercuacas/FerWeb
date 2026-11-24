@@ -5,6 +5,7 @@ import { jobsApi } from './jobs-store';
 import { errorMessage } from './workspace-store';
 import './jobs.css';
 import { CodingForm, CodingView } from './Coding';
+import { LocalReadView } from './LocalSpecialists';
 import { ProjectBudgets } from './Budgets';
 import { ProjectPlans } from './TeamPlans';
 import { ProjectTeamRuns } from './TeamRuns';
@@ -359,6 +360,17 @@ function JobView({
         <Failure error={result.error} />
       </>
     );
+  if (job.kind === 'local-readonly-v1')
+    return (
+      <>
+        <LocalReadView project={project} id={job.id} />
+        {active && (
+          <button onClick={() => void cancel({ project, id: job.id })}>
+            Cancelar especialista local
+          </button>
+        )}
+      </>
+    );
   if (job.kind === 'codex-v1')
     return (
       <>
@@ -517,9 +529,11 @@ export function ProjectJobs({
                 {names[job.state]} ·{' '}
                 {job.kind === 'simulation-v1'
                   ? `${job.completedSteps}/${job.configuration.simulation.steps}`
-                  : job.configuration.recipe
-                    ? `Codex · ${job.configuration.recipe.key} v${job.configuration.recipe.version}`
-                    : 'Codex'}
+                  : job.kind === 'local-readonly-v1'
+                    ? 'Ollama · Solo lectura'
+                    : job.configuration.recipe
+                      ? `Codex · ${job.configuration.recipe.key} v${job.configuration.recipe.version}`
+                      : 'Codex'}
               </small>
             </button>
           ))}

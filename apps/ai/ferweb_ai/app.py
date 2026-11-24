@@ -94,6 +94,8 @@ def create_app(token: str, providers: dict, embeddings=None, *, simulated=False,
             return JSONResponse({"error": "invalid_generation"}, status_code=422)
         if generation.provider not in providers:
             raise HTTPException(404, "Unknown provider")
+        if generation.localStructured and generation.provider != "ollama":
+            return JSONResponse({"error": "local_provider_required"}, status_code=422)
         if generation.id in jobs:
             raise HTTPException(409, "Generation already running")
         if len(jobs) >= 4:

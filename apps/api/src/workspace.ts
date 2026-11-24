@@ -49,8 +49,10 @@ import { memoryRouter } from './modules/memory/routes.js';
 import { ContextPackService } from './modules/context-packs/service.js';
 import { contextPackRouter } from './modules/context-packs/routes.js';
 import { AiClient } from './modules/chat/client.js';
+import { LocalReadService } from './modules/jobs/local-readonly.js';
 
 export interface WorkspaceOptions {
+  ai?: AiClient | null;
   pool: Pool;
   appOrigin: string;
   secureCookies: boolean;
@@ -66,6 +68,7 @@ function uuid(value: unknown) {
 }
 
 export function createWorkspaceRouter({
+  ai,
   pool,
   appOrigin,
   secureCookies,
@@ -119,13 +122,16 @@ export function createWorkspaceRouter({
   const githubService = github ?? new GitHubService(pool, null);
   const chatService = chats ?? new ChatService(pool, null);
   const codingService = coding ?? new CodingService(pool, githubService, new RunnerClient('', ''));
+  codingService.localReads ??= new LocalReadService(codingService, ai ?? null);
   const packRetrieval =
     retrieval ?? new RetrievalService(pool, githubService, new AiClient('', ''));
   codingService.contextPacks = new ContextPackService(
     pool,
     packRetrieval,
     codingService.memory,
-    async (owner, project, readOnly, profile) => {
+    async (owner, project, readOnly, profile, executionId) => {
+      if (executionId === 'local-readonly-v1')
+        return codingService.localReads!.capabilities(owner, project);
       const caps = await codingService.capabilities(owner, project);
       return readOnly
         ? caps.readOnlyExecution

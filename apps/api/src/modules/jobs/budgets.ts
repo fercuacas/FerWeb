@@ -147,10 +147,11 @@ export class ExecutionBudgets {
     };
   }
   async activate(db: PoolClient, row: QueryResultRow) {
-    if (row.kind !== 'codex-v1') return row;
+    if (row.kind !== 'codex-v1' && row.kind !== 'local-readonly-v1') return row;
     let step = (await db.query('SELECT * FROM execution_budget_steps WHERE job_id=$1', [row.id]))
       .rows[0];
     if (!step) {
+      if (row.kind === 'local-readonly-v1') throw denied('budget_not_bound');
       await this.allocate(db, row.project_id, row.id, row.title, {
         maxRequests: row.configuration.maxRequests,
         timeoutMs: row.configuration.limits.timeoutMs,

@@ -5,6 +5,7 @@ import type { Project, TeamPlan } from '@ferweb/contracts';
 import { teamsApi } from './teams-store';
 import { jobsApi } from './jobs-store';
 import { CodingView } from './Coding';
+import { LocalReadView } from './LocalSpecialists';
 import { SaveDeliveryMemory } from './ProjectKnowledge';
 import { errorMessage } from './workspace-store';
 import { ExecutionDetails } from './ExecutionDetails';
@@ -396,7 +397,8 @@ function StepReport({ project, id, archived }: { project: string; id: string; ar
           <button onClick={() => void query.refetch()}>Reintentar informe</button>
         </p>
       )}
-      {job && (
+      {job?.kind === 'local-readonly-v1' && <LocalReadView project={project} id={job.id} />}
+      {job?.kind === 'codex-v1' && (
         <CodingView
           project={project}
           job={job}
@@ -618,14 +620,22 @@ export function TeamRunDetails({
                     <details>
                       <summary>Entrega de {step.key}</summary>
                       <p>{step.delivery.result || 'Sin resumen del agente.'}</p>
-                      {step.delivery.verified && !project.archivedAt && (
-                        <SaveDeliveryMemory
-                          project={project.id}
-                          executionId={id}
-                          stepId={step.id}
-                          content={step.delivery.result}
-                        />
+                      {step.delivery.verification === 'local-structure' && (
+                        <p>
+                          Formato y citas comprobados localmente. Conclusiones pendientes de
+                          revisión humana; no se ejecutaron pruebas.
+                        </p>
                       )}
+                      {step.delivery.verified &&
+                        step.delivery.verification !== 'local-structure' &&
+                        !project.archivedAt && (
+                          <SaveDeliveryMemory
+                            project={project.id}
+                            executionId={id}
+                            stepId={step.id}
+                            content={step.delivery.result}
+                          />
+                        )}
                       <p>
                         {step.delivery.verified
                           ? 'Controlador: pruebas y recogida confirmadas.'
@@ -664,7 +674,10 @@ export function TeamRunDetails({
                       aria-pressed={selectedStep === step.id}
                       onClick={() => setSelectedStep(step.id)}
                     >
-                      Informe Codex · {step.key}
+                      {data.plan.execution.id === 'local-readonly-v1'
+                        ? 'Informe local'
+                        : 'Informe Codex'}{' '}
+                      · {step.key}
                     </button>
                   )}
                 </li>

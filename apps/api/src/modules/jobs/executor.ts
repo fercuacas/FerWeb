@@ -22,6 +22,7 @@ export class JobExecutor {
     readonly queue: JobQueue,
     readonly concurrency = 2,
     readonly coding?: (claim: Claim) => Running,
+    readonly localRead?: (claim: Claim) => Running,
   ) {
     if (![1, 2].includes(concurrency)) throw new Error('Invalid concurrency');
   }
@@ -54,7 +55,11 @@ export class JobExecutor {
         const claim = await this.queue.claim(this.id);
         if (!claim) break;
         const running =
-          claim.kind === 'codex-v1' && this.coding ? this.coding(claim) : this.run(claim);
+          claim.kind === 'codex-v1' && this.coding
+            ? this.coding(claim)
+            : claim.kind === 'local-readonly-v1' && this.localRead
+              ? this.localRead(claim)
+              : this.run(claim);
         this.active.set(claim.id, running);
         void running.done.finally(() => this.active.delete(claim.id));
       }

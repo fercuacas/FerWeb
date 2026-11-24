@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { localReadConfiguration } from './local-readonly.js';
 import { codingConfiguration } from './coding.js';
 export const simulationSchema = z
   .strictObject({
@@ -19,7 +20,11 @@ export const jobLimits = z.strictObject({
   budgetMicros: z.number().int().min(0).max(1000000),
 });
 export const jobConfiguration = z.strictObject({ simulation: simulationSchema, limits: jobLimits });
-export const anyJobConfiguration = z.union([jobConfiguration, codingConfiguration]);
+export const anyJobConfiguration = z.union([
+  jobConfiguration,
+  codingConfiguration,
+  localReadConfiguration,
+]);
 export const jobInput = z.strictObject({
   requestId: z.uuid(),
   title: z.string().trim().min(1).max(160),
@@ -58,12 +63,17 @@ const baseJobSchema = z.object({
         simulated: z.literal(true),
       }),
       z.object({ kind: z.literal('codex-v1'), runId: z.uuid() }),
+      z.object({ kind: z.literal('local-readonly-v1'), runId: z.uuid() }),
     ])
     .nullable(),
 });
 export const jobSchema = z.discriminatedUnion('kind', [
   baseJobSchema.extend({ kind: z.literal('simulation-v1'), configuration: jobConfiguration }),
   baseJobSchema.extend({ kind: z.literal('codex-v1'), configuration: codingConfiguration }),
+  baseJobSchema.extend({
+    kind: z.literal('local-readonly-v1'),
+    configuration: localReadConfiguration,
+  }),
 ]);
 export const jobEventSchema = z.object({
   jobId: z.uuid(),

@@ -15,9 +15,9 @@ const executionUnavailableReason = z.enum([
 export type ExecutionUnavailableReason = z.infer<typeof executionUnavailableReason>;
 
 export const executionOptionSchema = z.object({
-  id: z.enum(['codex-v1', 'openai-chat', 'ollama-chat']),
+  id: z.enum(['codex-v1', 'openai-chat', 'ollama-chat', 'local-readonly-v1']),
   provider: aiProviderSchema,
-  runtime: z.enum(['codex-cli', 'ferweb-chat']),
+  runtime: z.enum(['codex-cli', 'ferweb-chat', 'ferweb-readonly']),
   destination: z.enum(['openai-api', 'local-ollama', 'simulated', 'unknown']),
   toolProfile: z.enum([...codingToolProfile.options, 'node-readonly-v1', 'text-only']),
   configurationRevision: z.string().nullable(),

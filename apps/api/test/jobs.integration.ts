@@ -275,6 +275,44 @@ test('persistent queue: real separate API/executor/process, restart, budgets, fe
         await queue.stopExecutor(replacement);
       },
     );
+    await t.test('attempt start records admission after waiting for the queue mutex', async () => {
+      const job = await enqueue(body('Claim after mutex')),
+        executor = randomUUID(),
+        holder = await pool.connect();
+      let pending: Promise<Claim | null> | undefined;
+      await queue.register(executor);
+      try {
+        await holder.query('BEGIN');
+        await holder.query('SELECT pg_advisory_xact_lock(736019247)');
+        pending = queue.claim(executor);
+        await waitFor(
+          async () =>
+            (
+              await pool.query(
+                "SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query='SELECT pg_advisory_xact_lock(736019247)' ",
+              )
+            ).rowCount,
+        );
+        const released = (await holder.query('SELECT clock_timestamp() AS observed')).rows[0]
+          .observed;
+        await holder.query('COMMIT');
+        const claim = await pending;
+        assert.equal(claim?.id, job.id);
+        const attempt = (
+          await pool.query('SELECT started_at FROM job_attempts WHERE job_id=$1', [job.id])
+        ).rows[0];
+        assert.ok(
+          attempt.started_at >= released,
+          'Admission must not be dated before the mutex was released',
+        );
+      } finally {
+        await holder.query('ROLLBACK').catch(() => {});
+        holder.release();
+        const claim = await pending?.catch(() => null);
+        if (claim) await queue.finish(claim, 'permanent_failure', 2, null, true);
+        await queue.stopExecutor(executor);
+      }
+    });
     await t.test(
       'two real executors respect SQL global 2 and per-project 1; correlated events and isolated child environment',
       async () => {

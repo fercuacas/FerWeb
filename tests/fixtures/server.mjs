@@ -67,6 +67,7 @@ const server = createApp(() => inspectDatabase(pool, migrations), migrations.len
     github,
     new RunnerClient(process.env.RUNNER_URL, process.env.RUNNER_SERVICE_TOKEN),
   ),
+  ai,
   runnerToken: process.env.RUNNER_SERVICE_TOKEN,
 }).listen(config.PORT, '0.0.0.0');
 process.on('SIGTERM', async () => {

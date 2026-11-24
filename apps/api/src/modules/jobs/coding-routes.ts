@@ -23,6 +23,18 @@ export function codingRouter(service: CodingService) {
     owner: (res.locals.user as { id: string }).id,
     project: z.uuid().parse(req.params.projectId),
   });
+  router.get('/projects/:projectId/local-read/capabilities', async (req, res) => {
+    const s = scope(req, res);
+    if (!service.localReads)
+      throw new HttpError(503, 'local_read_unconfigured', 'El servicio local no está configurado.');
+    res.json({ execution: await service.localReads.capabilities(s.owner, s.project) });
+  });
+  router.get('/projects/:projectId/local-read/:jobId', async (req, res) => {
+    const s = scope(req, res);
+    if (!service.localReads)
+      throw new HttpError(503, 'local_read_unconfigured', 'El servicio local no está configurado.');
+    res.json(await service.localReads.read(s.owner, s.project, z.uuid().parse(req.params.jobId)));
+  });
   router.get('/projects/:projectId/coding/capabilities', async (req, res) => {
     const s = scope(req, res);
     res.json(await service.capabilities(s.owner, s.project));
@@ -94,6 +106,52 @@ export function codingInternalRouter(service: CodingService, token: string) {
     next();
   });
   router.use(express.json({ limit: '16kb' }));
+  router.post('/local-read/:jobId/input', async (req, res) => {
+    const input = z
+      .strictObject({ fence: z.uuid(), checkOnly: z.boolean().optional() })
+      .parse(req.body);
+    if (!service.localReads)
+      throw new HttpError(503, 'local_read_unconfigured', 'El servicio local no está configurado.');
+    const { row, plan } = await service.localReads.input(
+      z.uuid().parse(req.params.jobId),
+      input.fence,
+    );
+    res.json(
+      input.checkOnly
+        ? { checked: true }
+        : {
+            inputHash: row.input_hash,
+            model: row.snapshot.model,
+            sources: row.snapshot.sources,
+            configurationRevision: plan.execution.configurationRevision,
+            simulated: plan.execution.simulated,
+          },
+    );
+  });
+  router.post('/local-read/:jobId/stream', async (req, res) => {
+    const input = z.strictObject({ fence: z.uuid() }).parse(req.body);
+    if (!service.localReads)
+      throw new HttpError(503, 'local_read_unconfigured', 'El servicio local no está configurado.');
+    const abort = new AbortController();
+    res.on('close', () => abort.abort());
+    try {
+      for await (const event of service.localReads.stream(
+        z.uuid().parse(req.params.jobId),
+        input.fence,
+        abort.signal,
+      )) {
+        if (!res.headersSent) {
+          res.setHeader('Content-Type', 'application/x-ndjson');
+          res.setHeader('Cache-Control', 'no-store');
+        }
+        res.write(JSON.stringify(event) + '\n');
+      }
+      res.end();
+    } catch (error) {
+      if (res.headersSent) res.end();
+      else throw error;
+    }
+  });
   router.post('/coding/:jobId/context', async (req, res) => {
     const body = z
       .strictObject({ fence: z.uuid(), request: contextExpansionInput })

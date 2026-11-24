@@ -52,6 +52,7 @@ export class ContextPackService {
       project: string,
       readOnly?: boolean,
       toolProfile?: z.infer<typeof contextPackPrepare>['toolProfile'],
+      executionId?: 'local-readonly-v1',
     ) => Promise<ExecutionOption>,
   ) {
     this.projects = new ProjectRepository(pool);
@@ -295,7 +296,13 @@ export class ContextPackService {
         'context_profile_incompatible',
         'TypeScript/React requiere un espacio escribible.',
       );
-    const execution = await this.execution(owner, project, input.readOnly, input.toolProfile),
+    const execution = await this.execution(
+        owner,
+        project,
+        input.readOnly,
+        input.toolProfile,
+        input.executionId,
+      ),
       selection = selectContextSkills({
         skills: all,
         rules: policy.rules,
@@ -509,6 +516,7 @@ export class ContextPackService {
             project,
             s.execution.toolProfile === 'node-readonly-v1',
             s.execution.toolProfile === 'typescript-react-v1' ? 'typescript-react-v1' : undefined,
+            s.execution.id === 'local-readonly-v1' ? 'local-readonly-v1' : undefined,
           ),
         ),
       ) !== digest(canonical(s.execution))

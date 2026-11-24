@@ -9,6 +9,7 @@ import {
 } from '@ferweb/contracts';
 import { teamsApi } from './teams-store';
 import { codingApi } from './coding-store';
+import { localReadApi } from './local-read-store';
 import { workspaceApi, errorMessage } from './workspace-store';
 import { ExecutionDetails, capabilityLabels } from './ExecutionDetails';
 import { SkillText } from './Skills';
@@ -53,6 +54,22 @@ export function PlanDetails({ project, id }: { project: Project; id: string }) {
             · Copia inmutable v{plan.snapshot.version}
           </p>
           <p className="skill-text">Hash: {plan.hash}</p>
+          {plan.snapshot.stepModels && (
+            <section aria-label="Inferencia local del plan">
+              <p>
+                Workflow exclusivamente local. Selección y validación deterministas; cada entrega y
+                resumen infiere con Ollama. GitHub sigue siendo una integración autorizada por
+                separado.
+              </p>
+              <ul>
+                {plan.snapshot.stepModels.map((m) => (
+                  <li key={m.step} className="skill-text">
+                    {m.step}: Ollama · {m.model} · revisión observada {m.revision}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
           <p>
             <a href={`#/projects/${project.id}/plans/${plan.id}`}>Abrir enlace directo al plan</a>
           </p>
@@ -122,6 +139,12 @@ export function PlanDetails({ project, id }: { project: Project; id: string }) {
                   Depende de: {step.dependsOn.join(', ') || 'ninguna etapa'}
                 </p>
                 {step.paths && <p>Rutas aprobadas: {step.paths.join(', ')}</p>}
+                <p>
+                  Inferencia del rol:{' '}
+                  {plan.snapshot.execution.id === 'local-readonly-v1'
+                    ? `Ollama local · ${plan.snapshot.stepModels?.find((m) => m.step === step.key)?.model}`
+                    : `API · ${plan.snapshot.model ?? 'Sin modelo'}`}
+                </p>
                 <p>
                   Capacidades:{' '}
                   {step.requiredCapabilities.map((key) => capabilityLabels[key]).join(', ')}
@@ -242,9 +265,15 @@ function PlansContent({ project }: { project: Project }) {
     (item) => item.version === (version || detail.template.latest.version),
   );
   const specialists = template?.definition.strategy === 'specialists';
+  const local = template?.definition.inferenceMode === 'local-only';
+  const localCapabilities = localReadApi.useLocalCapabilitiesQuery(local ? project.id : skipToken);
+  const [stepModels, setStepModels] = useState<Record<string, string>>({});
   const writers = template?.definition.strategy === 'writers';
-  const execution =
-    !capabilities.error && capabilities.currentData
+  const execution = local
+    ? localCapabilities.error
+      ? undefined
+      : localCapabilities.currentData?.execution
+    : !capabilities.error && capabilities.currentData
       ? codingOption(capabilities.currentData, template?.definition.toolProfile, specialists)
       : undefined;
   const effectiveModel = execution?.models.some((item) => item.id === model)
@@ -284,7 +313,13 @@ function PlansContent({ project }: { project: Project }) {
           templateVersion: template.version,
           mode: specialists || writers ? 'team' : mode,
           ...(!specialists && !writers && mode === 'single' && { singleStep }),
-          executionId: 'codex-v1',
+          executionId: local ? 'local-readonly-v1' : 'codex-v1',
+          ...(local && {
+            stepModels: effectiveSteps.map((s) => ({
+              step: s.key,
+              model: stepModels[s.key] || effectiveModel,
+            })),
+          }),
           model: effectiveModel || null,
         },
       }).unwrap();
@@ -297,7 +332,7 @@ function PlansContent({ project }: { project: Project }) {
     tasksQuery.error,
     templatesQuery.error,
     templateQuery.error,
-    capabilities.error,
+    local ? localCapabilities.error : capabilities.error,
     plansQuery.error,
   ].filter(Boolean);
   return (
@@ -319,6 +354,7 @@ function PlansContent({ project }: { project: Project }) {
               void templatesQuery.refetch();
               void plansQuery.refetch();
               void capabilities.refetch();
+              if (local) void localCapabilities.refetch();
               if (templateId) void templateQuery.refetch();
             }}
           >
@@ -326,7 +362,7 @@ function PlansContent({ project }: { project: Project }) {
           </button>
         </p>
       )}
-      {!project.archivedAt && tasks && templates && execution && (
+      {!project.archivedAt && tasks && templates && (
         <form className="job-form" aria-label="Preparar plan" onSubmit={(e) => void submit(e)}>
           <TeamContextOptions value={context} onChange={setContext} />
           <MemoryPicker
@@ -418,12 +454,12 @@ function PlansContent({ project }: { project: Project }) {
             <label>
               Modelo del plan
               <select
-                disabled={!execution.models.length}
+                disabled={!execution?.models.length}
                 value={effectiveModel}
                 onChange={(e) => setModel(e.target.value)}
               >
-                {!execution.models.length && <option value="">Sin modelo disponible</option>}
-                {execution.models.map((item) => (
+                {!execution?.models.length && <option value="">Sin modelo disponible</option>}
+                {execution?.models.map((item) => (
                   <option key={item.id} value={item.id}>
                     {item.id}
                   </option>
@@ -433,9 +469,36 @@ function PlansContent({ project }: { project: Project }) {
           </div>
           {specialists && (
             <p>
-              Este workflow requiere todos los especialistas y su resumen. Las fuentes se montan
-              como solo lectura y el límite del proyecto debe permitir la concurrencia solicitada.
+              Este workflow requiere todos los especialistas y su resumen.{' '}
+              {local
+                ? 'Cada rol recibe extractos acotados como datos, sin shell ni escritura; selección y validación deterministas, con resumen también local. GitHub se autoriza por separado.'
+                : 'Las fuentes se montan como solo lectura y el límite del proyecto debe permitir la concurrencia solicitada.'}
             </p>
+          )}
+          {local && execution && (
+            <fieldset>
+              <legend>Modelo local por rol</legend>
+              {effectiveSteps.map((step) => (
+                <label key={step.key}>
+                  {step.title} · Ollama local
+                  <select
+                    aria-label={`Modelo local: ${step.title}`}
+                    value={stepModels[step.key] || effectiveModel}
+                    onChange={(e) => setStepModels({ ...stepModels, [step.key]: e.target.value })}
+                  >
+                    {execution.models.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.id} · {m.revision ?? 'Sin revisión'}
+                      </option>
+                    ))}
+                  </select>
+                  <small>
+                    Requiere texto. No requiere ni concede herramientas, escritura o formato
+                    garantizado por el modelo.
+                  </small>
+                </label>
+              ))}
+            </fieldset>
           )}
           {writers && (
             <p>
@@ -474,11 +537,16 @@ function PlansContent({ project }: { project: Project }) {
               </p>
             </>
           )}
-          <ExecutionDetails option={execution} />
-          {!execution.available && (
+          {execution ? (
+            <ExecutionDetails option={execution} />
+          ) : (
+            <p role="status">Elige una plantilla o espera su diagnóstico de ejecución.</p>
+          )}
+          {!execution?.available && (
             <p>
-              Puedes guardar una preparación bloqueada. Configura el ejecutor y prepara una copia
-              nueva para aprobarla.
+              {local
+                ? 'Configura un modelo Ollama instalado, permitido y con revisión observada antes de preparar el workflow local.'
+                : 'Puedes guardar una preparación bloqueada. Configura el ejecutor y prepara una copia nueva para aprobarla.'}
             </p>
           )}
           {error && <p role="alert">{error}</p>}
@@ -487,6 +555,8 @@ function PlansContent({ project }: { project: Project }) {
             disabled={
               preparing.isLoading ||
               !memoryValid ||
+              !execution ||
+              (local && !execution.available) ||
               !task ||
               !template ||
               (!specialists && !writers && mode === 'single' && !singleStep)

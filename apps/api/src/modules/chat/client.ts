@@ -17,18 +17,48 @@ export interface GenerationRequest {
   model: string;
   messages: { role: 'system' | 'user' | 'assistant'; content: string }[];
   maxOutputTokens: number;
+  localStructured?: boolean;
+  expectedRevision?: string;
 }
 export class AiClient {
   constructor(
     private readonly base: string,
     private readonly token: string,
   ) {}
+  private localService() {
+    let url: URL;
+    try {
+      url = new URL(this.base);
+    } catch {
+      throw new HttpError(
+        503,
+        'local_service_untrusted',
+        'El servicio de IA local no está configurado en una dirección interna permitida.',
+      );
+    }
+    if (
+      url.protocol !== 'http:' ||
+      !['ai', 'ai-test', 'localhost', '127.0.0.1', 'host.docker.internal'].includes(url.hostname) ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash ||
+      !['', '/'].includes(url.pathname)
+    )
+      throw new HttpError(
+        503,
+        'local_service_untrusted',
+        'El servicio de IA local debe usar una dirección interna permitida.',
+      );
+  }
   private headers() {
     return { 'Content-Type': 'application/json', Authorization: `Bearer ${this.token}` };
   }
   async embeddings(texts?: string[]) {
     try {
+      this.localService();
       const response = await fetch(`${this.base}/embeddings`, {
+        redirect: 'error',
         method: texts ? 'POST' : 'GET',
         headers: this.headers(),
         ...(texts ? { body: JSON.stringify({ texts }) } : {}),
@@ -54,7 +84,9 @@ export class AiClient {
   }
   async catalog(provider: AiProvider, timeoutMs = 35000) {
     try {
+      if (provider === 'ollama') this.localService();
       const response = await fetch(`${this.base}/catalog/${provider}`, {
+        redirect: 'error',
         headers: this.headers(),
         signal: AbortSignal.timeout(timeoutMs),
       });
@@ -70,13 +102,18 @@ export class AiClient {
   }
   async cancel(id: string) {
     await fetch(`${this.base}/cancel/${id}`, {
+      redirect: 'error',
       method: 'POST',
       headers: this.headers(),
       signal: AbortSignal.timeout(2000),
     });
   }
   async *generate(input: GenerationRequest, signal: AbortSignal) {
+    if (input.localStructured && input.provider !== 'ollama')
+      throw new HttpError(422, 'local_provider_required', 'La entrega local solo admite Ollama.');
+    if (input.provider === 'ollama' || input.localStructured) this.localService();
     const response = await fetch(`${this.base}/generate`, {
+      redirect: 'error',
       method: 'POST',
       headers: this.headers(),
       body: JSON.stringify(input),

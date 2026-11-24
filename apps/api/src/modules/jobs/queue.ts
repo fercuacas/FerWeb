@@ -5,6 +5,7 @@ import {
   anyJobConfiguration,
   codingReport,
   codingWorkspace,
+  localReadReport,
   type JobConfiguration,
 } from '@ferweb/contracts';
 import type { z } from 'zod';
@@ -22,7 +23,7 @@ export interface Claim {
   fence: string;
   executor_id: string;
   completed_steps: number;
-  kind: 'simulation-v1' | 'codex-v1';
+  kind: 'simulation-v1' | 'codex-v1' | 'local-readonly-v1';
   configuration: z.infer<typeof anyJobConfiguration>;
   lease_until: Date;
   deadline_at: Date;
@@ -115,8 +116,8 @@ export class JobQueue {
     message: string,
   ) {
     const result =
-      row.kind === 'codex-v1'
-        ? { kind: 'codex-v1', runId: row.id }
+      row.kind !== 'simulation-v1'
+        ? { kind: row.kind, runId: row.id }
         : {
             kind: 'simulation-v1',
             completedSteps: row.completed_steps,
@@ -134,7 +135,7 @@ export class JobQueue {
     await this.event(db, row.id, state, message, { completedSteps: row.completed_steps });
   }
   private async settle(db: PoolClient, row: QueryResultRow, reason: string, retryable: boolean) {
-    if (row.kind === 'codex-v1') {
+    if (row.kind !== 'simulation-v1') {
       const cancelled =
         row.cancel_requested || row.archived || row.budget_cancelled || reason === 'cancelled';
       const completed =
@@ -147,8 +148,12 @@ export class JobQueue {
         cancelled ? 'cancelled' : completed ? 'completed' : 'failed',
         completed ? null : cancelled ? 'cancelled' : reason === 'completed' ? 'timeout' : reason,
         completed
-          ? 'Ejecución de código terminada; revisa diff y evidencias.'
-          : 'Ejecución de código detenida. No se reintenta automáticamente.',
+          ? row.kind === 'local-readonly-v1'
+            ? 'Entrega local de texto terminada; revisa estructura, citas y conclusiones.'
+            : 'Ejecución de código terminada; revisa diff y evidencias.'
+          : row.kind === 'local-readonly-v1'
+            ? 'Consumidor de inferencia local detenido. Sin reintento automático ni confirmación de parada remota.'
+            : 'Ejecución de código detenida. No se reintenta automáticamente.',
       );
       return;
     }
@@ -291,11 +296,10 @@ export class JobQueue {
           [row.id, executor, fence, this.leaseMs, cfg.limits.timeoutMs],
         )
       ).rows[0];
-      await db.query('INSERT INTO job_attempts(job_id,attempt,executor_id) VALUES($1,$2,$3)', [
-        row.id,
-        updated.attempt,
-        executor,
-      ]);
+      await db.query(
+        'INSERT INTO job_attempts(job_id,attempt,executor_id,started_at) VALUES($1,$2,$3,clock_timestamp())',
+        [row.id, updated.attempt, executor],
+      );
       await this.event(db, row.id, 'claimed', 'Trabajo asignado a un ejecutor.', {
         checkpoint: row.completed_steps,
       });
@@ -398,13 +402,18 @@ export class JobQueue {
     exitCode: number | null,
     signal: string | null,
     confirmed: boolean | null,
-    report?: z.infer<typeof codingReport>,
+    report?: z.infer<typeof codingReport> | z.infer<typeof localReadReport>,
     outputFiles?: z.infer<typeof codingWorkspace>,
   ) {
     return this.tx(async (db) => {
       const row = await this.row(db, claim.id);
       if (row.state !== 'running' || row.fence !== claim.fence) return false;
-      if (report)
+      if (report && claim.kind === 'local-readonly-v1')
+        await db.query('UPDATE local_read_runs SET report=$2 WHERE job_id=$1', [
+          claim.id,
+          JSON.stringify(localReadReport.parse(report)),
+        ]);
+      else if (report)
         await db.query('UPDATE coding_runs SET report=$2 WHERE job_id=$1', [
           claim.id,
           JSON.stringify(codingReport.parse(report)),
@@ -418,7 +427,7 @@ export class JobQueue {
           row.cancel_requested || row.archived || row.budget_cancelled || reason === 'cancelled',
         state = cancelled
           ? 'cancelled'
-          : exitCode === 0 && reason === 'completed'
+          : (claim.kind === 'local-readonly-v1' || exitCode === 0) && reason === 'completed'
             ? 'completed'
             : 'failed';
       await db.query(
@@ -433,12 +442,20 @@ export class JobQueue {
           reason === 'completed' ? null : reason,
         ],
       );
-      await this.event(db, claim.id, 'process_exited', 'El proceso de trabajo ha terminado.', {
-        exitCode,
-        signal,
-        reason,
-        terminationConfirmed: confirmed,
-      });
+      await this.event(
+        db,
+        claim.id,
+        claim.kind === 'local-readonly-v1' ? 'local_delivery_finished' : 'process_exited',
+        claim.kind === 'local-readonly-v1'
+          ? 'El consumidor de inferencia local ha terminado.'
+          : 'El proceso de trabajo ha terminado.',
+        {
+          exitCode,
+          signal,
+          reason,
+          terminationConfirmed: confirmed,
+        },
+      );
       await this.settle(
         db,
         row,

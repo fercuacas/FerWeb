@@ -26,6 +26,23 @@ class SimulatedProvider:
         if generation.model != "fixture-chat":
             raise ProviderError("provider_model", "Modelo simulado no disponible.")
         prompt = generation.messages[-1].content
+        if generation.localStructured:
+            if generation.provider != "ollama" or generation.expectedRevision != "fixture-revision":
+                raise ProviderError("provider_model_changed", "Modelo o revisión local no válidos.")
+            payload = json.loads(prompt)
+            title = payload["task"]["title"]
+            if "P19 wait" in title:
+                await asyncio.sleep(60)
+            source = payload["untrustedData"]["sources"][0]
+            quote = source["excerpt"].splitlines()[0]
+            delivery = {"summary": "Entrega local simulada; " + str(len(payload["untrustedData"]["previousDeliveries"])) + " entregas previas.",
+                        "evidence": [{"path": source["path"], "line": source["startLine"], "quote": quote}], "limitations": ["Inferencia simulada; sin pruebas de código."]}
+            if "P19 bad citation" in title:
+                delivery["evidence"][0]["quote"] = "fabricated quotation"
+            yield {"type": "meta", "reportedModel": generation.model}
+            yield {"type": "delta", "text": "invalid JSON" if "P19 bad JSON" in title else json.dumps(delivery)}
+            yield finish(usage=unknown_usage())
+            return
         if any(message.role == "system" for message in generation.messages):
             context = json.loads(generation.messages[-2].content)
             sources = context["repository_sources"]

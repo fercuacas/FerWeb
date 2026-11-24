@@ -37,6 +37,7 @@ try {
     migrations.length,
     {
       pool,
+      ai,
       appOrigin: config.APP_ORIGIN,
       secureCookies: config.COOKIE_SECURE,
       github,

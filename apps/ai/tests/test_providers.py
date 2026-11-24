@@ -14,6 +14,50 @@ def generation(provider="openai"):
 
 
 class ProviderTests(unittest.IsolatedAsyncioTestCase):
+    async def test_local_structured_uses_only_installed_local_model_and_no_external_fallback(self):
+        observed = []
+        async def handler(request):
+            observed.append(str(request.url))
+            self.assertEqual(request.url.host, "ollama")
+            if request.url.path == "/api/tags":
+                return httpx.Response(200, json={"models": [{"name": "allowed-model", "digest": "digest-v1"}, {"name": "other", "digest": "other-v1"}, {"name": "allowed-cloud", "digest": "cloud", "remote_host": "https://ollama.com"}]})
+            if request.url.path == "/api/show":
+                return httpx.Response(200, json={"capabilities": ["completion"]})
+            self.assertEqual(request.url.path, "/api/chat")
+            value = json.loads(request.content)
+            self.assertEqual(value["format"], "json")
+            self.assertNotIn("tools", value)
+            return httpx.Response(200, text=json.dumps({"model": "allowed-model", "message": {"content": "{}"}, "done": True}) + "\n")
+        provider = OllamaProvider("http://ollama:11434", ["allowed-model", "allowed-cloud"], httpx.MockTransport(handler))
+        local = generation("ollama").model_copy(update={"localStructured": True, "expectedRevision": "digest-v1"})
+        events = [event async for event in provider.stream(local)]
+        self.assertEqual(events[-1]["status"], "completed")
+        self.assertTrue(all(url.startswith("http://ollama:11434/") for url in observed))
+        self.assertFalse(any("pull" in url or "download" in url for url in observed))
+        with self.assertRaises(ProviderError):
+            _ = [event async for event in provider.stream(local.model_copy(update={"expectedRevision": "changed"}))]
+        self.assertEqual(sum(url.endswith("/api/chat") for url in observed), 1)
+        external = []
+        async def forbidden(request):
+            external.append(request.url)
+            raise AssertionError("Unexpected external inference request")
+        with self.assertRaises(ProviderError):
+            _ = [event async for event in OpenAIProvider("fixture", ["allowed-model"], httpx.MockTransport(forbidden)).stream(local)]
+        self.assertEqual(len(external), 0)
+
+    async def test_local_structured_rejects_redirects_and_arbitrary_endpoints(self):
+        for url in ["https://api.openai.com", "http://ollama.com", "http://ollama@external.test", "http://127.0.0.1/v1"]:
+            with self.assertRaises(ValueError):
+                OllamaProvider(url, ["allowed-model"])
+        destinations = []
+        async def redirect(request):
+            destinations.append(str(request.url))
+            return httpx.Response(307, headers={"location": "https://external.test/api/tags"})
+        provider = OllamaProvider("http://ollama:11434", ["allowed-model"], httpx.MockTransport(redirect))
+        with self.assertRaises(ProviderError):
+            await provider.models()
+        self.assertEqual(destinations, ["http://ollama:11434/api/tags"])
+
     async def test_cancelling_a_pending_provider_read_closes_the_http_stream(self):
         class TrackedStream(httpx.AsyncByteStream):
             closed = False

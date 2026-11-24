@@ -47,6 +47,7 @@ export function teamStepOrder(steps: { key: string; dependsOn: string[] }[]) {
 export const teamDefinition = z
   .strictObject({
     name: text.trim().min(1).max(120),
+    inferenceMode: z.literal('local-only').optional(),
     toolProfile: codingToolProfile.optional(),
     strategy: z.enum(['specialists', 'writers']).optional(),
     reviewMode: z.literal('dimensions-v1').optional(),
@@ -56,6 +57,18 @@ export const teamDefinition = z
     steps: z.array(teamStep).min(1).max(6),
   })
   .superRefine((value, ctx) => {
+    if (
+      value.inferenceMode &&
+      (value.strategy !== 'specialists' ||
+        value.reviewMode ||
+        value.steps.some((step) => step.requiredCapabilities.some((cap) => cap !== 'text')))
+    )
+      ctx.addIssue({
+        code: 'custom',
+        path: ['inferenceMode'],
+        message:
+          'La inferencia local requiere especialistas de texto, incluida la reunión final, sin escritura ni herramientas. La reproducción por dimensiones requiere su verificador Codex.',
+      });
     if (value.strategy !== 'writers' && value.steps.some((s) => s.paths))
       ctx.addIssue({
         code: 'custom',
@@ -207,7 +220,11 @@ export const prepareTeamPlanInput = z
     templateVersion: version,
     mode: z.enum(['auto', 'single', 'team']),
     singleStep: key.optional(),
-    executionId: z.literal('codex-v1'),
+    executionId: z.enum(['codex-v1', 'local-readonly-v1']),
+    stepModels: z
+      .array(z.strictObject({ step: key, model: text.trim().min(1).max(100) }))
+      .max(6)
+      .optional(),
     model: text.trim().min(1).max(100).nullable(),
   })
   .refine(
@@ -230,6 +247,10 @@ export function classifyPlanTask(task: { description: string; acceptanceCriteria
   >;
 }
 export const teamPlanSnapshot = z.object({
+  stepModels: z
+    .array(z.object({ step: key, model: z.string(), revision: z.string() }))
+    .max(6)
+    .optional(),
   contexts: z
     .array(z.object({ step: z.string(), receipt: contextReceiptReference }))
     .max(8)
@@ -295,6 +316,7 @@ export const executeTeamPlanInput = z.strictObject({
   commit: z.string().regex(/^[a-f0-9]{40}$/),
 });
 export const teamDelivery = z.object({
+  verification: z.literal('local-structure').optional(),
   jobId: z.uuid(),
   step: z.string(),
   result: z.string(),

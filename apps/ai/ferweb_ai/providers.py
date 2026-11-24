@@ -73,6 +73,8 @@ class OpenAIProvider(HttpProvider):
             return [{"id": model, "revision": None} for model in self.allowed if model in available]
 
     async def stream(self, generation):
+        if generation.localStructured:
+            raise ProviderError("provider_configuration", "La entrega local estructurada solo admite Ollama local.")
         await self.validate(generation.model)
         data = {"model": generation.model, "input": [message.model_dump() for message in generation.messages],
                 "max_output_tokens": generation.maxOutputTokens, "stream": True, "store": False}
@@ -139,11 +141,15 @@ class OllamaProvider(HttpProvider):
             return result
 
     async def stream(self, generation):
-        await self.validate(generation.model)
+        models = await self.models()
+        selected = next((item for item in models if item["id"] == generation.model), None)
+        if selected is None or (generation.localStructured and (not generation.expectedRevision or selected["revision"] != generation.expectedRevision)):
+            raise ProviderError("provider_model_changed" if generation.localStructured else "provider_model", "El modelo local o su revisión han cambiado. Prepara otro plan.")
         async with self.client() as client:
             async with client.stream("POST", self.base + "/api/chat", json={"model": generation.model,
                 "messages": [message.model_dump() for message in generation.messages], "stream": True,
-                "options": {"num_predict": generation.maxOutputTokens}}) as response:
+                "options": {"num_predict": generation.maxOutputTokens},
+                **({"format": "json"} if generation.localStructured else {})}) as response:
                 check(response)
                 async for line in lines(response):
                     if not line:

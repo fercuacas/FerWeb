@@ -14,6 +14,7 @@ import { teamsApi } from './teams-store';
 import { errorMessage } from './workspace-store';
 import { capabilityLabels } from './ExecutionDetails';
 import { TeamPolicySettings } from './TeamRuns';
+import { LocalSpecialistSetup } from './LocalSpecialists';
 
 function RoleChoice({
   project,
@@ -563,6 +564,7 @@ export function TeamTemplates({ project }: { project: Project }) {
       )}
       {data && roles && (
         <>
+          <LocalSpecialistSetup project={project.id} archived={!!project.archivedAt} />
           {!project.archivedAt && !editor && (
             <div className="project-actions">
               <button onClick={() => start()}>Nueva plantilla de equipo</button>

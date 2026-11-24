@@ -8,6 +8,7 @@ import { JobQueue } from './modules/jobs/queue.js';
 import { JobExecutor } from './modules/jobs/executor.js';
 import { RunnerClient } from './modules/jobs/runner-client.js';
 import { codingExecutor } from './modules/jobs/coding-executor.js';
+import { localReadExecutor } from './modules/jobs/local-readonly-executor.js';
 
 try {
   const config = readConfig(),
@@ -32,6 +33,11 @@ try {
         process.env.RUNNER_URL ?? 'http://runner:8010',
         process.env.RUNNER_SERVICE_TOKEN ?? '',
       ),
+      process.env.FERWEB_INTERNAL_API_URL ?? 'http://api:3001',
+      process.env.RUNNER_SERVICE_TOKEN ?? '',
+    ),
+    localReadExecutor(
+      queue,
       process.env.FERWEB_INTERNAL_API_URL ?? 'http://api:3001',
       process.env.RUNNER_SERVICE_TOKEN ?? '',
     ),

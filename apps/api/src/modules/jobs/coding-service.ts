@@ -37,6 +37,7 @@ import { contextLimits } from '@ferweb/contracts';
 import type { ContextPackService } from '../context-packs/service.js';
 import { readRecipePlan, recipeTarget } from './recipe-service.js';
 import { assertTaskReady } from '../projects/work-guard.js';
+import type { LocalReadService } from './local-readonly.js';
 type TeamStepContext = {
   executionId: string;
   stepId: string;
@@ -60,6 +61,7 @@ const incompatible = () =>
     'La versión del rol requiere capacidades o herramientas que Codex no ofrece.',
   );
 export class CodingService {
+  localReads?: LocalReadService;
   contextPacks?: ContextPackService;
   readonly memory: MemoryService;
   readonly projects: ProjectRepository;

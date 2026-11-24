@@ -1880,15 +1880,12 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
           });
           assert.equal(started.status, 202, await started.clone().text());
           const execution = teamExecutionResponse.parse(await started.json()).execution;
-          const data = await waitFor(
-            async () => {
-              const value = await teamDetail(execution.id);
-              return ['completed', 'failed', 'cancelled'].includes(value.execution.state)
-                ? value
-                : false;
-            },
-            rounds === 2 ? 120000 : 60000,
-          ).catch(async () => {
+          const data = await waitFor(async () => {
+            const value = await teamDetail(execution.id);
+            return ['completed', 'failed', 'cancelled'].includes(value.execution.state)
+              ? value
+              : false;
+          }, plan.snapshot.limits.timeoutMs + 10000).catch(async () => {
             const rows = (
               await pool.query(
                 'SELECT s.position,s.iteration,j.state,j.error_code,j.attempt FROM team_execution_steps s LEFT JOIN jobs j ON j.id=s.job_id WHERE s.execution_id=$1 ORDER BY position',

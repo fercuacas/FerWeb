@@ -18,6 +18,7 @@ El simulador E7 habilita exclusivamente `simulation-v1`. No ejecuta código del 
 - Las transacciones de cola fijan un segundo de `idle_in_transaction_session_timeout`, solo durante esa transacción. Un cliente pausado no puede conservar indefinidamente el bloqueo de cola; las conexiones terminadas se descartan del pool. Hay una prueba que pausa expresamente un proceso con el bloqueo adquirido. No se cambia la configuración global de PostgreSQL.
 - `worker` es un servicio Docker independiente de la API. Ejecuta Node compilado y consulta la cola cada 250 ms. Cada intento crea un proceso hijo del simulador mediante IPC, sin heredar argumentos de depuración ni el entorno privado del worker.
 - UUID del trabajo es la correlación común de API, tablas, eventos, logs y resultado; número de intento y UUID de ejecutor completan el diagnóstico. Las generaciones de lease/fence son internas y no se devuelven al navegador.
+- El inicio de un intento se registra con el reloj de la admisión, después de obtener el mutex de cola. La espera previa por el bloqueo no se presenta como ejecución ni produce solapamientos falsos en el historial de concurrencia.
 
 La cola tiene cinco estados: `pending` (pendiente), `running` (ejecutando), `completed` (completado), `failed` (fallido), `cancelled` (cancelado). Un reintento vuelve a pendiente y conserva checkpoint, consumos, intento y eventos. La solicitud de cancelar un trabajo en marcha se muestra mientras se confirma la parada; no se presenta como cancelado inmediatamente sin avisar al proceso.
 

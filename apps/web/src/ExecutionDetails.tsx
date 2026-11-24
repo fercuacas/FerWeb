@@ -4,6 +4,7 @@ export const executionLabels: Record<ExecutionOption['id'], string> = {
   'codex-v1': 'Codex · ejecución de código',
   'openai-chat': 'OpenAI · conversación',
   'ollama-chat': 'Ollama · conversación local',
+  'local-readonly-v1': 'Ollama · especialista local de lectura',
 };
 
 const destinationLabels: Record<ExecutionOption['destination'], string> = {
@@ -43,7 +44,12 @@ export function ExecutionDetails({ option }: { option: ExecutionOption }) {
       <p>
         {option.available ? 'Disponible según configuración' : 'No disponible'} ·{' '}
         {destinationLabels[option.destination]} ·{' '}
-        {option.runtime === 'codex-cli' ? 'Codex CLI' : 'Chat de FerWeb'} ·{' '}
+        {option.runtime === 'codex-cli'
+          ? 'Codex CLI'
+          : option.runtime === 'ferweb-readonly'
+            ? 'Especialista local de lectura'
+            : 'Chat de FerWeb'}{' '}
+        ·{' '}
         {option.toolProfile === 'node-isolated-v1'
           ? 'Herramientas Node aisladas'
           : option.toolProfile === 'node-readonly-v1'

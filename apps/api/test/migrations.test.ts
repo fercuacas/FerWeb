@@ -4,7 +4,8 @@ import { loadMigrations } from '../src/migrations.js';
 
 test('migration discovery is stable and fingerprints SQL content', async () => {
   const first = await loadMigrations();
-  assert.equal(first.length, 26);
+  assert.equal(first.length, 27);
+  assert.equal(first[26]?.name, '027_local_readonly.sql');
   assert.equal(first[25]?.name, '026_task_coordination.sql');
   assert.equal(first[22]?.name, '023_recipe_plans.sql');
   assert.equal(first[21]?.name, '022_learning_proposals.sql');

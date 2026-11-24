@@ -75,6 +75,19 @@ function compatible(
   );
 }
 export class TeamService {
+  private async executionFor(owner: string, project: string, definition: TeamDefinition) {
+    if (definition.inferenceMode === 'local-only') {
+      if (!this.coding.localReads)
+        throw new HttpError(
+          503,
+          'local_read_unconfigured',
+          'El servicio local no está configurado.',
+        );
+      return this.coding.localReads.capabilities(owner, project);
+    }
+    const caps = await this.coding.capabilities(owner, project);
+    return codingOption(caps, definition.toolProfile, definition.strategy === 'specialists');
+  }
   private readonly projects: ProjectRepository;
   private readonly agents: AgentCatalog;
   private readonly skills: SkillLibrary;
@@ -172,12 +185,7 @@ export class TeamService {
     });
   }
   async create(owner: string, project: string, input: z.infer<typeof createTeamTemplateInput>) {
-    const caps = await this.coding.capabilities(owner, project);
-    const execution = codingOption(
-      caps,
-      input.definition.toolProfile,
-      input.definition.strategy === 'specialists',
-    );
+    const execution = await this.executionFor(owner, project, input.definition);
     return this.write(owner, project, async (db) => {
       await this.resolve(db, owner, project, input.definition, execution);
       const count = (
@@ -206,12 +214,7 @@ export class TeamService {
     id: string,
     input: z.infer<typeof updateTeamTemplateInput>,
   ) {
-    const caps = await this.coding.capabilities(owner, project);
-    const execution = codingOption(
-      caps,
-      input.definition.toolProfile,
-      input.definition.strategy === 'specialists',
-    );
+    const execution = await this.executionFor(owner, project, input.definition);
     return this.write(owner, project, async (db) => {
       const current = await this.templateVersion(db, owner, project, id, input.version);
       const head = (await db.query('SELECT latest_version FROM team_templates WHERE id=$1', [id]))
@@ -321,13 +324,8 @@ export class TeamService {
     }
     const task = await this.projects.getTask(owner, project, snapshot.task.id);
     if (task.version !== snapshot.task.version) throw conflict();
-    const caps = await this.coding.capabilities(owner, project);
     const definition = snapshot.template.definition;
-    const execution = codingOption(
-      caps,
-      definition.toolProfile,
-      definition.strategy === 'specialists',
-    );
+    const execution = await this.executionFor(owner, project, definition);
     if (!execution.available || canonical(execution) !== canonical(snapshot.execution))
       throw new HttpError(
         409,
@@ -397,12 +395,47 @@ export class TeamService {
         'team_mode_required',
         'Esta estrategia requiere el equipo completo.',
       );
-    const caps = await this.coding.capabilities(owner, project);
-    const execution = codingOption(
-      caps,
-      selected.definition.toolProfile,
-      selected.definition.strategy === 'specialists',
-    );
+    const local = selected.definition.inferenceMode === 'local-only';
+    if (
+      input.executionId !== (local ? 'local-readonly-v1' : 'codex-v1') ||
+      (!local && input.stepModels)
+    )
+      throw new HttpError(
+        422,
+        'team_inference_mismatch',
+        'El proveedor elegido no coincide con la política del workflow. No se permite fallback.',
+      );
+    const execution = await this.executionFor(owner, project, selected.definition);
+    if (local && !execution.available)
+      throw new HttpError(
+        503,
+        'local_read_unavailable',
+        'No hay un modelo Ollama instalado, permitido y con revisión observada.',
+      );
+    const stepModels = local
+      ? selected.definition.steps.map((step) => {
+          const name =
+            input.stepModels?.find((item) => item.step === step.key)?.model ?? input.model;
+          const model = execution.models.find((item) => item.id === name && item.revision);
+          if (!model)
+            throw new HttpError(
+              422,
+              'team_model_invalid',
+              'Cada rol necesita un modelo local permitido con revisión observada.',
+            );
+          return { step: step.key, model: model.id, revision: model.revision! };
+        })
+      : undefined;
+    if (
+      input.stepModels &&
+      (new Set(input.stepModels.map((m) => m.step)).size !== input.stepModels.length ||
+        input.stepModels.some((m) => !selected.definition.steps.some((s) => s.key === m.step)))
+    )
+      throw new HttpError(
+        422,
+        'team_model_invalid',
+        'Las asignaciones de modelo deben pertenecer a etapas únicas del workflow.',
+      );
     if (
       input.model
         ? !execution.models.some((model) => model.id === input.model)
@@ -423,12 +456,15 @@ export class TeamService {
         const step = selected.definition.steps.find((s) => s.key === key)!;
         const prepared = await this.coding.contextPacks!.prepare(owner, project, {
           ...input.context,
+          ...(local && { executionId: 'local-readonly-v1' as const }),
           requestId: stableId(input.requestId + ':' + key),
           taskId: task.id,
           taskVersion: task.version,
           agent: step.role,
           phase: 'team:' + key,
-          ...(input.model && { model: input.model }),
+          ...((stepModels?.find((m) => m.step === key)?.model ?? input.model) && {
+            model: stepModels?.find((m) => m.step === key)?.model ?? input.model!,
+          }),
           readOnly: selected.definition.strategy === 'specialists',
           ...(selected.definition.toolProfile && { toolProfile: selected.definition.toolProfile }),
           memory: input.memory ?? [],
@@ -477,6 +513,7 @@ export class TeamService {
               .map((step) => ({ ...step, dependsOn: [] }))
           : allSteps;
       const snapshot = teamPlanSnapshot.parse({
+        ...(stepModels && { stepModels }),
         ...(contexts.length && { contexts }),
         ...(input.memory?.length && { memory: input.memory }),
         ...(reviewTarget && { reviewTarget }),
@@ -539,13 +576,8 @@ export class TeamService {
       await this.coding.contextPacks!.assertCurrent(owner, project, item.receipt);
     if (initial.snapshot.memory?.length)
       await this.coding.memory.selections(owner, project, initial.snapshot.memory);
-    const caps = await this.coding.capabilities(owner, project);
     const definition = initial.snapshot.template.definition;
-    const execution = codingOption(
-      caps,
-      definition.toolProfile,
-      definition.strategy === 'specialists',
-    );
+    const execution = await this.executionFor(owner, project, definition);
     return this.write(owner, project, async (db) => {
       const row = await this.planRow(db, owner, project, id);
       const plan = planDto(row);

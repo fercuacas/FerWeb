@@ -7,6 +7,7 @@ import {
   teamDelivery,
   codingReport,
   codingWorkspace,
+  localReadReport,
   type executeTeamPlanInput,
   teamPolicy,
   type updateTeamPolicyInput,
@@ -575,7 +576,7 @@ export class TeamExecutions {
   private async advance(run: QueryResultRow) {
     const steps = (
       await this.pool.query(
-        'SELECT s.*,j.state,j.error_code,c.report,c.files,c.output_files FROM team_execution_steps s LEFT JOIN jobs j ON j.id=s.job_id LEFT JOIN coding_runs c ON c.job_id=j.id WHERE s.execution_id=$1 ORDER BY s.position',
+        'SELECT s.*,j.state,j.error_code,c.report,c.files,c.output_files,l.report AS local_report,l.input_hash AS local_input_hash,l.snapshot AS local_snapshot FROM team_execution_steps s LEFT JOIN jobs j ON j.id=s.job_id LEFT JOIN coding_runs c ON c.job_id=j.id LEFT JOIN local_read_runs l ON l.job_id=j.id WHERE s.execution_id=$1 ORDER BY s.position',
         [run.id],
       )
     ).rows;
@@ -680,6 +681,26 @@ export class TeamExecutions {
     if (!current || current.job_id) return;
     if (run.deadline_at && run.deadline_at <= new Date()) throw conflict('budget_timeout');
     await this.teams.validateSnapshot(run.owner_id, run.project_id, snapshot);
+    if (snapshot.execution.id === 'local-readonly-v1') {
+      if (!this.coding.localReads) throw conflict('local_read_unconfigured');
+      await this.coding.localReads.create(
+        run.owner_id,
+        run.project_id,
+        {
+          id: run.id,
+          stepId: current.id,
+          requestId: current.request_id,
+          budgetId: run.budget_id,
+          commit: run.commit_sha,
+          linkVersion: run.link_version,
+          repositoryId: Number(run.repository_id),
+        },
+        snapshot,
+        current.step_key,
+        completed.map((item) => teamDelivery.parse(item.delivery)),
+      );
+      return;
+    }
     const { link } = await this.coding.github.read(run.owner_id, run.project_id);
     if (
       !link ||
@@ -810,6 +831,47 @@ export class TeamExecutions {
     );
   }
   private async saveDelivery(run: QueryResultRow, current: QueryResultRow, specialists: boolean) {
+    if (run.snapshot.plan.execution.id === 'local-readonly-v1') {
+      const report = current.local_report ? localReadReport.parse(current.local_report) : null;
+      const verified =
+        current.state === 'completed' &&
+        !!report?.delivery &&
+        report.inputHash === current.local_input_hash &&
+        !report.errorCode;
+      const delivery = teamDelivery.parse({
+        jobId: current.job_id,
+        step: current.step_key,
+        result: report?.delivery?.summary ?? '',
+        sources: (current.local_snapshot?.sources ?? []).map(
+          (s: { path: string; hash: string }) => ({ path: s.path, hash: s.hash }),
+        ),
+        inputHash: current.local_input_hash ?? '',
+        outputHash: report?.delivery ? digest(canonical(report.delivery)) : null,
+        tests: [],
+        doubts: [
+          ...(report?.delivery?.limitations ?? []),
+          'Validación local de formato y citas. No verifica corrección semántica ni ejecuta comandos.',
+        ],
+        verified,
+        verification: 'local-structure',
+      });
+      await this.coding.jobs.queue.tx(async (db) => {
+        await db.query('SELECT id FROM team_executions WHERE id=$1 FOR UPDATE', [run.id]);
+        const saved = await db.query(
+          'UPDATE team_execution_steps SET delivery=$2 WHERE id=$1 AND delivery IS NULL RETURNING id',
+          [current.id, delivery],
+        );
+        if (saved.rowCount)
+          await teamEvent(
+            db,
+            run.id,
+            'delivery',
+            'Entrega local guardada. Formato y citas comprobados; contenido sin revisión humana.',
+            { step: current.step_key, jobId: current.job_id, verified },
+          );
+      });
+      return delivery;
+    }
     const snapshot = teamPlanSnapshot.parse(run.snapshot.plan);
     const report = current.report ? codingReport.parse(current.report) : null;
     const output = current.output_files ? codingWorkspace.parse(current.output_files) : null;

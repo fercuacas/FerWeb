@@ -15,6 +15,8 @@ class Generation(BaseModel):
     model: str = Field(min_length=1, max_length=200)
     messages: list[Message] = Field(min_length=1, max_length=201)
     maxOutputTokens: int = Field(ge=1, le=4096)
+    localStructured: bool = False
+    expectedRevision: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 def unknown_usage():

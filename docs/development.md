@@ -23,6 +23,7 @@ Rutas desde la raíz. Las instrucciones están junto al directorio indicado; sui
 | Épicas, dependencias y coordinación GitHub | `projects/coordination.ts`, `projects/work-guard.ts`, `github/work.ts`, `TaskCoordination.tsx` | [Coordinación P18](github.md#épicas-dependencias-y-coordinación-p18) | `coordination.integration.ts`, `coding.integration.ts`, `review.integration.ts`, `work-coordination.spec.ts` |
 | Chat/streaming | `apps/api/src/modules/chat/`, `apps/web/src/Conversations.tsx` | [IA](ai.md) | `chat.integration.ts`, `chat.spec.ts` |
 | Embeddings/proveedores | `apps/ai/ferweb_ai/` | [IA](ai.md), [fuentes](retrieval.md) si aplica | Python; chat/recuperación si cambia protocolo |
+| Especialistas locales | `jobs/local-readonly.ts`, `local-readonly-executor.ts`, equipos, `LocalSpecialists.tsx` | [Lectura local P19](local-specialists.md) | `test_providers.py`, `local-readonly.integration.ts`, `local-specialists.spec.ts`; cola y equipos |
 | Recuperación | `apps/api/src/modules/retrieval/`, `apps/web/src/RepositoryContext.tsx` | [Fuentes](retrieval.md) | `retrieval.integration.ts`, `retrieval.spec.ts` |
 | Comparaciones | `apps/api/src/modules/laboratory/`, `apps/web/src/Laboratory.tsx` | [Laboratorio](laboratory.md) | `laboratory.integration.ts`, `laboratory.spec.ts` |
 | Estrategias de contexto/adopción | `context-*` en laboratorio, captura de recuperación, chat, `apps/web/src/ContextStrategies.tsx` | [Contexto E10](context-optimization.md) | `context.integration.ts`, `context.spec.ts`; chat/recuperación si cambia su contrato |
