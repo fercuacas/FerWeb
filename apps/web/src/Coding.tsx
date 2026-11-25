@@ -45,6 +45,7 @@ export function CodingForm({
   const [agentId, setAgentId] = useState('');
   const [agentVersion, setAgentVersion] = useState(0);
   const [toolProfile, setToolProfile] = useState<CodingToolProfile>('node-isolated-v1');
+  const [executionId, setExecutionId] = useState<'codex-v1' | 'codex-local-v1'>('codex-v1');
   const history = agentsApi.useAgentQuery(agentId ? { project, id: agentId } : skipToken, {
     refetchOnFocus: true,
   });
@@ -58,8 +59,8 @@ export function CodingForm({
   const task = tasks.currentData?.tasks.find((t) => t.id === taskId),
     link = source.currentData?.link;
   const options = caps.error ? undefined : caps.currentData;
-  const execution = options && codingOption(options, toolProfile);
-  const selectedModel = model || options?.models[0] || '';
+  const execution = options && codingOption(options, toolProfile, false, executionId);
+  const selectedModel = model || execution?.models[0]?.id || '';
   const roles = agents.error
     ? []
     : (agents.currentData?.roles.filter((role) => !role.archivedAt) ?? []);
@@ -113,6 +114,7 @@ export function CodingForm({
               taskVersion: task.version,
               commit: link.snapshot.commit,
               model: selectedModel,
+              ...(executionId === 'codex-local-v1' && { executionId }),
               ...(toolProfile === 'typescript-react-v1' && { toolProfile }),
               timeoutMs,
               maxRequests,
@@ -142,6 +144,26 @@ export function CodingForm({
       >
         <fieldset disabled={state.isLoading}>
           <legend>Ejecución sobre un commit fijo</legend>
+          <label>
+            Destino de inferencia Codex
+            <select
+              value={executionId}
+              onChange={(event) => {
+                setExecutionId(event.target.value as typeof executionId);
+                setModel('');
+              }}
+            >
+              <option value="codex-v1">API de OpenAI</option>
+              <option value="codex-local-v1">Ollama local · herramientas en sandbox</option>
+            </select>
+          </label>
+          {executionId === 'codex-local-v1' && (
+            <p>
+              Requiere Ollama 0.13.4 o posterior y un modelo instalado y permitido con herramientas.
+              Codex usa la pasarela local, sin descarga ni fallback. Selección, contexto y pruebas
+              permanecen locales; GitHub conserva su autorización independiente.
+            </p>
+          )}
           <ContextPreparer
             project={project}
             taskId={task?.id ?? ''}
@@ -151,6 +173,7 @@ export function CodingForm({
             }
             model={selectedModel}
             toolProfile={toolProfile}
+            executionId={executionId}
             memory={memory}
             onChange={setContext}
           />
@@ -274,13 +297,15 @@ export function CodingForm({
           <label>
             Modelo Codex
             <select value={selectedModel} onChange={(e) => setModel(e.target.value)}>
-              {selectedModel && !options?.models.includes(selectedModel) && (
+              {selectedModel && !execution?.models.some((item) => item.id === selectedModel) && (
                 <option value={selectedModel} disabled>
                   Modelo seleccionado no permitido
                 </option>
               )}
-              {options?.models.map((m) => (
-                <option key={m}>{m}</option>
+              {execution?.models.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.id}
+                </option>
               ))}
             </select>
           </label>
@@ -542,6 +567,16 @@ export function CodingView({
             {report.simulated ? 'Proveedor simulado · ' : ''}Codex CLI {report.cliVersion} ·{' '}
             {report.model}
           </p>
+          {report.execution && (
+            <p className="skill-text">
+              Inferencia:{' '}
+              {report.execution.provider === 'ollama'
+                ? 'Ollama local · sin fallback externo'
+                : 'API de OpenAI'}{' '}
+              · Revisión observada: {report.execution.modelRevision ?? 'Desconocida'}. La parada
+              remota de la inferencia es desconocida.
+            </p>
+          )}
           <h4>Resumen del trabajo</h4>
           <p style={{ whiteSpace: 'pre-wrap' }}>
             {report.summary || 'Aún no hay resumen del agente.'}

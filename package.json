@@ -25,7 +25,7 @@
     "docker:format": "node scripts/docker.mjs format",
     "build": "npm run build -w @ferweb/contracts && npm run build -w @ferweb/api && npm run build -w @ferweb/web",
     "typecheck": "npm run build -w @ferweb/contracts && npm run typecheck --workspaces --if-present",
-    "test": "npm run build -w @ferweb/contracts && node --import tsx --test apps/api/test/app.test.ts apps/api/test/migrations.test.ts apps/api/test/identity.test.ts apps/api/test/coding-boundaries.test.ts apps/api/test/observability.test.ts apps/api/test/context-ranking.test.ts apps/api/test/local-readonly.test.ts",
+    "test": "npm run build -w @ferweb/contracts && node --import tsx --test apps/api/test/app.test.ts apps/api/test/migrations.test.ts apps/api/test/identity.test.ts apps/api/test/coding-boundaries.test.ts apps/api/test/observability.test.ts apps/api/test/context-ranking.test.ts apps/api/test/local-readonly.test.ts apps/api/test/local-coding.test.ts",
     "test:browser": "npm run build && node scripts/test-browser.mjs",
     "test:integration": "node --env-file-if-exists=.env --import tsx --test --test-concurrency=1 apps/api/test/database.integration.ts apps/api/test/workspace.integration.ts apps/api/test/github.integration.ts apps/api/test/coordination.integration.ts apps/api/test/local-readonly.integration.ts apps/api/test/chat.integration.ts apps/api/test/retrieval.integration.ts apps/api/test/laboratory.integration.ts apps/api/test/jobs.integration.ts apps/api/test/coding.integration.ts apps/api/test/review.integration.ts apps/api/test/context.integration.ts apps/api/test/memory.integration.ts apps/api/test/context-packs.integration.ts",
     "db:migrate": "node scripts/docker.mjs migrate",

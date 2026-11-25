@@ -23,15 +23,23 @@ export function DimensionalReviewPanel({
   const [templateId, setTemplate] = useState(''),
     [model, setModel] = useState(''),
     [selected, setSelected] = useState('');
+  const sourceLocal = run.environment?.inference === 'local-ollama';
   const available = templates.error
     ? []
     : (templates.currentData?.templates.filter(
-        (t) => !t.archivedAt && t.latest.definition.reviewMode,
+        (t) =>
+          !t.archivedAt &&
+          t.latest.definition.reviewMode &&
+          (!sourceLocal || t.latest.definition.inferenceMode === 'local-coding-only'),
       ) ?? []);
+  const chosen = available.find((t) => t.id === templateId);
+  const local = sourceLocal || chosen?.latest.definition.inferenceMode === 'local-coding-only';
   const modes = capabilities.error
     ? []
-    : (capabilities.currentData?.readOnlyExecution.models ?? []);
-  const chosen = available.find((t) => t.id === templateId);
+    : ((local
+        ? capabilities.currentData?.localReadOnlyExecution
+        : capabilities.currentData?.readOnlyExecution
+      )?.models ?? []);
   const projectData = projectQuery.error ? undefined : projectQuery.currentData?.project;
   const effectiveModel = modes.some((m) => m.id === model) ? model : (modes[0]?.id ?? '');
   const history = plans.error
@@ -98,7 +106,7 @@ export function DimensionalReviewPanel({
                   templateId: chosen.id,
                   templateVersion: chosen.latest.version,
                   mode: 'team',
-                  executionId: 'codex-v1',
+                  executionId: local ? 'codex-local-v1' : 'codex-v1',
                   model: effectiveModel,
                 },
               })
@@ -107,6 +115,13 @@ export function DimensionalReviewPanel({
                 .catch(() => {});
             }}
           >
+            {sourceLocal && (
+              <p>
+                Esta ejecución conserva inferencia local en todos sus revisores. La plantilla debe
+                usar la política Codex con Ollama local; no se permite un evaluador cloud como
+                fallback.
+              </p>
+            )}
             {!available.length && (
               <p>
                 Crea una plantilla «Revisión por dimensiones» desde Agentes → Equipos y plantillas y

@@ -14,11 +14,13 @@ Se integra **Codex CLI 0.166.0**, fijado en [Dockerfile del sandbox](../apps/san
 4. Si hay CA local de inspección HTTPS, se usa para construir la CLI y, mediante `compose.codex-ca.yaml`, para verificar TLS en la pasarela. No se desactiva TLS ni se entrega la configuración privada al sandbox.
 5. Comprobar capacidades en la web. Sin clave/configuración válida se muestra indisponible: no hay fallback a ChatGPT, otro modelo, Ollama ni credenciales de la aplicación Codex del anfitrión.
 
-La integración usa facturación/autenticación por API. No copia `~/.codex/auth.json`, sesiones de escritorio o sus permisos del ordenador. El modelo recibe el contexto de la tarea y del snapshot por la API de OpenAI configurada; el código no obtiene la clave. La aceptación real con una clave/modelo concretos es una prueba explícita, nunca parte de los tests automáticos.
+El destino OpenAI usa facturación/autenticación por API. No copia `~/.codex/auth.json`, sesiones de escritorio o sus permisos del ordenador. En ese destino el modelo recibe el contexto de la tarea y del snapshot por la API de OpenAI configurada; el código no obtiene la clave. La aceptación real con una clave/modelo concretos es una prueba explícita, nunca parte de los tests automáticos.
 
-En **Estado → Consultar capacidades**, una sesión autenticada puede consultar las opciones Codex, OpenAI para conversaciones y Ollama para conversaciones. El formulario de Codex muestra su diagnóstico por proyecto y distingue destino real, proveedor simulado y destino sin confirmar. Los estados de soporte describen lo que ofrece FerWeb con cada perfil. La opción de chat local ofrece texto, streaming y solicitud de cancelación. La confirmación de parada remota y el uso real dependen de la evidencia recibida.
+P20 añade el destino explícito **Ollama local** con la misma CLI y herramientas aisladas, sin exigir clave OpenAI y sin fallback externo. Su catálogo, configuración, política de equipos y aceptación están en [código local](local-coding.md). La configuración API anterior sigue correspondiendo al destino OpenAI.
 
-La revisión de configuración del ejecutor es una huella del entorno anunciado, la lista de modelos y la disponibilidad. La revisión individual de sus modelos queda desconocida. En chat se usa la revisión opaca del catálogo existente. La consulta comprueba configuración y catálogos. La aceptación de inferencia y herramientas con un modelo real se verifica por separado.
+En **Estado → Consultar capacidades**, una sesión autenticada puede consultar Codex con API o inferencia local, OpenAI para conversaciones y Ollama para conversaciones. El formulario de Codex muestra su diagnóstico por proyecto y distingue destino real, proveedor simulado y destino sin confirmar. Los estados de soporte describen lo que ofrece FerWeb con cada perfil. La opción de chat local ofrece texto, streaming y solicitud de cancelación. La confirmación de parada remota y el uso real dependen de la evidencia recibida.
+
+La revisión de configuración del ejecutor es una huella del entorno anunciado, la lista de modelos y la disponibilidad. La revisión individual de los modelos del destino OpenAI queda desconocida; el destino local observa el digest de Ollama. En chat se usa la revisión opaca del catálogo existente. La consulta comprueba configuración y catálogos. La aceptación de inferencia y herramientas con un modelo real se verifica por separado.
 
 ## Tarea y commit congelados
 
@@ -62,11 +64,11 @@ Web → API → PostgreSQL: tarea, snapshot, cola, eventos e informe
        worker → runner de confianza → Docker Engine
                  ├─ contenedor de código sin red general ni secretos
                  │    Codex → proxy loopback → socket Unix de esta ejecución
-                 ├─ pasarela → https://api.openai.com/v1/responses
+                 ├─ pasarela → OpenAI Responses u Ollama local, según destino congelado
                  └─ recolector independiente: volumen final en solo lectura
 ```
 
-`runner` es un componente de control **de confianza** con acceso al socket Docker y a la clave OpenAI. No ejecuta código del repositorio en su propio proceso ni lo monta como fuente ejecutable. Su API no publica puerto en Windows y requiere un token interno; operaciones sobre una ejecución requieren además su generación. Docker socket implica autoridad sobre el motor: comprometer este controlador comprometería esa frontera. No es un proxy Docker genérico ofrecido a la web.
+`runner` es un componente de control **de confianza** con acceso al socket Docker y a la configuración privada de inferencia, incluida la clave OpenAI cuando se configura ese destino. No ejecuta código del repositorio en su propio proceso ni lo monta como fuente ejecutable. Su API no publica puerto en Windows y requiere un token interno; operaciones sobre una ejecución requieren además su generación. Docker socket implica autoridad sobre el motor: comprometer este controlador comprometería esa frontera. No es un proxy Docker genérico ofrecido a la web.
 
 Cada trabajo obtiene un contenedor y un volumen temporal propios. Los volúmenes de control se montan por subdirectorio de ejecución, en lectura: el código no ve entradas ni sockets de otros trabajos. No se monta la carpeta del anfitrión, PostgreSQL, claves de GitHub/OpenAI, sockets del anfitrión ni herramientas de control de FerWeb.
 
@@ -76,18 +78,18 @@ El controlador negocia la API del motor por el socket local. Admite de 1.45 a 1.
 
 ## Límites efectivos
 
-| Recurso | Límite aplicado |
-| --- | --- |
-| Identidad | Codex, shell, código y tests con UID/GID 1000, sin capacidades y `no-new-privileges`. Supervisor root separado, con solo SETUID/SETGID para lanzar ese usuario. |
-| Archivos | Raíz de solo lectura; workspace exclusivo temporal de 64 MiB; `/tmp` 128 MiB y home 64 MiB temporales, `nosuid/noexec`. Sin montajes de fuentes del anfitrión. El código puede leer herramientas/archivos públicos de la imagen. |
-| Herramientas | Shell, Node, npm, Git y ripgrep de la imagen. No hay comandos del cliente ejecutados en el controlador. No se cargan configuración MCP, reglas o AGENTS del repositorio; multiagente y búsqueda web desactivados. |
-| Red | Namespace Docker `none`, solo loopback. La pasarela por trabajo admite Responses y, para especialistas P07, mensajes/inbox de ese equipo. No hay DNS/red general, Git remoto, instalación de paquetes ni acceso general a API/base de FerWeb desde el código. |
-| Modelo | Modelo fijo permitido por servidor; 1–20 peticiones admitidas y cuerpo acotado; la pasarela fija `max_output_tokens` entre 64 y 8192, `store=false` y clave de caché de ejecución. Rechaza herramientas alojadas, referencias a conversaciones/respuestas ajenas, archivos remotos y rutas arbitrarias. |
-| CPU/memoria/procesos | Una CPU, 768 MiB, swap limitado al mismo total y 128 PIDs por contenedor de código. Descriptores 1024. El recolector tiene 0,5 CPU, 128 MiB, 16 PIDs y ningún privilegio/red. |
-| Tiempo | 10 segundos–20 minutos desde primera asignación. Lease SQL renovable; supervisor root comprueba lease por socket cada 500 ms y sale si pierde control. El plazo también se vigila dentro del contenedor. |
-| Concurrencia | Dos trabajos globales y uno por proyecto por defecto; P07 admite dos especialistas del mismo equipo con configuración explícita. El controlador admite como máximo dos ejecuciones activas. |
-| Verificación | `node --test` con reporter de confianza en Node aislado, comprobación estática estricta en TypeScript/React y verificador de snapshot/montaje para especialistas P07. El controlador fija el comando, hasta 20 segundos y salida acotada. |
-| Artefactos | Lectura final acotada, solo archivos regulares UTF-8; sin enlaces/especiales, hasta 100 archivos y 1 MB. Diff de texto máximo 600 KB; exceso/fallo no se presenta como diff completo. |
+| Recurso              | Límite aplicado                                                                                                                                                                                                                                                                                                                                                  |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Identidad            | Codex, shell, código y tests con UID/GID 1000, sin capacidades y `no-new-privileges`. Supervisor root separado, con solo SETUID/SETGID para lanzar ese usuario.                                                                                                                                                                                                  |
+| Archivos             | Raíz de solo lectura; workspace exclusivo temporal de 64 MiB; `/tmp` 128 MiB y home 64 MiB temporales, `nosuid/noexec`. Sin montajes de fuentes del anfitrión. El código puede leer herramientas/archivos públicos de la imagen.                                                                                                                                 |
+| Herramientas         | Shell, Node, npm, Git y ripgrep de la imagen. No hay comandos del cliente ejecutados en el controlador. No se cargan configuración MCP, reglas o AGENTS del repositorio; multiagente y búsqueda web desactivados.                                                                                                                                                |
+| Red                  | Namespace Docker `none`, solo loopback. La pasarela por trabajo admite Responses y, para especialistas P07, mensajes/inbox de ese equipo. No hay DNS/red general, Git remoto, instalación de paquetes ni acceso general a API/base de FerWeb desde el código.                                                                                                    |
+| Modelo               | Modelo fijo permitido por servidor; 1–20 peticiones admitidas y cuerpo acotado; salida entre 64 y 8192 tokens solicitados. La API fija `store=false` y clave de caché; la vía local usa solicitudes stateless con los campos nativos admitidos. Sin herramientas alojadas, referencias a conversaciones/respuestas ajenas, archivos remotos o rutas arbitrarias. |
+| CPU/memoria/procesos | Una CPU, 768 MiB, swap limitado al mismo total y 128 PIDs por contenedor de código. Descriptores 1024. El recolector tiene 0,5 CPU, 128 MiB, 16 PIDs y ningún privilegio/red.                                                                                                                                                                                    |
+| Tiempo               | 10 segundos–20 minutos desde primera asignación. Lease SQL renovable; supervisor root comprueba lease por socket cada 500 ms y sale si pierde control. El plazo también se vigila dentro del contenedor.                                                                                                                                                         |
+| Concurrencia         | Dos trabajos globales y uno por proyecto por defecto; P07 admite dos especialistas del mismo equipo con configuración explícita. El controlador admite como máximo dos ejecuciones activas.                                                                                                                                                                      |
+| Verificación         | `node --test` con reporter de confianza en Node aislado, comprobación estática estricta en TypeScript/React y verificador de snapshot/montaje para especialistas P07. El controlador fija el comando, hasta 20 segundos y salida acotada.                                                                                                                        |
+| Artefactos           | Lectura final acotada, solo archivos regulares UTF-8; sin enlaces/especiales, hasta 100 archivos y 1 MB. Diff de texto máximo 600 KB; exceso/fallo no se presenta como diff completo.                                                                                                                                                                            |
 
 El código podría llamar directamente a su pasarela de modelo: no es una credencial general, pero puede consumir el cupo reservado a esa tarea. El contador y la política se aplican en el controlador también a esas peticiones. No se afirma un límite monetario exacto ni un presupuesto exacto de tokens de entrada. La aceptación real del límite de salida depende de la API/modelo configurados y sigue pendiente de prueba explícita.
 
@@ -179,10 +181,10 @@ El contexto opcional de [P10](context-packs.md) prepara mapa, skills revisadas, 
 
 En **Trabajos → Nueva tarea con Codex**, elige **Perfil de herramientas**. Los roles indican qué perfiles admiten en **Agentes**, y el formulario filtra sus versiones y skills vinculadas según el perfil elegido. Las plantillas secuenciales también pueden fijarlo para sus etapas. Los especialistas siguen usando el perfil de fuentes de solo lectura.
 
-| Perfil | Imagen de referencia | Verificación del controlador |
-| --- | --- | --- |
-| Node aislado | `ferweb-codex-sandbox:0.166.0` | `node --test` |
-| TypeScript/React aislado | `ferweb-codex-typescript:1` | `tsc --project /opt/ferweb/typescript/tsconfig.json` |
+| Perfil                   | Imagen de referencia           | Verificación del controlador                         |
+| ------------------------ | ------------------------------ | ---------------------------------------------------- |
+| Node aislado             | `ferweb-codex-sandbox:0.166.0` | `node --test`                                        |
+| TypeScript/React aislado | `ferweb-codex-typescript:1`    | `tsc --project /opt/ferweb/typescript/tsconfig.json` |
 
 TypeScript/React usa Node 24.22.2, TypeScript 7.0.2 y declaraciones React/React DOM 19.3.0. Comprueba fuentes TypeScript y JSX del snapshot filtrado con configuración estricta y [`noEmit`](https://www.typescriptlang.org/tsconfig/noEmit.html). La evidencia es una comprobación estática. La ejecución de React en navegador, las pruebas propias del repositorio y el soporte de dependencias o aliases arbitrarios quedan fuera de esta comprobación.
 

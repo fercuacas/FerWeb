@@ -18,6 +18,7 @@ import {
 import { HttpError } from '../../http-error.js';
 import {
   codingEnvironment,
+  describeLocalCoding,
   describeCoding,
   describeReadOnlyCoding,
 } from '../../execution-capabilities.js';
@@ -88,6 +89,10 @@ export class CodingService {
       simulated: caps.simulated,
       environment: caps.environment,
       typescriptEnvironment: caps.typescriptEnvironment,
+      local: caps.local,
+      localExecution: describeLocalCoding(caps),
+      localReadOnlyExecution: describeLocalCoding(caps, 'node-isolated-v1', true),
+      localTypescriptExecution: describeLocalCoding(caps, 'typescript-react-v1'),
       execution: describeCoding(caps),
       readOnlyExecution: describeReadOnlyCoding(caps),
       typescriptExecution: describeCoding(caps, 'typescript-react-v1'),
@@ -244,30 +249,41 @@ export class CodingService {
         'El material ya no coincide con la versión del rol.',
       );
     const capabilities = await this.runner.capabilities();
-    const environment = codingEnvironment(capabilities, input.toolProfile);
+    const local = input.executionId === 'codex-local-v1';
+    const environment = codingEnvironment(capabilities, input.toolProfile, input.executionId);
     if (input.toolProfile === 'typescript-react-v1' && !environment)
       throw new HttpError(
         503,
         'coding_profile_unavailable',
         'El ejecutor no confirma la imagen del perfil TypeScript/React.',
       );
-    if (!capabilities.available || !capabilities.models.includes(input.model) || !environment)
+    if (
+      !(local
+        ? capabilities.local?.available &&
+          capabilities.local.models.some((model) => model.id === input.model)
+        : capabilities.available && capabilities.models.includes(input.model)) ||
+      !environment
+    )
       throw new HttpError(
         503,
-        'codex_unconfigured',
-        capabilities.available &&
-          capabilities.models.length &&
-          !capabilities.models.includes(input.model)
-          ? 'El modelo no está permitido para el ejecutor Codex.'
-          : 'Configura Codex en el servidor y selecciona un modelo permitido.',
+        local ? 'local_coding_unconfigured' : 'codex_unconfigured',
+        local
+          ? 'Ollama local requiere servidor compatible y un modelo instalado, permitido y con herramientas.'
+          : capabilities.available &&
+              capabilities.models.length &&
+              !capabilities.models.includes(input.model)
+            ? 'El modelo no está permitido para el ejecutor Codex.'
+            : 'Configura Codex en el servidor y selecciona un modelo permitido.',
       );
     const readOnly =
       team?.snapshot.template.definition.strategy === 'specialists' ||
       recipe?.snapshot.definition.mode === 'read';
     if (readOnly && input.toolProfile === 'typescript-react-v1') throw incompatible();
-    const option = readOnly
-      ? describeReadOnlyCoding(capabilities)
-      : describeCoding(capabilities, input.toolProfile);
+    const option = local
+      ? describeLocalCoding(capabilities, input.toolProfile, readOnly)
+      : readOnly
+        ? describeReadOnlyCoding(capabilities)
+        : describeCoding(capabilities, input.toolProfile);
     if (contextPack && canonical(contextPack.execution) !== canonical(option)) throw changed();
     if (team && canonical(option) !== canonical(team.snapshot.execution)) throw changed();
     if (
@@ -348,6 +364,11 @@ export class CodingService {
     if (fresh.version !== link.version || fresh.stale || fresh.snapshot?.commit !== input.commit)
       throw changed();
     const configuration = codingConfiguration.parse({
+      ...(local && {
+        executionId: 'codex-local-v1',
+        modelRevision: capabilities.local!.models.find((model) => model.id === input.model)!
+          .revision,
+      }),
       ...(input.toolProfile && { toolProfile: input.toolProfile }),
       ...(input.contextReceipt && { contextReceipt: input.contextReceipt }),
       ...(input.memory?.length && { memory: input.memory }),
@@ -589,6 +610,19 @@ export class CodingService {
     ).rows[0];
     if (!row) throw missing();
     await this.access(row.owner_id, row.project_id, Number(row.repository_id));
+    if (row.configuration.executionId === 'codex-local-v1') {
+      const caps = await this.runner.capabilities();
+      if (
+        !caps.local?.models.some(
+          (model) =>
+            model.id === row.configuration.model &&
+            model.revision === row.configuration.modelRevision,
+        ) ||
+        canonical(codingEnvironment(caps, row.configuration.toolProfile, 'codex-local-v1')) !==
+          canonical(row.environment)
+      )
+        throw changed();
+    }
     const contextPack = row.context_receipt_id
       ? await this.contextPacks!.jobContext(
           row.owner_id,
@@ -852,6 +886,10 @@ export class CodingService {
       files: row.files,
       environment: row.environment,
       model: row.configuration.model,
+      ...(row.configuration.executionId === 'codex-local-v1' && {
+        executionId: 'codex-local-v1',
+        modelRevision: row.configuration.modelRevision,
+      }),
       maxRequests: row.configuration.maxRequests,
       maxOutputTokens: row.configuration.maxOutputTokens,
       deadlineAt: row.deadline_at.toISOString(),
@@ -913,11 +951,13 @@ export class CodingService {
         );
     }
     if (
-      !caps.available ||
-      !caps.models.includes(input.model) ||
+      !(source.configuration.executionId === 'codex-local-v1'
+        ? caps.local?.available && caps.local.models.some((model) => model.id === input.model)
+        : caps.available && caps.models.includes(input.model)) ||
       !source.environment ||
-      canonical(codingEnvironment(caps, source.configuration.toolProfile)) !==
-        canonical(source.environment)
+      canonical(
+        codingEnvironment(caps, source.configuration.toolProfile, source.configuration.executionId),
+      ) !== canonical(source.environment)
     )
       throw new HttpError(
         409,
@@ -927,9 +967,15 @@ export class CodingService {
     const configuration = codingConfiguration.parse({
       ...source.configuration,
       model: input.model,
+      ...(source.configuration.executionId === 'codex-local-v1' && {
+        modelRevision: caps.local!.models.find((model) => model.id === input.model)!.revision,
+      }),
     });
     const agent = source.agent_snapshot ? codingAgentSnapshot.parse(source.agent_snapshot) : null;
-    const option = describeCoding(caps, configuration.toolProfile);
+    const option =
+      configuration.executionId === 'codex-local-v1'
+        ? describeLocalCoding(caps, configuration.toolProfile)
+        : describeCoding(caps, configuration.toolProfile);
     if (agent && ![agent, ...(agent.materials ?? [])].every((item) => supportsAgent(item, option)))
       throw incompatible();
     const id = await this.jobs.queue.tx(async (db) => {

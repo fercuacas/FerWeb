@@ -195,6 +195,7 @@ export function ContextPreparer({
   agent,
   model,
   toolProfile,
+  executionId,
   memory,
   onChange,
 }: {
@@ -204,6 +205,7 @@ export function ContextPreparer({
   agent: z.infer<typeof agentSelection> | undefined;
   model: string;
   toolProfile: CodingToolProfile;
+  executionId?: 'codex-v1' | 'codex-local-v1';
   memory: z.infer<typeof memorySelections>;
   onChange: (s: ContextSelection) => void;
 }) {
@@ -231,6 +233,7 @@ export function ContextPreparer({
     model,
     memory,
     toolProfile,
+    executionId,
   ]);
   useEffect(() => {
     setReference(null);
@@ -241,6 +244,7 @@ export function ContextPreparer({
     !!current &&
     current.valid &&
     current.snapshot.execution.toolProfile === toolProfile &&
+    current.snapshot.execution.id === (executionId ?? 'codex-v1') &&
     current.snapshot.task.id === taskId &&
     current.snapshot.task.version === taskVersion &&
     current.snapshot.agent?.id === agent?.id &&
@@ -373,6 +377,7 @@ export function ContextPreparer({
                   taskVersion,
                   ...(agent && { agent }),
                   ...(model && { model }),
+                  ...(executionId === 'codex-local-v1' && { executionId }),
                   ...(toolProfile === 'typescript-react-v1' && { toolProfile }),
                   profile,
                   mode,

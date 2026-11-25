@@ -11,11 +11,12 @@ const executionUnavailableReason = z.enum([
   'provider_unconfigured',
   'provider_unavailable',
   'no_allowed_models',
+  'local_server_incompatible',
 ]);
 export type ExecutionUnavailableReason = z.infer<typeof executionUnavailableReason>;
 
 export const executionOptionSchema = z.object({
-  id: z.enum(['codex-v1', 'openai-chat', 'ollama-chat', 'local-readonly-v1']),
+  id: z.enum(['codex-v1', 'codex-local-v1', 'openai-chat', 'ollama-chat', 'local-readonly-v1']),
   provider: aiProviderSchema,
   runtime: z.enum(['codex-cli', 'ferweb-chat', 'ferweb-readonly']),
   destination: z.enum(['openai-api', 'local-ollama', 'simulated', 'unknown']),

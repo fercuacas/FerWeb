@@ -1,0 +1,8 @@
+{
+  "apiKey": null,
+  "models": [],
+  "local": {
+    "url": "http://host.docker.internal:11434",
+    "models": ["replace-with-installed-model:tag"]
+  }
+}

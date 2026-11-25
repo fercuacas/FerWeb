@@ -10,25 +10,33 @@ import { recipeReference } from './recipes.js';
 export const codingAgentSnapshot = agentSnapshot.extend({
   materials: z.array(skillVersion).max(3).optional(),
 });
-export const codingConfiguration = z.strictObject({
-  toolProfile: codingToolProfile.optional(),
-  contextReceipt: contextReceiptReference.optional(),
-  memory: memorySelections.optional(),
-  workspaceAccess: z.literal('read-only').optional(),
-  recipe: recipeReference.optional(),
-  taskId: z.uuid(),
-  commit: z.string().regex(/^[a-f0-9]{40}$/),
-  model: z.string().min(1).max(100),
-  maxRequests: z.number().int().min(1).max(20),
-  maxOutputTokens: z.number().int().min(64).max(8192),
-  budgetLimits: executionBudgetLimits.optional(),
-  budgetAttribution: usageAttribution.optional(),
-  limits: z.strictObject({
-    timeoutMs: z.number().int().min(10000).max(1200000),
-    maxAttempts: z.literal(1),
-  }),
-});
+export const codingConfiguration = z
+  .strictObject({
+    executionId: z.enum(['codex-v1', 'codex-local-v1']).optional(),
+    modelRevision: z.string().min(1).max(200).optional(),
+    toolProfile: codingToolProfile.optional(),
+    contextReceipt: contextReceiptReference.optional(),
+    memory: memorySelections.optional(),
+    workspaceAccess: z.literal('read-only').optional(),
+    recipe: recipeReference.optional(),
+    taskId: z.uuid(),
+    commit: z.string().regex(/^[a-f0-9]{40}$/),
+    model: z.string().min(1).max(100),
+    maxRequests: z.number().int().min(1).max(20),
+    maxOutputTokens: z.number().int().min(64).max(8192),
+    budgetLimits: executionBudgetLimits.optional(),
+    budgetAttribution: usageAttribution.optional(),
+    limits: z.strictObject({
+      timeoutMs: z.number().int().min(10000).max(1200000),
+      maxAttempts: z.literal(1),
+    }),
+  })
+  .refine(
+    (value) => (value.executionId === 'codex-local-v1') === !!value.modelRevision,
+    'El motor local requiere una revisión observada; el motor API no la admite.',
+  );
 export const codingInput = z.strictObject({
+  executionId: z.enum(['codex-v1', 'codex-local-v1']).optional(),
   toolProfile: codingToolProfile.optional(),
   contextReceipt: contextReceiptReference.optional(),
   memory: memorySelections.optional(),
@@ -45,6 +53,19 @@ export const codingInput = z.strictObject({
   attribution: usageAttribution.optional(),
 });
 export const codingCapabilities = z.object({
+  local: z
+    .object({
+      available: z.boolean(),
+      models: z
+        .array(z.object({ id: z.string().min(1).max(100), revision: z.string().min(1).max(200) }))
+        .max(20),
+      version: z.string().nullable(),
+      simulated: z.boolean(),
+      configurationRevision: z.string().nullable(),
+      reason: z.string().nullable(),
+    })
+    .nullable()
+    .optional(),
   available: z.boolean(),
   models: z.array(z.string()),
   simulated: z.boolean(),
@@ -62,6 +83,9 @@ export const codingCapabilities = z.object({
     .default(null),
 });
 export const codingCapabilitiesResponse = codingCapabilities.extend({
+  localExecution: executionOptionSchema.optional(),
+  localReadOnlyExecution: executionOptionSchema.optional(),
+  localTypescriptExecution: executionOptionSchema.optional(),
   execution: executionOptionSchema,
   readOnlyExecution: executionOptionSchema,
   typescriptExecution: executionOptionSchema,
@@ -70,7 +94,26 @@ export function codingOption(
   caps: z.infer<typeof codingCapabilitiesResponse>,
   profile?: CodingToolProfile,
   readOnly?: boolean,
+  executionId?: string,
 ) {
+  if (executionId === 'codex-local-v1') {
+    const option = readOnly
+      ? caps.localReadOnlyExecution
+      : profile === 'typescript-react-v1'
+        ? caps.localTypescriptExecution
+        : caps.localExecution;
+    return (
+      option ?? {
+        ...caps.execution,
+        id: 'codex-local-v1' as const,
+        provider: 'ollama' as const,
+        destination: 'unknown' as const,
+        available: false,
+        reason: 'runner_unavailable' as const,
+        models: [],
+      }
+    );
+  }
   if (readOnly) return caps.readOnlyExecution;
   return profile === 'typescript-react-v1' ? caps.typescriptExecution : caps.execution;
 }
@@ -111,6 +154,18 @@ export const codingControls = z.object({
     .refine((events) => new Set(events.map((event) => event.id)).size === 4),
 });
 export const codingReport = z.object({
+  execution: z
+    .strictObject({
+      runtime: z.literal('codex-cli'),
+      provider: z.enum(['openai', 'ollama']),
+      localOnly: z.boolean(),
+      modelRevision: z.string().nullable(),
+      configurationRevision: z.string().nullable(),
+      serverVersion: z.string().nullable(),
+      reportedModel: z.string().nullable(),
+      remoteCancellationConfirmed: z.null(),
+    })
+    .optional(),
   integration: z
     .object({
       baseHash: z.string().regex(/^[a-f0-9]{64}$/),

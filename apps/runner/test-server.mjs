@@ -1,7 +1,10 @@
 // Test entry point only. Production server.mjs cannot select this provider.
 import { createController } from './controller.mjs';
+import { createLocalFixture } from './local-fixture.mjs';
 let sequence = 0;
+let cloudRequests = 0;
 async function fakeProvider(run, value, res) {
+  cloudRequests++;
   if (
     run.input.task.title === 'P10 bounded context' &&
     !JSON.stringify(value.input).includes(
@@ -317,9 +320,21 @@ function dimensionalFixture(run, context) {
   };
   return JSON.stringify({ findings: context.dimension === 'security-tests' ? [] : [common] });
 }
+const localFixture = await createLocalFixture(
+  () => cloudRequests,
+  process.env.RUNNER_SERVICE_TOKEN,
+);
 const controller = await createController({
   token: process.env.RUNNER_SERVICE_TOKEN,
-  configuration: { apiKey: null, models: ['fixture-codex'] },
+  configuration: {
+    apiKey: null,
+    models: ['fixture-codex'],
+    local: {
+      url: 'http://127.0.0.1:8011',
+      models: ['fixture-local', 'fixture-no-tools', 'fixture-alias'],
+    },
+  },
+  localSimulated: true,
   fakeProvider,
   namespace: process.env.RUNNER_NAMESPACE,
   volume: process.env.RUNNER_RUNTIME_VOLUME,
@@ -352,4 +367,7 @@ controller.server.prependListener('request', (req, res) => {
   };
 });
 controller.server.listen(8010, '0.0.0.0');
-process.on('SIGTERM', () => void controller.close().then(() => process.exit(0)));
+process.on(
+  'SIGTERM',
+  () => void Promise.all([controller.close(), localFixture.close()]).then(() => process.exit(0)),
+);

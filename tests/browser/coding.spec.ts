@@ -26,7 +26,10 @@ test('Codex task UI freezes a commit, shows a verified diff, reloads evidence an
     diagnostics.getByRole('heading', { name: 'Ollama · conversación local' }),
   ).toBeVisible();
   await expect(
-    diagnostics.getByText(/Proveedor simulado.*Herramientas Node aisladas/),
+    diagnostics
+      .getByRole('heading', { name: 'Codex · ejecución de código', exact: true })
+      .locator('..')
+      .getByText(/Proveedor simulado.*Herramientas Node aisladas/),
   ).toBeVisible();
   await expect(diagnostics.getByText(/Chat de FerWeb.*Solo texto/).first()).toBeVisible();
   const origin = new URL(process.env.FERWEB_URL!).origin;

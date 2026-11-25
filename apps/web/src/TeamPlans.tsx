@@ -143,7 +143,7 @@ export function PlanDetails({ project, id }: { project: Project; id: string }) {
                   Inferencia del rol:{' '}
                   {plan.snapshot.execution.id === 'local-readonly-v1'
                     ? `Ollama local · ${plan.snapshot.stepModels?.find((m) => m.step === step.key)?.model}`
-                    : `API · ${plan.snapshot.model ?? 'Sin modelo'}`}
+                    : `${plan.snapshot.execution.id === 'codex-local-v1' ? 'Codex + Ollama local' : 'API'} · ${plan.snapshot.model ?? 'Sin modelo'}`}
                 </p>
                 <p>
                   Capacidades:{' '}
@@ -274,7 +274,12 @@ function PlansContent({ project }: { project: Project }) {
       ? undefined
       : localCapabilities.currentData?.execution
     : !capabilities.error && capabilities.currentData
-      ? codingOption(capabilities.currentData, template?.definition.toolProfile, specialists)
+      ? codingOption(
+          capabilities.currentData,
+          template?.definition.toolProfile,
+          specialists,
+          template?.definition.inferenceMode === 'local-coding-only' ? 'codex-local-v1' : undefined,
+        )
       : undefined;
   const effectiveModel = execution?.models.some((item) => item.id === model)
     ? model
@@ -313,7 +318,11 @@ function PlansContent({ project }: { project: Project }) {
           templateVersion: template.version,
           mode: specialists || writers ? 'team' : mode,
           ...(!specialists && !writers && mode === 'single' && { singleStep }),
-          executionId: local ? 'local-readonly-v1' : 'codex-v1',
+          executionId: local
+            ? 'local-readonly-v1'
+            : template.definition.inferenceMode === 'local-coding-only'
+              ? 'codex-local-v1'
+              : 'codex-v1',
           ...(local && {
             stepModels: effectiveSteps.map((s) => ({
               step: s.key,

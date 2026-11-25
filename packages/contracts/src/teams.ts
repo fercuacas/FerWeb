@@ -47,7 +47,7 @@ export function teamStepOrder(steps: { key: string; dependsOn: string[] }[]) {
 export const teamDefinition = z
   .strictObject({
     name: text.trim().min(1).max(120),
-    inferenceMode: z.literal('local-only').optional(),
+    inferenceMode: z.enum(['local-only', 'local-coding-only']).optional(),
     toolProfile: codingToolProfile.optional(),
     strategy: z.enum(['specialists', 'writers']).optional(),
     reviewMode: z.literal('dimensions-v1').optional(),
@@ -58,7 +58,7 @@ export const teamDefinition = z
   })
   .superRefine((value, ctx) => {
     if (
-      value.inferenceMode &&
+      value.inferenceMode === 'local-only' &&
       (value.strategy !== 'specialists' ||
         value.reviewMode ||
         value.steps.some((step) => step.requiredCapabilities.some((cap) => cap !== 'text')))
@@ -220,7 +220,7 @@ export const prepareTeamPlanInput = z
     templateVersion: version,
     mode: z.enum(['auto', 'single', 'team']),
     singleStep: key.optional(),
-    executionId: z.enum(['codex-v1', 'local-readonly-v1']),
+    executionId: z.enum(['codex-v1', 'codex-local-v1', 'local-readonly-v1']),
     stepModels: z
       .array(z.strictObject({ step: key, model: text.trim().min(1).max(100) }))
       .max(6)

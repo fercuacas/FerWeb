@@ -160,6 +160,26 @@ function TemplateEditor({
       </label>
       <div className="job-grid">
         <label>
+          Política de inferencia del equipo
+          <select
+            value={draft.inferenceMode ?? 'api'}
+            onChange={(event) => {
+              const { inferenceMode: _, ...rest } = draft;
+              setDraft(
+                event.target.value === 'local-coding-only' || event.target.value === 'local-only'
+                  ? { ...rest, inferenceMode: event.target.value }
+                  : rest,
+              );
+            }}
+          >
+            <option value="api">Codex · API de OpenAI</option>
+            <option value="local-coding-only">Codex · Ollama local para todas las etapas</option>
+            {draft.inferenceMode === 'local-only' && (
+              <option value="local-only">Especialistas locales de texto (P19)</option>
+            )}
+          </select>
+        </label>
+        <label>
           Estrategia del equipo
           <select
             value={draft.strategy ?? 'sequential'}

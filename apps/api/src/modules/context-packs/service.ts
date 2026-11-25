@@ -52,7 +52,7 @@ export class ContextPackService {
       project: string,
       readOnly?: boolean,
       toolProfile?: z.infer<typeof contextPackPrepare>['toolProfile'],
-      executionId?: 'local-readonly-v1',
+      executionId?: 'local-readonly-v1' | 'codex-local-v1',
     ) => Promise<ExecutionOption>,
   ) {
     this.projects = new ProjectRepository(pool);
@@ -516,7 +516,9 @@ export class ContextPackService {
             project,
             s.execution.toolProfile === 'node-readonly-v1',
             s.execution.toolProfile === 'typescript-react-v1' ? 'typescript-react-v1' : undefined,
-            s.execution.id === 'local-readonly-v1' ? 'local-readonly-v1' : undefined,
+            s.execution.id === 'local-readonly-v1' || s.execution.id === 'codex-local-v1'
+              ? s.execution.id
+              : undefined,
           ),
         ),
       ) !== digest(canonical(s.execution))

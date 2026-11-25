@@ -34,6 +34,8 @@ services:
       dockerfile: apps/runner/Dockerfile
     init: true
     restart: unless-stopped
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
     environment:
       RUNNER_SERVICE_TOKEN: ${RUNNER_SERVICE_TOKEN:?Run npm run setup}
       RUNNER_RUNTIME_VOLUME: ${COMPOSE_PROJECT_NAME:-ferweb}_runner_runtime

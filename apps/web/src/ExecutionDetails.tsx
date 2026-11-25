@@ -2,6 +2,7 @@ import type { ExecutionOption, ExecutionUnavailableReason } from '@ferweb/contra
 
 export const executionLabels: Record<ExecutionOption['id'], string> = {
   'codex-v1': 'Codex · ejecución de código',
+  'codex-local-v1': 'Codex · código con Ollama local',
   'openai-chat': 'OpenAI · conversación',
   'ollama-chat': 'Ollama · conversación local',
   'local-readonly-v1': 'Ollama · especialista local de lectura',
@@ -21,6 +22,8 @@ const reasonLabels: Record<ExecutionUnavailableReason, string> = {
   provider_unconfigured: 'Configura el proveedor en el servidor.',
   provider_unavailable: 'El catálogo del proveedor no está disponible.',
   no_allowed_models: 'El catálogo no tiene modelos admitidos para esta opción.',
+  local_server_incompatible:
+    'El servidor local requiere Ollama 0.13.4 o posterior y Responses con herramientas y streaming.',
 };
 
 export const capabilityLabels: Record<keyof ExecutionOption['capabilities'], string> = {

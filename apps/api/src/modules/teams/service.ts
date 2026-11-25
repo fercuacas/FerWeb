@@ -86,7 +86,12 @@ export class TeamService {
       return this.coding.localReads.capabilities(owner, project);
     }
     const caps = await this.coding.capabilities(owner, project);
-    return codingOption(caps, definition.toolProfile, definition.strategy === 'specialists');
+    return codingOption(
+      caps,
+      definition.toolProfile,
+      definition.strategy === 'specialists',
+      definition.inferenceMode === 'local-coding-only' ? 'codex-local-v1' : undefined,
+    );
   }
   private readonly projects: ProjectRepository;
   private readonly agents: AgentCatalog;
@@ -387,6 +392,15 @@ export class TeamService {
       ).rows[0];
       if (!source || source.task_id !== task.id || source.task_snapshot.version !== task.version)
         throw conflict();
+      if (
+        source.configuration.executionId === 'codex-local-v1' &&
+        selected.definition.inferenceMode !== 'local-coding-only'
+      )
+        throw new HttpError(
+          422,
+          'local_review_policy',
+          'La revisión de una ejecución local requiere una plantilla de código local para todos los revisores.',
+        );
       reviewTarget = freezeReviewTarget(source);
     }
     if (selected.definition.strategy && input.mode !== 'team')
@@ -397,7 +411,12 @@ export class TeamService {
       );
     const local = selected.definition.inferenceMode === 'local-only';
     if (
-      input.executionId !== (local ? 'local-readonly-v1' : 'codex-v1') ||
+      input.executionId !==
+        (local
+          ? 'local-readonly-v1'
+          : selected.definition.inferenceMode === 'local-coding-only'
+            ? 'codex-local-v1'
+            : 'codex-v1') ||
       (!local && input.stepModels)
     )
       throw new HttpError(
@@ -457,6 +476,9 @@ export class TeamService {
         const prepared = await this.coding.contextPacks!.prepare(owner, project, {
           ...input.context,
           ...(local && { executionId: 'local-readonly-v1' as const }),
+          ...(selected.definition.inferenceMode === 'local-coding-only' && {
+            executionId: 'codex-local-v1' as const,
+          }),
           requestId: stableId(input.requestId + ':' + key),
           taskId: task.id,
           taskVersion: task.version,

@@ -59,7 +59,7 @@ export const contextPackPolicy = z.object({
 });
 export const contextReceiptReference = z.strictObject({ id: z.uuid(), hash });
 export const contextPackPrepare = z.strictObject({
-  executionId: z.literal('local-readonly-v1').optional(),
+  executionId: z.enum(['local-readonly-v1', 'codex-local-v1']).optional(),
   toolProfile: codingToolProfile.optional(),
   model: text.trim().min(1).max(100).optional(),
   readOnly: z.boolean().default(false),

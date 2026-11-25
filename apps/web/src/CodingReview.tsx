@@ -235,6 +235,18 @@ export function CodingComparison({
   const query = codingApi.useCodingComparisonsQuery({ project, id }, { refetchOnFocus: true }),
     caps = codingApi.useCodingCapabilitiesQuery(project),
     [repeat, repeating] = codingApi.useRepeatCodingMutation();
+  const source = codingApi.useCodingRunQuery({ project, id }, { refetchOnFocus: true });
+  const local = !source.error && source.currentData?.environment?.inference === 'local-ollama';
+  const models =
+    source.error || !source.currentData
+      ? []
+      : local
+        ? (caps.currentData?.local?.models.map((model) => model.id) ?? [])
+        : (caps.currentData?.models ?? []);
+  const available =
+    !!source.currentData &&
+    !source.error &&
+    (local ? caps.currentData?.local?.available : caps.currentData?.available);
   const [model, setModel] = useState(''),
     [selected, setSelected] = useState(''),
     request = useRef(crypto.randomUUID());
@@ -255,27 +267,27 @@ export function CodingComparison({
           <label>
             Modelo para repetir las mismas condiciones
             <select
-              value={model || caps.currentData?.models[0] || ''}
+              value={model || models[0] || ''}
               onChange={(e) => {
                 setModel(e.target.value);
                 request.current = crypto.randomUUID();
               }}
             >
-              {caps.currentData?.models.map((m) => (
+              {models.map((m) => (
                 <option key={m}>{m}</option>
               ))}
             </select>
           </label>
           <button
             type="button"
-            disabled={repeating.isLoading || !caps.currentData?.available || !!caps.error}
+            disabled={repeating.isLoading || !available || !!caps.error}
             onClick={() => {
               void repeat({
                 project,
                 id,
                 body: {
                   requestId: request.current,
-                  model: model || caps.currentData?.models[0] || '',
+                  model: model || models[0] || '',
                 },
               })
                 .unwrap()

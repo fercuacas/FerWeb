@@ -22,6 +22,12 @@
   cursor: pointer;
   line-height: 1.6;
 }
+.job-view summary {
+  overflow-wrap: anywhere;
+}
+.job-id {
+  overflow-wrap: anywhere;
+}
 .job-form label {
   display: grid;
   gap: 7px;

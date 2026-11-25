@@ -182,12 +182,28 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
         const d = await detail(id);
         return !['pending', 'running'].includes(d.job.state) ? d : false;
       }, timeout);
+    async function localFixtureState(change?: Record<string, unknown>) {
+      const url = new URL(process.env.RUNNER_URL!);
+      url.port = '8011';
+      url.pathname = '/test/state';
+      const response = await fetch(url, {
+        method: change ? 'POST' : 'GET',
+        headers: {
+          authorization: 'Bearer ' + process.env.RUNNER_SERVICE_TOKEN!,
+          'content-type': 'application/json',
+        },
+        ...(change && { body: JSON.stringify(change) }),
+      });
+      assert.equal(response.status, 200);
+      return response.json();
+    }
     async function startTeam(
       title: string,
       maxRequests = 4,
       withContext = false,
       toolProfile?: TeamDefinition['toolProfile'],
       existingTask?: { id: string; version: number },
+      localCoding = false,
     ) {
       const post = (path: string, body: unknown) => request('POST', path, body, cookie);
       const roles = [];
@@ -213,6 +229,7 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
           ).role,
         );
       const definition: TeamDefinition = {
+        ...(localCoding && { inferenceMode: 'local-coding-only' }),
         name: title,
         description: 'Durable team fixture.',
         ...(toolProfile && { toolProfile }),
@@ -254,8 +271,8 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
             templateId: template.id,
             templateVersion: 1,
             mode: 'team',
-            executionId: 'codex-v1',
-            model: 'fixture-codex',
+            executionId: localCoding ? 'codex-local-v1' : 'codex-v1',
+            model: localCoding ? 'fixture-local' : 'fixture-codex',
             ...(withContext && {
               context: {
                 profile: 'lean',
@@ -337,6 +354,13 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
         assert.match(codex.configurationRevision ?? '', /^[a-f0-9]{64}$/);
         assert.equal(codex.capabilities.toolCalls, 'supported');
         assert.equal(codex.capabilities.usage, 'unknown');
+        const local = options.find((item) => item.id === 'codex-local-v1');
+        assert.equal(local?.provider, 'ollama');
+        assert.equal(local?.available, true);
+        assert.deepEqual(
+          local?.models.map((model) => model.id),
+          ['fixture-local'],
+        );
         const ollama = options.find((item) => item.id === 'ollama-chat');
         assert.ok(ollama);
         assert.equal(ollama.reason, 'ai_unconfigured');
@@ -3702,6 +3726,508 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
             cookie,
           );
         }
+      },
+    );
+    await t.test(
+      'P20 native local Responses uses real Codex tools and independent verification without cloud inference',
+      async () => {
+        if (!worker || worker.exitCode !== null || worker.signalCode !== null) await startWorker();
+        const before = await localFixtureState();
+        const caps = codingCapabilitiesResponse.parse(
+          await (
+            await request('GET', `/projects/${project}/coding/capabilities`, undefined, cookie)
+          ).json(),
+        );
+        assert.equal(caps.localExecution?.provider, 'ollama');
+        assert.equal(caps.localExecution?.available, true);
+        assert.deepEqual(
+          caps.localExecution?.models.map((model) => model.id),
+          ['fixture-local'],
+        );
+        const local = await enqueue('P20 local fix', {
+          executionId: 'codex-local-v1',
+          model: 'fixture-local',
+          maxRequests: 6,
+        });
+        const done = await terminal(local.job.id);
+        const evidence = await report(local.job.id);
+        assert.equal(
+          done.job.state,
+          'completed',
+          JSON.stringify({ job: done.job, report: evidence.report }),
+        );
+        assert.equal(done.job.attempt, 1);
+        assert.equal(done.attempts[0]!.terminationConfirmed, true);
+        assert.equal(evidence.environment?.inference, 'local-ollama');
+        assert.equal(evidence.report?.execution?.provider, 'ollama');
+        assert.equal(evidence.report?.execution?.localOnly, true);
+        assert.equal(evidence.report?.execution?.modelRevision, before.revision);
+        assert.equal(evidence.report?.cliVersion, '0.166.0');
+        assert.equal(evidence.report?.usage, null);
+        assert.equal(evidence.report?.execution?.remoteCancellationConfirmed, null);
+        assert.ok(
+          evidence.report?.commands.some((command) =>
+            command.output.includes('P20 local tool isolation passed'),
+          ),
+        );
+        assert.ok(
+          evidence.report?.tests.some(
+            (test) => test.origin.startsWith('controller') && test.exitCode === 0,
+          ),
+        );
+        assert.ok(
+          evidence.report?.diff.some(
+            (file) => file.path === 'src/add.cjs' && file.patch.includes('a + b'),
+          ),
+        );
+        assert.equal(
+          (await request('GET', `/projects/${project}/coding/${local.job.id}`, undefined, foreign))
+            .status,
+          404,
+        );
+        const duplicate = await request('POST', `/projects/${project}/coding`, local.body, cookie);
+        assert.equal(jobDetailSchema.parse(await duplicate.json()).job.id, local.job.id);
+        const review = await request(
+          'PUT',
+          `/projects/${project}/coding/${local.job.id}/review`,
+          {
+            version: 0,
+            approved: true,
+            title: 'P20 local reviewed change',
+            body: 'Actual sandbox tools and independent tests; inference simulated.',
+            branch: `ferweb/p20-${local.job.id}`,
+            notes: 'Explicit owner approval of the common report.',
+          },
+          cookie,
+        );
+        assert.equal(review.status, 200, await review.clone().text());
+        const published = await request(
+          'POST',
+          `/projects/${project}/coding/${local.job.id}/review/publish`,
+          { version: 1 },
+          cookie,
+        );
+        assert.equal(published.status, 200, await published.clone().text());
+        assert.equal(reviewResponse.parse(await published.json()).review?.state, 'published');
+        const reviewerRoles = new Map<string, string>();
+        for (const preset of ['reviewer', 'explorer', 'security', 'tester']) {
+          const response = await request(
+            'POST',
+            `/projects/${project}/agents`,
+            { template: preset },
+            cookie,
+          );
+          reviewerRoles.set(preset, agentMutationResponse.parse(await response.json()).role.id);
+        }
+        const reviewPresets = teamTemplatesResponse.parse(
+          await (
+            await request('GET', `/projects/${project}/team-templates`, undefined, cookie)
+          ).json(),
+        );
+        const preset = reviewPresets.presets.find((item) => item.id === 'dimensional-review')!;
+        const reviewDefinition: TeamDefinition = {
+          name: 'P20 local reviewers',
+          description: 'No external automatic evaluators.',
+          strategy: 'specialists',
+          reviewMode: 'dimensions-v1',
+          maxIterations: 1,
+          limits: { maxRequests: 8, timeoutMs: 180000, concurrency: 1 },
+          steps: preset.steps.map(({ specialty, ...step }) => ({
+            ...step,
+            role: { id: reviewerRoles.get(specialty)!, version: 1 },
+          })),
+        };
+        const cloudTemplate = teamTemplateResponse
+          .pick({ template: true })
+          .parse(
+            await (
+              await request(
+                'POST',
+                `/projects/${project}/team-templates`,
+                { definition: reviewDefinition },
+                cookie,
+              )
+            ).json(),
+          ).template;
+        const localTemplate = teamTemplateResponse
+          .pick({ template: true })
+          .parse(
+            await (
+              await request(
+                'POST',
+                `/projects/${project}/team-templates`,
+                { definition: { ...reviewDefinition, inferenceMode: 'local-coding-only' } },
+                cookie,
+              )
+            ).json(),
+          ).template;
+        const planInput = {
+          requestId: randomUUID(),
+          reviewTarget: local.job.id,
+          taskId: local.body.taskId,
+          taskVersion: local.body.taskVersion,
+          templateId: cloudTemplate.id,
+          templateVersion: 1,
+          mode: 'team',
+          executionId: 'codex-v1',
+          model: 'fixture-codex',
+        };
+        assert.equal(
+          (await request('POST', `/projects/${project}/team-plans`, planInput, cookie)).status,
+          422,
+        );
+        const localReview = await request(
+          'POST',
+          `/projects/${project}/team-plans`,
+          {
+            ...planInput,
+            requestId: randomUUID(),
+            templateId: localTemplate.id,
+            executionId: 'codex-local-v1',
+            model: 'fixture-local',
+          },
+          cookie,
+        );
+        assert.equal(localReview.status, 201, await localReview.clone().text());
+        assert.equal(
+          teamPlanResponse.parse(await localReview.json()).plan.snapshot.execution.provider,
+          'ollama',
+        );
+        const after = await localFixtureState();
+        assert.equal(after.cloudRequests, before.cloudRequests);
+        assert.ok(after.responseRequests > before.responseRequests);
+        assert.equal(after.authorizationRequests, 0);
+      },
+    );
+    await t.test(
+      'P20 local context receipts and explicit repetition preserve the native engine and independent evidence',
+      async () => {
+        const before = await localFixtureState();
+        const packs = coding.contextPacks!;
+        await packs.retrieval.index(owner.id, project, true);
+        if (!(await packs.map(owner.id, project)))
+          await packs.saveMap(owner.id, project, {
+            version: 0,
+            markdown: '# Local coding\nCorrect src/add.cjs and verify tests/add.test.cjs.',
+            paths: [],
+          });
+        const taskRow = await task('P20 local context');
+        const prepared = await packs.prepare(owner.id, project, {
+          requestId: randomUUID(),
+          taskId: taskRow.id,
+          taskVersion: taskRow.version,
+          executionId: 'codex-local-v1',
+          profile: 'lean',
+          mode: 'manual',
+          explicitSkillIds: [],
+          excludedSkillIds: [],
+          memory: [],
+          includeMemory: false,
+          query: 'src/add.cjs',
+          model: 'fixture-local',
+        });
+        assert.equal(prepared.receipt.snapshot.execution.provider, 'ollama');
+        const response = await request(
+          'POST',
+          `/projects/${project}/coding`,
+          {
+            requestId: randomUUID(),
+            taskId: taskRow.id,
+            taskVersion: taskRow.version,
+            commit: 'a'.repeat(40),
+            executionId: 'codex-local-v1',
+            model: 'fixture-local',
+            timeoutMs: 60000,
+            maxRequests: 4,
+            maxOutputTokens: 1024,
+            contextReceipt: { id: prepared.receipt.id, hash: prepared.receipt.hash },
+          },
+          cookie,
+        );
+        assert.equal(response.status, 202, await response.clone().text());
+        const job = jobDetailSchema.parse(await response.json()).job;
+        assert.equal((await terminal(job.id)).job.state, 'completed');
+        const evidence = await report(job.id);
+        assert.ok(evidence.contextReceipt);
+        const receipt = await packs.read(owner.id, project, evidence.contextReceipt.id);
+        assert.equal(receipt.phase, 'final');
+        assert.equal(receipt.snapshot.execution.id, 'codex-local-v1');
+        assert.equal(evidence.report?.controls?.receiptId, receipt.id);
+        assert.equal(
+          (
+            await request(
+              'POST',
+              `/projects/${project}/coding/${job.id}/repeat`,
+              {
+                requestId: randomUUID(),
+                model: 'fixture-codex',
+              },
+              cookie,
+            )
+          ).status,
+          409,
+        );
+        const repeated = await request(
+          'POST',
+          `/projects/${project}/coding/${job.id}/repeat`,
+          {
+            requestId: randomUUID(),
+            model: 'fixture-local',
+          },
+          cookie,
+        );
+        assert.equal(repeated.status, 202, await repeated.clone().text());
+        const repeatJob = jobDetailSchema.parse(await repeated.json()).job;
+        assert.equal(repeatJob.kind, 'codex-v1');
+        if (repeatJob.kind === 'codex-v1')
+          assert.equal(repeatJob.configuration.executionId, 'codex-local-v1');
+        assert.equal((await terminal(repeatJob.id)).job.state, 'completed');
+        assert.equal((await report(repeatJob.id)).report?.execution?.provider, 'ollama');
+        assert.equal((await localFixtureState()).cloudRequests, before.cloudRequests);
+      },
+    );
+    await t.test(
+      'P20 malformed, unknown, incomplete, excessive and looping local replies fail closed without inference retry',
+      async (t) => {
+        const before = await localFixtureState();
+        for (const [scenario, expected] of [
+          ['malformed', 'local_tool_arguments'],
+          ['unknown', 'local_tool_unknown'],
+          ['incomplete', 'local_stream_incomplete'],
+          ['oversize', 'local_output_limit'],
+          ['loop', 'local_no_progress'],
+        ]) {
+          await t.test(scenario!, async () => {
+            const run = await enqueue(`P20 ${scenario}`, {
+              executionId: 'codex-local-v1',
+              model: 'fixture-local',
+              maxRequests: 6,
+            });
+            const done = await terminal(run.job.id);
+            const evidence = await report(run.job.id);
+            assert.equal(done.job.state, 'failed');
+            assert.equal(done.job.attempt, 1);
+            assert.equal(done.job.errorCode, expected, JSON.stringify(evidence.report));
+            assert.equal(evidence.report?.modelRequests, scenario === 'loop' ? 3 : 1);
+            assert.equal(evidence.report?.commands.length, scenario === 'loop' ? 2 : 0);
+          });
+        }
+        assert.equal((await localFixtureState()).cloudRequests, before.cloudRequests);
+      },
+    );
+    await t.test(
+      'P20 local cancellation and deadline stop the sandbox and keep remote inference cancellation unknown',
+      async (t) => {
+        for (const scenario of ['cancel', 'timeout'])
+          await t.test(scenario, async () => {
+            const before = await localFixtureState();
+            const run = await enqueue(`P20 ${scenario}`, {
+              executionId: 'codex-local-v1',
+              model: 'fixture-local',
+              timeoutMs: scenario === 'timeout' ? 10000 : 60000,
+            });
+            await waitFor(
+              async () => (await localFixtureState()).responseRequests > before.responseRequests,
+            );
+            if (scenario === 'cancel')
+              assert.equal(
+                (
+                  await request(
+                    'POST',
+                    `/projects/${project}/jobs/${run.job.id}/cancel`,
+                    {},
+                    cookie,
+                  )
+                ).status,
+                200,
+              );
+            const done = await terminal(run.job.id);
+            const evidence = await report(run.job.id);
+            assert.equal(done.job.state, scenario === 'cancel' ? 'cancelled' : 'failed');
+            assert.equal(done.job.errorCode, scenario === 'cancel' ? 'cancelled' : 'timeout');
+            assert.equal(done.job.attempt, 1);
+            assert.equal(done.attempts[0]!.terminationConfirmed, true);
+            assert.equal(evidence.report?.execution?.remoteCancellationConfirmed, null);
+            assert.equal((await localFixtureState()).cloudRequests, before.cloudRequests);
+          });
+      },
+    );
+    await t.test(
+      'P20 local model requirements, version and frozen revision block admission without cloud fallback',
+      async () => {
+        const before = await localFixtureState();
+        const taskRow = await task('P20 incompatible model');
+        const input = {
+          requestId: randomUUID(),
+          taskId: taskRow.id,
+          taskVersion: taskRow.version,
+          commit: 'a'.repeat(40),
+          executionId: 'codex-local-v1',
+          model: 'fixture-local',
+          maxRequests: 4,
+          maxOutputTokens: 1000,
+          timeoutMs: 60000,
+        };
+        const count = async () =>
+          (await pool.query('SELECT count(*)::int AS n FROM jobs')).rows[0].n;
+        const jobs = await count();
+        try {
+          assert.equal(
+            (
+              await request(
+                'POST',
+                `/projects/${project}/coding`,
+                { ...input, model: 'fixture-no-tools' },
+                cookie,
+              )
+            ).status,
+            503,
+          );
+          assert.equal(
+            (
+              await request(
+                'POST',
+                `/projects/${project}/coding`,
+                { ...input, model: 'fixture-codex' },
+                cookie,
+              )
+            ).status,
+            503,
+          );
+          assert.equal(
+            (
+              await request(
+                'POST',
+                `/projects/${project}/coding`,
+                { ...input, endpoint: 'https://api.openai.com' },
+                cookie,
+              )
+            ).status,
+            400,
+          );
+          await localFixtureState({ version: '0.12.0' });
+          const caps = codingCapabilitiesResponse.parse(
+            await (
+              await request('GET', `/projects/${project}/coding/capabilities`, undefined, cookie)
+            ).json(),
+          );
+          assert.equal(caps.localExecution?.available, false);
+          assert.equal(caps.localExecution?.reason, 'local_server_incompatible');
+          assert.equal(
+            (await request('POST', `/projects/${project}/coding`, input, cookie)).status,
+            503,
+          );
+          await localFixtureState({ version: before.version, tools: false });
+          assert.equal(
+            (await request('POST', `/projects/${project}/coding`, input, cookie)).status,
+            503,
+          );
+        } finally {
+          await localFixtureState({
+            version: before.version,
+            tools: before.tools,
+            revision: before.revision,
+          });
+        }
+        assert.equal(await count(), jobs);
+        const roleResponse = await request(
+          'POST',
+          `/projects/${project}/agents`,
+          { template: 'implementer' },
+          cookie,
+        );
+        const role = agentMutationResponse.parse(await roleResponse.json()).role;
+        const definition: TeamDefinition = {
+          name: 'P20 frozen local model',
+          description: 'No implicit provider changes.',
+          inferenceMode: 'local-coding-only',
+          maxIterations: 1,
+          limits: { maxRequests: 3, timeoutMs: 60000, concurrency: 1 },
+          steps: [
+            {
+              key: 'implement',
+              title: 'Implement',
+              role: { id: role.id, version: 1 },
+              dependsOn: [],
+              exitCriteria: ['Verified diff.'],
+              requiredCapabilities: ['text', 'toolCalls', 'workspaceWrite'],
+              maxRequests: 3,
+            },
+          ],
+        };
+        const templateResponse = await request(
+          'POST',
+          `/projects/${project}/team-templates`,
+          { definition },
+          cookie,
+        );
+        const template = teamTemplateResponse
+          .pick({ template: true })
+          .parse(await templateResponse.json()).template;
+        const planResponse = await request(
+          'POST',
+          `/projects/${project}/team-plans`,
+          {
+            requestId: randomUUID(),
+            taskId: taskRow.id,
+            taskVersion: taskRow.version,
+            templateId: template.id,
+            templateVersion: 1,
+            mode: 'team',
+            executionId: 'codex-local-v1',
+            model: 'fixture-local',
+          },
+          cookie,
+        );
+        const plan = teamPlanResponse.parse(await planResponse.json()).plan;
+        assert.equal(
+          (
+            await request(
+              'POST',
+              `/projects/${project}/team-plans/${plan.id}/approve`,
+              { hash: plan.hash, version: 1 },
+              cookie,
+            )
+          ).status,
+          200,
+        );
+        try {
+          await localFixtureState({ revision: 'd'.repeat(64) });
+          assert.equal(
+            (
+              await request(
+                'POST',
+                `/projects/${project}/team-plans/${plan.id}/execute`,
+                { requestId: randomUUID(), hash: plan.hash, version: 1, commit: 'a'.repeat(40) },
+                cookie,
+              )
+            ).status,
+            409,
+          );
+        } finally {
+          await localFixtureState({ revision: before.revision });
+        }
+        assert.equal(await count(), jobs);
+        assert.equal((await localFixtureState()).cloudRequests, before.cloudRequests);
+      },
+    );
+    await t.test(
+      'P20 local teams share the common coding reports and budget across real tool handoffs',
+      async () => {
+        const before = await localFixtureState();
+        const run = await startTeam('P20 local team', 4, false, undefined, undefined, true);
+        const done = await teamTerminal(run.data.execution.id);
+        assert.equal(done.execution.state, 'completed', JSON.stringify(done));
+        assert.equal(done.plan.execution.provider, 'ollama');
+        assert.ok(done.steps.every((step) => step.delivery?.verified));
+        for (const step of done.steps) {
+          const child = await detail(step.jobId!);
+          assert.equal(child.job.kind, 'codex-v1');
+          if (child.job.kind === 'codex-v1')
+            assert.equal(child.job.configuration.executionId, 'codex-local-v1');
+          assert.equal((await report(step.jobId!)).report?.execution?.provider, 'ollama');
+        }
+        assert.equal((await localFixtureState()).cloudRequests, before.cloudRequests);
       },
     );
     await t.test(

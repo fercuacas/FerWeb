@@ -59,8 +59,57 @@ export function describeCoding(
 export function codingEnvironment(
   caps: Awaited<ReturnType<RunnerClient['capabilities']>>,
   profile?: CodingToolProfile,
+  executionId?: string,
 ) {
-  return profile === 'typescript-react-v1' ? caps.typescriptEnvironment : caps.environment;
+  const environment =
+    profile === 'typescript-react-v1' ? caps.typescriptEnvironment : caps.environment;
+  if (executionId === 'codex-local-v1')
+    return environment && caps.local?.available
+      ? {
+          ...environment,
+          simulated: caps.local.simulated,
+          inference: 'local-ollama',
+          localRevision: caps.local.configurationRevision,
+        }
+      : null;
+  return environment;
+}
+
+export function describeLocalCoding(
+  caps: Awaited<ReturnType<RunnerClient['capabilities']>>,
+  profile: CodingToolProfile = 'node-isolated-v1',
+  readOnly = false,
+): ExecutionOption {
+  const environment = codingEnvironment(caps, profile, 'codex-local-v1');
+  const local = caps.local;
+  const reason =
+    caps.reason ??
+    (!environment ? 'provider_unavailable' : local?.available ? null : 'no_allowed_models');
+  return {
+    ...describeCoding(caps, profile),
+    id: 'codex-local-v1',
+    provider: 'ollama',
+    destination: !local ? 'unknown' : local.simulated ? 'simulated' : 'local-ollama',
+    toolProfile: readOnly ? 'node-readonly-v1' : profile,
+    available: !!environment && !!local?.available,
+    reason: local?.reason === 'local_server_incompatible' ? 'local_server_incompatible' : reason,
+    simulated: local?.simulated ?? null,
+    models: local?.models ?? [],
+    configurationRevision: environment
+      ? createHash('sha256')
+          .update(JSON.stringify({ environment, models: local?.models, readOnly }))
+          .digest('hex')
+      : null,
+    capabilities: {
+      text: 'supported',
+      streaming: 'supported',
+      toolCalls: 'supported',
+      workspaceWrite: readOnly ? 'unsupported' : 'supported',
+      structuredOutput: 'unsupported',
+      cancellation: 'supported',
+      usage: 'unknown',
+    },
+  };
 }
 
 export function describeReadOnlyCoding(

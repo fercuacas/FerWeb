@@ -6,6 +6,7 @@ import { connectDocker, demux } from './docker.mjs';
 import { validateFiles, differences, hash, safePath } from './files.mjs';
 import { modelPayload, attachUsageMeter, providerUsage } from './policy.mjs';
 import { createControls, control, protectedChanges, removePlaceholders } from './controls.mjs';
+import { LocalProvider, localEnvironment, localRequest } from './local-provider.mjs';
 
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 async function body(req, limit = 1200000) {
@@ -32,11 +33,32 @@ const nodeVerification = [
   '--test-reporter-destination=stderr',
 ];
 
-export async function createController({ token, configuration, fakeProvider, namespace, volume }) {
+export async function createController({
+  token,
+  configuration,
+  fakeProvider,
+  namespace,
+  volume,
+  localSimulated = false,
+}) {
   if (!token || token.length < 32) throw Error('runner_token_missing');
   if (!/^[a-z0-9][a-z0-9_-]{1,80}$/.test(namespace) || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]+$/.test(volume))
     throw Error('runner_scope_invalid');
   const { docker, json, apiVersion } = await connectDocker();
+  const localProvider = configuration.local
+    ? new LocalProvider(configuration.local, localSimulated)
+    : null;
+  const localCapabilities = () =>
+    localProvider
+      ? localProvider.capabilities()
+      : Promise.resolve({
+          available: false,
+          models: [],
+          version: null,
+          simulated: false,
+          configurationRevision: null,
+          reason: 'local_provider_unconfigured',
+        });
   // Resolve the tag once. A rebuild must never change tools mid-run.
   const image = (await json('GET', '/images/ferweb-codex-sandbox:0.166.0/json')).Id;
   const environment = {
@@ -57,6 +79,7 @@ export async function createController({ token, configuration, fakeProvider, nam
             'docker.mjs',
             'controls.mjs',
             'protected-paths.mjs',
+            'local-provider.mjs',
           ].map((file) => readFile(new URL(file, import.meta.url), 'utf8')),
         )
       ).join('\n'),
@@ -497,7 +520,8 @@ export async function createController({ token, configuration, fakeProvider, nam
       run.finishing ||
       Date.now() >= run.lease ||
       Date.now() >= run.deadline ||
-      run.requests >= run.input.maxRequests
+      run.requests >= run.input.maxRequests ||
+      run.localFailed
     ) {
       if (run.requests >= run.input.maxRequests) run.budgetReason ??= 'request_budget_exhausted';
       res.writeHead(403);
@@ -507,7 +531,12 @@ export async function createController({ token, configuration, fakeProvider, nam
     let value = await body(req);
     try {
       value = modelPayload(value, run);
+      if (run.input.executionId === 'codex-local-v1') value = localRequest(value, run);
     } catch (error) {
+      if (run.input.executionId === 'codex-local-v1') {
+        run.localFailed = true;
+        run.budgetReason ??= error.code ?? 'local_tools_incompatible';
+      }
       if (fakeProvider)
         console.error(
           JSON.stringify({
@@ -548,6 +577,10 @@ export async function createController({ token, configuration, fakeProvider, nam
     if (run.finishing || Date.now() >= run.lease || Date.now() >= run.deadline)
       throw Error('execution_limit');
     try {
+      if (run.input.executionId === 'codex-local-v1') {
+        await localProvider.generate(run, value, res);
+        return;
+      }
       if (fakeProvider) {
         await fakeProvider(run, value, res);
         return;
@@ -585,6 +618,13 @@ export async function createController({ token, configuration, fakeProvider, nam
         clearTimeout(timer);
         run.upstreams.delete(abort);
       }
+    } catch (error) {
+      if (run.input.executionId === 'codex-local-v1') {
+        run.localFailed = true;
+        run.budgetReason ??=
+          Date.now() >= run.deadline ? 'timeout' : (error.code ?? 'local_provider_failed');
+      }
+      throw error;
     } finally {
       // A cancelled request may still report usage. Failure leaves coverage unknown.
       await budgetCall(run, 'usage', { requestId, usage: run.meters[slot] ?? null }).catch(
@@ -603,8 +643,17 @@ export async function createController({ token, configuration, fakeProvider, nam
       controlUrl.hash
     )
       throw Error('invalid_control_origin');
-    const selectedEnvironment =
+    if (
+      input.executionId !== undefined &&
+      !['codex-v1', 'codex-local-v1'].includes(input.executionId)
+    )
+      throw Error('invalid_execution');
+    const local = input.executionId === 'codex-local-v1' ? await localCapabilities() : null;
+    const profileEnvironment =
       input.environment?.profile === 'typescript-react-v1' ? typescriptEnvironment : environment;
+    const selectedEnvironment = local
+      ? localEnvironment(profileEnvironment, local)
+      : profileEnvironment;
     if (!selectedEnvironment || !isDeepStrictEqual(input.environment, selectedEnvironment))
       throw Error('execution_environment_changed');
     const typescript = selectedEnvironment.profile === 'typescript-react-v1';
@@ -613,7 +662,11 @@ export async function createController({ token, configuration, fakeProvider, nam
       !uuid.test(input.jobId) ||
       !uuid.test(input.fence) ||
       !/^[a-f0-9]{40}$/.test(input.commit) ||
-      !configuration.models.includes(input.model)
+      !(local
+        ? local.models.some(
+            (model) => model.id === input.model && model.revision === input.modelRevision,
+          )
+        : configuration.models.includes(input.model))
     )
       throw Error('invalid_run');
     validateFiles(input.files);
@@ -697,6 +750,7 @@ export async function createController({ token, configuration, fakeProvider, nam
       workspaceAccess: input.workspaceAccess,
       ...(input.teamMessaging === true && { teamMessaging: true }),
       model: input.model,
+      ...(local && { executionId: 'codex-local-v1' }),
       deadlineAt: input.deadlineAt,
     };
     await writeFile(dir + '/input.json', JSON.stringify(publicInput), { mode: 0o644 });
@@ -720,8 +774,18 @@ export async function createController({ token, configuration, fakeProvider, nam
         repository: input.repository,
         task: input.task,
         model: input.model,
+        execution: {
+          runtime: 'codex-cli',
+          provider: local ? 'ollama' : 'openai',
+          localOnly: !!local,
+          modelRevision: input.modelRevision ?? null,
+          configurationRevision: local?.configurationRevision ?? null,
+          serverVersion: local?.version ?? null,
+          reportedModel: null,
+          remoteCancellationConfirmed: null,
+        },
         cliVersion: '0.166.0',
-        simulated: !!fakeProvider,
+        simulated: local ? local.simulated : !!fakeProvider,
         startedAt: new Date().toISOString(),
         finishedAt: null,
         summary: '',
@@ -1020,15 +1084,21 @@ export async function createController({ token, configuration, fakeProvider, nam
           simulated: !!fakeProvider,
           environment,
           typescriptEnvironment,
+          local: await localCapabilities(),
         });
         return;
       }
       if (req.url === '/runs' && req.method === 'POST') {
-        if (!fakeProvider && !configuration.apiKey) {
+        const input = await body(req, 13000000);
+        if (
+          input.executionId === 'codex-local-v1'
+            ? !localProvider
+            : !fakeProvider && !configuration.apiKey
+        ) {
           reply(503, {});
           return;
         }
-        const run = await start(await body(req, 13000000));
+        const run = await start(input);
         reply(202, { jobId: run.input.jobId });
         return;
       }
@@ -1075,6 +1145,18 @@ export async function createController({ token, configuration, fakeProvider, nam
       else if (req.method !== 'GET') {
         reply(405, {});
         return;
+      }
+      if (run.input.executionId === 'codex-local-v1') {
+        const usage = providerUsage(run);
+        run.report.usage =
+          usage.reportedRequests === usage.totalRequests && usage.totalRequests > 0
+            ? {
+                inputTokens: usage.inputTokens,
+                cachedInputTokens: usage.cachedInputTokens,
+                outputTokens: usage.outputTokens,
+                reasoningTokens: usage.reasoningTokens,
+              }
+            : null;
       }
       reply(200, {
         done: run.phase === 'finished',

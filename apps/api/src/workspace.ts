@@ -37,7 +37,7 @@ import { RecipeService } from './modules/jobs/recipe-service.js';
 import { ReviewCanvas } from './modules/jobs/canvas.js';
 import { canvasRouter } from './modules/jobs/canvas-routes.js';
 import { RunnerClient } from './modules/jobs/runner-client.js';
-import { describeChat, describeCoding } from './execution-capabilities.js';
+import { describeChat, describeCoding, describeLocalCoding } from './execution-capabilities.js';
 import { AgentCatalog } from './modules/agents/catalog.js';
 import { agentRouter } from './modules/agents/routes.js';
 import { SkillLibrary } from './modules/skills/library.js';
@@ -133,6 +133,12 @@ export function createWorkspaceRouter({
       if (executionId === 'local-readonly-v1')
         return codingService.localReads!.capabilities(owner, project);
       const caps = await codingService.capabilities(owner, project);
+      if (executionId === 'codex-local-v1')
+        return readOnly
+          ? caps.localReadOnlyExecution
+          : profile === 'typescript-react-v1'
+            ? caps.localTypescriptExecution
+            : caps.localExecution;
       return readOnly
         ? caps.readOnlyExecution
         : profile === 'typescript-react-v1'
@@ -148,7 +154,9 @@ export function createWorkspaceRouter({
       describeChat(chatService, 'ollama'),
     ]);
     response.json(
-      executionCatalogSchema.parse({ options: [describeCoding(runner), openai, ollama] }),
+      executionCatalogSchema.parse({
+        options: [describeCoding(runner), describeLocalCoding(runner), openai, ollama],
+      }),
     );
   });
   router.use(createGitHubRouter(githubService));

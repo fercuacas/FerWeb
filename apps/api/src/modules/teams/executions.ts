@@ -786,6 +786,7 @@ export class TeamExecutions {
       run.project_id,
       {
         requestId: current.request_id,
+        ...(snapshot.execution.id === 'codex-local-v1' && { executionId: 'codex-local-v1' }),
         ...(snapshot.contexts?.length
           ? { contextReceipt: snapshot.contexts.find((c) => c.step === current.step_key)!.receipt }
           : snapshot.memory?.length

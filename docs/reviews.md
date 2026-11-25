@@ -84,7 +84,9 @@ El panel compara hasta veinte ejecuciones recientes de la misma tarea y reposito
 
 El controlador resuelve y fija el ID inmutable de la imagen del sandbox. Guarda imagen, versión CLI, herramientas, recursos y hash de los archivos de política/controlador; verifica el entorno al iniciar cada ejecución. Una reconstrucción/cambio de política impide repetir bajo la etiqueta de condiciones iguales. No controla cambios internos de un alias de modelo remoto ni elimina la variación entre respuestas.
 
-Las condiciones diferentes se señalan explícitamente por commit, archivos, tarea/criterios, herramientas/límites o configuración. Un entorno antiguo desconocido nunca se declara comparable. Hay **un único ejecutor Codex**: repetir modelos permite comparar ejecuciones/modelos con ese ejecutor; no acredita comparación entre motores de agentes distintos ni coordinación multiagente.
+Las condiciones diferentes se señalan explícitamente por commit, archivos, tarea/criterios, herramientas/límites o configuración. Un entorno antiguo desconocido nunca se declara comparable. El runtime sigue siendo Codex; P20 añade [inferencia Ollama local](local-coding.md) al destino API. La repetición mantiene el destino del original y permite modelos de ese catálogo; no acredita equivalencia entre proveedores o motores distintos.
+
+E9 consume el mismo informe, diff y pruebas independientes de los trabajos locales. Sus revisores automáticos por dimensiones requieren una plantilla con `inferenceMode: local-coding-only`; una plantilla cloud para un trabajo local se rechaza. Guardar la aprobación humana y publicar en GitHub conservan sus permisos, versiones y acciones separadas. Una prueba de publicación con GitHub simulado no acredita publicación real.
 
 ## Pruebas y aceptación externa
 
