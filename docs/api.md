@@ -404,6 +404,15 @@ La ruta base es `/projects/:projectId/tasks/:taskId/recipes`. `GET` devuelve el 
 
 `GET /projects/:projectId/canvas/diff/:targetId/html-source?element=<id>&hash=<sha256>` entrega la fuente autorizada de un archivo HTML final como descarga de texto. [Revisión visual](reviews.md#revisión-visual-p16).
 
+## Extensiones y exportación P22
+
+- `GET /projects/:projectId/extensions` lista extensiones. `POST` importa `{manifest}` o `{fixture: "fixture-reader"}`. El detalle reside en `GET /extensions/:extensionId` bajo el mismo proyecto.
+- `POST /extensions/:extensionId/actions` recibe una acción explícita con `revision`. Revisar, habilitar y retirar requieren `previewHash` de esa operación. Configurar requiere `config.path`, seleccionar requiere `version` y editar requiere `path` y `text`.
+- `POST /extensions/:extensionId/runs` recibe `revision`, `requestId` y `operation: "read-resource"`. Devuelve el recurso aprobado, destino local y recibo idempotente.
+- `POST /projects/:projectId/portable/preview` recibe la selección `role?`, `skillId?`, `workflow?`. Para descargar el JSON o ZIP, usa `/portable/json` o `/portable/codex` con `{selection,sha256}` de la previsualización validada.
+
+[Ejemplo de manifiesto y recorrido P22](extensions.md).
+
 ## Referencias de diseño
 
 - [Node.js crypto](https://nodejs.org/api/crypto.html).

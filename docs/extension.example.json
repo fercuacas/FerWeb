@@ -1,0 +1,19 @@
+{
+  "format": 1,
+  "slug": "ficha-portable",
+  "name": "Ficha portable de lectura",
+  "version": "1.0.0",
+  "origin": { "kind": "upload", "label": "Ejemplo original de FerWeb" },
+  "license": "CC0-1.0",
+  "notice": "La ficha de este ejemplo se ofrece bajo CC0 1.0 Universal.",
+  "resources": [
+    {
+      "path": "ficha.md",
+      "text": "Ficha portátil de ejemplo.",
+      "sha256": "ac2ddada13524d54dd0048baac5b1fa2012477f790ede5a049158a3aa9b48d7e"
+    }
+  ],
+  "capabilities": ["read-resource"],
+  "dependencies": [{ "kind": "builtin", "name": "fixture-reader", "version": "1.0.0" }],
+  "destinations": ["project-local"]
+}

@@ -50,6 +50,7 @@ import { ContextPackService } from './modules/context-packs/service.js';
 import { contextPackRouter } from './modules/context-packs/routes.js';
 import { AiClient } from './modules/chat/client.js';
 import { LocalReadService } from './modules/jobs/local-readonly.js';
+import { extensionRouter } from './modules/extensions/routes.js';
 
 export interface WorkspaceOptions {
   ai?: AiClient | null;
@@ -180,6 +181,7 @@ export function createWorkspaceRouter({
   router.use(createJobRouter(new JobService(pool)));
   router.use(agentRouter(new AgentCatalog(pool)));
   router.use(skillRouter(new SkillLibrary(pool)));
+  router.use(extensionRouter(pool));
   const teamExecutions = new TeamExecutions(pool, codingService);
   const teams = new TeamService(pool, codingService);
   router.use(teamRouter(teams, teamExecutions));

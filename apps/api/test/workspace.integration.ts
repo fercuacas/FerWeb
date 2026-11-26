@@ -1,5 +1,16 @@
 import assert from 'node:assert/strict';
-import { randomUUID, randomBytes } from 'node:crypto';
+import { randomUUID, randomBytes, createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
+import {
+  extensionDetail,
+  extensionRun,
+  portableBundle,
+  portablePreview,
+  skillResponse,
+  agentMutationResponse,
+  type ExtensionManifest,
+} from '@ferweb/contracts';
+import { skillManifestFixture } from '../../../tests/fixtures/skills.mjs';
 import { once } from 'node:events';
 import { test } from 'node:test';
 import { createPool } from '../src/database.js';
@@ -360,6 +371,306 @@ test('workspace HTTP with real PostgreSQL and two isolated users', async (t) => 
         201,
       );
     });
+    await t.test(
+      'P22 extensions stage and review local access, preserve project edits and retain history through rollback',
+      async () => {
+        const scoped = (
+          await (
+            await request('POST', '/projects', { name: 'P22 extensions', description: '' }, a)
+          ).json()
+        ).project;
+        const root = `/projects/${scoped.id}/extensions`;
+        const hash = (text: string) => createHash('sha256').update(text).digest('hex');
+        const artifact = (path: string, text: string) => ({ path, text, sha256: hash(text) });
+        const manifest: ExtensionManifest = {
+          format: 1,
+          version: '1.0.0',
+          slug: 'p22-review-reader',
+          name: 'Fixture reader',
+          origin: {
+            kind: 'github',
+            repository: 'affaan-m/ECC',
+            commit: 'a'.repeat(40),
+            path: 'skills/review/SKILL.md',
+          },
+          license: 'MIT',
+          notice: 'Synthetic manifest and provenance for test only.',
+          resources: [
+            artifact('notes.md', 'First allowed fixture.'),
+            artifact('preferences.json', '{"theme":"original"}'),
+          ],
+          capabilities: ['read-resource'],
+          dependencies: [{ kind: 'builtin', name: 'fixture-reader', version: '1.0.0' }],
+          destinations: ['project-local'],
+        };
+        const importManifest = (input: unknown) => request('POST', root, { manifest: input }, a);
+        for (const bad of [
+          { ...manifest, origin: { ...manifest.origin, commit: 'main' } },
+          { ...manifest, origin: { ...manifest.origin, url: 'http://127.0.0.1:80/' } },
+          { ...manifest, resources: [artifact('../notes.md', 'out')] },
+          { ...manifest, resources: [artifact('notes.md\n', 'out')] },
+          { ...manifest, resources: [artifact('con.txt', 'out')] },
+          { ...manifest, dependencies: [{ kind: 'npm', name: 'temporal', version: 'latest' }] },
+          { ...manifest, destinations: ['http://169.254.169.254/'] },
+          { ...manifest, capabilities: ['exec'] },
+        ])
+          assert.equal((await importManifest(bad)).status, 400);
+        assert.equal(
+          (
+            await importManifest({
+              ...manifest,
+              resources: [{ ...manifest.resources[0], sha256: '0'.repeat(64) }],
+            })
+          ).status,
+          422,
+        );
+        const imported = await importManifest(manifest);
+        assert.equal(imported.status, 201, await imported.clone().text());
+        let detail = extensionDetail.parse(await imported.json());
+        const endpoint = root + '/' + detail.id;
+        const action = (body: unknown, cookie = a) =>
+          request('POST', endpoint + '/actions', body, cookie);
+        const run = (body: unknown, cookie = a) =>
+          request('POST', endpoint + '/runs', body, cookie);
+        const apply = async (body: Record<string, unknown>) => {
+          const response = await action({ ...body, revision: detail.revision });
+          assert.equal(response.status, 200, await response.clone().text());
+          detail = extensionDetail.parse(await response.json());
+          return detail;
+        };
+        const runInput = () => ({
+          requestId: randomUUID(),
+          revision: detail.revision,
+          operation: 'read-resource',
+        });
+        assert.equal(detail.state, 'imported');
+        assert.equal(detail.events.length, 1);
+        assert.deepEqual(detail.resources, []);
+        assert.equal((await request('GET', endpoint, undefined, b)).status, 404);
+        assert.equal((await run(runInput(), b)).status, 404);
+        assert.equal((await run(runInput())).status, 409);
+        assert.equal(
+          (
+            await action({
+              action: 'configure',
+              revision: detail.revision,
+              config: { path: 'notes.md', token: 'fixture-credential' },
+            })
+          ).status,
+          400,
+        );
+        assert.equal(
+          (
+            await action({
+              action: 'enable',
+              revision: detail.revision,
+              previewHash: detail.enablePreview.sha256,
+            })
+          ).status,
+          409,
+        );
+        const ready = async () => {
+          await apply({ action: 'configure', config: { path: 'notes.md' } });
+          assert.equal(
+            (
+              await action({
+                action: 'review',
+                revision: detail.revision,
+                previewHash: '0'.repeat(64),
+              })
+            ).status,
+            409,
+          );
+          await apply({ action: 'review', previewHash: detail.enablePreview.sha256 });
+          assert.equal((await run(runInput())).status, 409);
+          await apply({ action: 'enable', previewHash: detail.enablePreview.sha256 });
+        };
+        await ready();
+        const firstInput = runInput();
+        const executions = await Promise.all([run(firstInput), run(firstInput)]);
+        const [first, duplicate] = await Promise.all(
+          executions.map(async (response) => extensionRun.parse(await response.json())),
+        );
+        assert.deepEqual(first, duplicate);
+        assert.equal(first!.text, 'First allowed fixture.');
+        assert.equal(first!.destination, 'project-local');
+        assert.equal((await run({ ...runInput(), path: 'preferences.json' })).status, 400);
+        assert.equal(
+          (await run({ ...runInput(), destination: 'https://example.com' })).status,
+          400,
+        );
+
+        await apply({ action: 'edit', path: 'preferences.json', text: '{"theme":"mine"}' });
+        assert.equal(detail.state, 'configured');
+        assert.equal((await run(runInput())).status, 409);
+        const oldPreview = detail.enablePreview;
+        const updated = await importManifest({
+          ...manifest,
+          version: '2.0.0',
+          resources: [
+            artifact('notes.md', 'Second allowed fixture.'),
+            artifact('preferences.json', '{"theme":"replacement"}'),
+            artifact('extra.txt', 'Added by v2.'),
+          ],
+        });
+        detail = extensionDetail.parse(await updated.json());
+        assert.equal(detail.state, 'imported');
+        assert.equal(
+          (
+            await action({
+              action: 'review',
+              revision: oldPreview.revision,
+              previewHash: oldPreview.sha256,
+            })
+          ).status,
+          409,
+        );
+        assert.equal((await importManifest({ ...manifest, name: 'Conflict' })).status, 409);
+        assert.deepEqual(
+          detail.enablePreview.changes.map(({ path, action }) => [path, action]),
+          [
+            ['extra.txt', 'add'],
+            ['notes.md', 'update'],
+            ['preferences.json', 'preserve'],
+          ],
+        );
+        await ready();
+        assert.equal(
+          extensionRun.parse(await (await run(runInput())).json()).text,
+          'Second allowed fixture.',
+        );
+        await apply({ action: 'select', version: '1.0.0' });
+        assert.equal((await run(runInput())).status, 409);
+        await ready();
+        assert.equal(detail.resources.find((file) => file.path === 'extra.txt')?.visible, false);
+        assert.equal(
+          detail.resources.find((file) => file.path === 'notes.md')?.text,
+          'First allowed fixture.',
+        );
+        await apply({ action: 'withdraw', previewHash: detail.withdrawPreview.sha256 });
+        assert.deepEqual(
+          detail.resources
+            .filter((file) => file.visible)
+            .map(({ path, owner, text }) => [path, owner, text]),
+          [['preferences.json', 'project', '{"theme":"mine"}']],
+        );
+        assert.equal(detail.releases.length, 2);
+        assert.equal(detail.events.filter((event) => event.action === 'run').length, 2);
+        assert.equal((await run(runInput())).status, 409);
+        assert.deepEqual(extensionRun.parse(await (await run(firstInput)).json()), first);
+        const archived = await request(
+          'PATCH',
+          `/projects/${scoped.id}`,
+          { version: scoped.version, archived: true },
+          a,
+        );
+        assert.equal(archived.status, 200);
+        assert.equal((await request('GET', endpoint, undefined, a)).status, 200);
+        assert.equal((await run(runInput())).status, 409);
+      },
+    );
+
+    await t.test(
+      'P22 portable exports preserve exact role, skill and workflow versions and produce valid Codex files',
+      async () => {
+        const created = (
+          await (
+            await request('POST', '/projects', { name: 'P22 portable', description: '' }, a)
+          ).json()
+        ).project;
+        const root = `/projects/${created.id}`;
+        const post = (path: string, body: unknown) => request('POST', root + path, body, a);
+        const text = 'Review without shell.\n"\n[mcp_servers.injected]\ncommand = "fake"';
+        const { role } = agentMutationResponse.parse(
+          await (
+            await post('/agents', {
+              name: 'Portable reviewer',
+              purpose: 'Review quoted "content"',
+              instructions: text,
+              outputFormat: 'Evidence',
+              requiredCapabilities: ['text'],
+              allowedToolProfiles: ['node-isolated-v1'],
+            })
+          ).json(),
+        );
+        const { skill } = skillResponse.parse(
+          await (await post('/skills', { manifest: skillManifestFixture() })).json(),
+        );
+        assert.equal((await post('/portable/preview', { skillId: skill.id })).status, 422);
+        assert.equal(
+          (await post(`/skills/${skill.id}/review`, { sha256: skill.sha256, state: 'approved' }))
+            .status,
+          200,
+        );
+        const workflow = await post('/team-templates', {
+          definition: {
+            name: 'Pinned workflow',
+            description: '',
+            maxIterations: 1,
+            limits: { maxRequests: 2, timeoutMs: 30000, concurrency: 1 },
+            steps: [
+              {
+                key: 'review',
+                title: 'Review',
+                role: { id: role.id, version: 1 },
+                dependsOn: [],
+                exitCriteria: ['Evidence'],
+                requiredCapabilities: ['text'],
+                maxRequests: 2,
+              },
+            ],
+          },
+        });
+        assert.equal(workflow.status, 201, await workflow.clone().text());
+        const template = (await workflow.json()).template;
+        const selection = { workflow: { id: template.id, version: 1 }, skillId: skill.id };
+        const preview = await post('/portable/preview', selection);
+        assert.equal(preview.status, 200, await preview.clone().text());
+        const info = portablePreview.parse(await preview.json());
+        assert.equal(info.roles, 1);
+        assert.equal(info.skills, 1);
+        assert.equal(info.workflow, true);
+        assert.equal((await request('POST', root + '/portable/preview', selection, b)).status, 404);
+        assert.equal(
+          (await post('/portable/codex', { selection, sha256: '0'.repeat(64) })).status,
+          409,
+        );
+        const output = await post('/portable/json', { selection, sha256: info.sha256 });
+        assert.match(output.headers.get('content-disposition') ?? '', /attachment/);
+        const bundle = portableBundle.parse(await output.json());
+        assert.equal(bundle.roles[0]?.instructions, text);
+        assert.equal(bundle.workflow?.definition.steps[0]?.role.id, role.id);
+        assert.equal(bundle.skills[0]?.sha256, skill.sha256);
+        const zip = await post('/portable/codex', { selection, sha256: info.sha256 });
+        assert.equal(zip.status, 200);
+        assert.match(zip.headers.get('content-type') ?? '', /zip/);
+        const check = spawnSync(
+          'python3',
+          [
+            '-c',
+            `
+import hashlib, io, json, sys, tomllib, zipfile
+archive = zipfile.ZipFile(io.BytesIO(sys.stdin.buffer.read()))
+actual = [(name, hashlib.sha256(archive.read(name)).hexdigest()) for name in archive.namelist()]
+assert actual == [(file['path'], file['sha256']) for file in json.loads(sys.argv[1])]
+assert archive.testzip() is None
+role_path = next(name for name in archive.namelist() if name.endswith('.toml'))
+role = tomllib.loads(archive.read(role_path).decode('utf8'))
+assert set(role) == {'name', 'description', 'developer_instructions'}
+assert '[mcp_servers.injected]' in role['developer_instructions']
+skill_path = next(name for name in archive.namelist() if name.endswith('/SKILL.md'))
+frontmatter = archive.read(skill_path).decode('utf8').split('---', 2)[1].splitlines()
+metadata = {line.split(': ',1)[0]: json.loads(line.split(': ',1)[1]) for line in frontmatter if line}
+assert metadata['name'] == skill_path.split('/')[-2] and metadata['description']
+assert json.loads(archive.read('ferweb-portable.json'))['workflow']['definition']['steps'][0]['key'] == 'review'
+`,
+            JSON.stringify(info.files),
+          ],
+          { input: Buffer.from(await zip.arrayBuffer()), encoding: 'utf8', timeout: 10000 },
+        );
+        assert.equal(check.status, 0, check.error?.message ?? check.stderr);
+      },
+    );
     await t.test('logout and expiry revoke access; login attempts are limited', async () => {
       const response = await request('POST', '/auth/logout', {}, a);
       assert.equal(response.status, 204);

@@ -10,6 +10,8 @@ import {
 } from '@ferweb/contracts';
 import { agentsApi } from './agents-store';
 import { SkillLinks, SkillsLibrary } from './Skills';
+import { ProjectExtensions } from './ProjectExtensions';
+import { PortableCatalog } from './PortableCatalog';
 import { TeamTemplates } from './TeamTemplates';
 import { errorMessage, workspaceApi } from './workspace-store';
 import './jobs.css';
@@ -291,6 +293,8 @@ function ProjectAgents({ project }: { project: Project }) {
   const [editing, setEditing] = useState<AgentRole | 'new' | null>(null);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [teamsOpen, setTeamsOpen] = useState(false);
+  const [extensionsOpen, setExtensionsOpen] = useState(false);
+  const [portableOpen, setPortableOpen] = useState(false);
   function saved(id: string) {
     setSelected(id);
     setEditing(null);
@@ -323,6 +327,20 @@ function ProjectAgents({ project }: { project: Project }) {
       <details className="agent-history" onToggle={(e) => setTeamsOpen(e.currentTarget.open)}>
         <summary>Equipos y plantillas</summary>
         {teamsOpen && <TeamTemplates project={project} />}
+      </details>
+      <details
+        className="agent-history"
+        onToggle={(event) => setExtensionsOpen(event.currentTarget.open)}
+      >
+        <summary>Extensiones del proyecto</summary>
+        {extensionsOpen && <ProjectExtensions project={project} />}
+      </details>
+      <details
+        className="agent-history"
+        onToggle={(event) => setPortableOpen(event.currentTarget.open)}
+      >
+        <summary>Exportar catálogo portable</summary>
+        {portableOpen && <PortableCatalog project={project} />}
       </details>
       {query.error && (
         <p role="alert">

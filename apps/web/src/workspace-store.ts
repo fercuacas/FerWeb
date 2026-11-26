@@ -114,6 +114,7 @@ export const workspaceApi = createApi({
     'Memory',
     'ContextPack',
     'Coordination',
+    'Extension',
   ],
   endpoints: (builder) => ({
     executionCapabilities: builder.query<ReturnType<typeof executionCatalogSchema.parse>, string>({

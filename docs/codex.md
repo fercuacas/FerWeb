@@ -48,6 +48,8 @@ El catálogo y la entrada congelada se consultan con autorización de proyecto. 
 
 ## Biblioteca de skills (P03)
 
+Desde Agentes se pueden gestionar extensiones declarativas y exportar versiones de roles, skills y plantillas. El conector inicial de P22 hace una lectura local con aprobación separada. [Extensiones y exportación](extensions.md).
+
 En **Agentes → Biblioteca de skills**, importa un manifiesto JSON o incorpora una entrada del catálogo. La selección de ECC contiene siete adaptaciones de texto para FerWeb y dos referencias bloqueadas por sus dependencias de hooks o MCP. Las adaptaciones incluyen los modos desarrollo, investigación y revisión, reglas TypeScript y Python y guías React y PostgreSQL. Cada entrada conserva su origen fijado y el aviso MIT. [Commit de ECC](https://github.com/affaan-m/ECC/commit/b38be6a7f6350964d59328b52f0624e1d1d552d1)
 
 Comprueba el texto, la licencia y los recursos antes de aprobar la versión. En **Crear versión** del rol, elige hasta tres versiones aprobadas y usa **Ver texto que recibirá el modelo**. Al preparar un trabajo se comprueban las capacidades y perfiles tanto del rol como de sus materiales. Codex recibe los nombres, rutas, textos y avisos de licencia como contexto de referencia. En el destino OpenAI esos textos viajan en la solicitud de inferencia. Los archivos se guardan como datos y el sandbox conserva su política. El frontmatter se trata como texto.
