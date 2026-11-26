@@ -6,6 +6,7 @@ import { agentCapability, agentSelection, agentTemplateId } from './agents.js';
 import { codingAgentSnapshot, codingPath } from './coding.js';
 import { codingToolProfile, executionOptionSchema } from './execution.js';
 import { executionBudgetLimits } from './usage.js';
+import { routingDecision, routingInput } from './routing.js';
 
 const text = z.string().regex(/^[^\u0000\uD800-\uDFFF]*$/u);
 const key = z
@@ -226,6 +227,7 @@ export const prepareTeamPlanInput = z
       .max(6)
       .optional(),
     model: text.trim().min(1).max(100).nullable(),
+    routing: routingInput.optional(),
   })
   .refine(
     (value) => (value.mode === 'single' ? !!value.singleStep : !value.singleStep),
@@ -247,6 +249,7 @@ export function classifyPlanTask(task: { description: string; acceptanceCriteria
   >;
 }
 export const teamPlanSnapshot = z.object({
+  routing: routingDecision.optional(),
   stepModels: z
     .array(z.object({ step: key, model: z.string(), revision: z.string() }))
     .max(6)
@@ -302,6 +305,7 @@ export const teamPlanResponse = z.object({ plan: teamPlan });
 export const approveTeamPlanInput = z.strictObject({
   hash: z.string().regex(/^[a-f0-9]{64}$/),
   version: z.literal(1),
+  acceptApiTransfers: z.literal(true).optional(),
 });
 export type TeamDefinition = z.infer<typeof teamDefinition>;
 export type TeamTemplate = z.infer<typeof teamTemplate>;

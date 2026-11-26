@@ -4,6 +4,8 @@ export * from './context-packs.js';
 export * from './retrieval.js';
 export * from './laboratory.js';
 export * from './agent-evaluation.js';
+export * from './routing.js';
+export * from './provider-comparison.js';
 export * from './learning.js';
 export * from './recipes.js';
 export * from './canvas.js';

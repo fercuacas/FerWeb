@@ -6,6 +6,7 @@ import {
   teamStepOrder,
   type Project,
   type TeamPlan,
+  type CodingDestination,
 } from '@ferweb/contracts';
 import { teamsApi } from './teams-store';
 import { codingApi } from './coding-store';
@@ -19,17 +20,20 @@ import type { contextPackConfigure } from '@ferweb/contracts';
 import type { z } from 'zod';
 import { MemoryPicker, type MemorySelection } from './ProjectKnowledge';
 import { ReviewCanvas } from './ReviewCanvas';
+import { PlanRouting } from './PlanRouting';
 
 export function PlanDetails({ project, id }: { project: Project; id: string }) {
   const query = teamsApi.useTeamPlanQuery({ project: project.id, id }, { refetchOnFocus: true });
   const [approve, result] = teamsApi.useApproveTeamPlanMutation();
   const [confirmed, setConfirmed] = useState('');
+  const [transferConsent, setTransferConsent] = useState('');
   const plan = query.error ? undefined : query.currentData?.plan;
   const task = workspaceApi.useTaskQuery(
     plan ? { projectId: project.id, id: plan.snapshot.task.id } : skipToken,
     { refetchOnFocus: true },
   );
   const current = !task.error && task.currentData?.task.version === plan?.snapshot.task.version;
+  const requiresTransfers = !!plan?.snapshot.routing?.reservedApiRequests;
   return (
     <section className="agent-history" aria-label="Detalle del plan">
       {query.isLoading && <p role="status">Cargando plan…</p>}
@@ -54,6 +58,7 @@ export function PlanDetails({ project, id }: { project: Project; id: string }) {
             · Copia inmutable v{plan.snapshot.version}
           </p>
           <p className="skill-text">Hash: {plan.hash}</p>
+          {plan.snapshot.routing && <PlanRouting decision={plan.snapshot.routing} />}
           {plan.snapshot.stepModels && (
             <section aria-label="Inferencia local del plan">
               <p>
@@ -105,10 +110,11 @@ export function PlanDetails({ project, id }: { project: Project; id: string }) {
           )}
           <p>
             Tarea v{plan.snapshot.task.version} · Plantilla v{plan.snapshot.template.version} ·{' '}
-            {plan.snapshot.mode === 'single' ? 'Agente único' : 'Equipo'} · Modelo:{' '}
-            {plan.snapshot.model ?? 'Sin modelo disponible'}
+            {plan.snapshot.mode === 'single' ? 'Agente único' : 'Equipo'}
+            {!plan.snapshot.routing &&
+              ` · Modelo: ${plan.snapshot.model ?? 'Sin modelo disponible'}`}
           </p>
-          <ExecutionDetails option={plan.snapshot.execution} />
+          {!plan.snapshot.routing && <ExecutionDetails option={plan.snapshot.execution} />}
           <p>
             Máximo previsto: {plan.snapshot.plannedRequests} peticiones · Presupuesto:{' '}
             {plan.snapshot.limits.maxRequests} · Iteraciones: {plan.snapshot.maxIterations} ·
@@ -139,12 +145,14 @@ export function PlanDetails({ project, id }: { project: Project; id: string }) {
                   Depende de: {step.dependsOn.join(', ') || 'ninguna etapa'}
                 </p>
                 {step.paths && <p>Rutas aprobadas: {step.paths.join(', ')}</p>}
-                <p>
-                  Inferencia del rol:{' '}
-                  {plan.snapshot.execution.id === 'local-readonly-v1'
-                    ? `Ollama local · ${plan.snapshot.stepModels?.find((m) => m.step === step.key)?.model}`
-                    : `${plan.snapshot.execution.id === 'codex-local-v1' ? 'Codex + Ollama local' : 'API'} · ${plan.snapshot.model ?? 'Sin modelo'}`}
-                </p>
+                {!plan.snapshot.routing && (
+                  <p>
+                    Inferencia del rol:{' '}
+                    {plan.snapshot.execution.id === 'local-readonly-v1'
+                      ? `Ollama local · ${plan.snapshot.stepModels?.find((m) => m.step === step.key)?.model}`
+                      : `${plan.snapshot.execution.id === 'codex-local-v1' ? 'Codex + Ollama local' : 'API'} · ${plan.snapshot.model ?? 'Sin modelo'}`}
+                  </p>
+                )}
                 <p>
                   Capacidades:{' '}
                   {step.requiredCapabilities.map((key) => capabilityLabels[key]).join(', ')}
@@ -196,10 +204,23 @@ export function PlanDetails({ project, id }: { project: Project; id: string }) {
                   />
                   He revisado esta copia, sus roles, skills, criterios y presupuesto
                 </label>
+                {requiresTransfers && (
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={transferConsent === plan.hash}
+                      onChange={(event) =>
+                        setTransferConsent(event.target.checked ? plan.hash : '')
+                      }
+                    />
+                    Autorizo las transferencias a la API indicadas para esta copia
+                  </label>
+                )}
                 <button
                   className="primary-button"
                   disabled={
                     confirmed !== plan.hash ||
+                    (requiresTransfers && transferConsent !== plan.hash) ||
                     result.isLoading ||
                     !plan.snapshot.execution.available ||
                     !plan.snapshot.model
@@ -208,7 +229,11 @@ export function PlanDetails({ project, id }: { project: Project; id: string }) {
                     void approve({
                       project: project.id,
                       id,
-                      body: { hash: plan.hash, version: plan.snapshot.version },
+                      body: {
+                        hash: plan.hash,
+                        version: plan.snapshot.version,
+                        ...(requiresTransfers && { acceptApiTransfers: true }),
+                      },
                     })
                       .unwrap()
                       .catch(() => {})
@@ -254,6 +279,10 @@ function PlansContent({ project }: { project: Project }) {
   const [mode, setMode] = useState<'auto' | 'single' | 'team'>('auto');
   const [singleStep, setStep] = useState('');
   const [model, setModel] = useState('');
+  const [routing, setRouting] = useState<'default' | 'rules' | 'mixed'>('default');
+  const [apiLimit, setApiLimit] = useState<number | null>(null);
+  const [destinations, setDestinations] = useState<Partial<Record<string, CodingDestination>>>({});
+  const [routedModels, setRoutedModels] = useState<Partial<Record<string, string>>>({});
   const [selected, setSelected] = useState('');
   const [error, setError] = useState('');
   const tasks = tasksQuery.error ? undefined : tasksQuery.currentData?.tasks;
@@ -269,6 +298,10 @@ function PlansContent({ project }: { project: Project }) {
   const localCapabilities = localReadApi.useLocalCapabilitiesQuery(local ? project.id : skipToken);
   const [stepModels, setStepModels] = useState<Record<string, string>>({});
   const writers = template?.definition.strategy === 'writers';
+  const localCoding = template?.definition.inferenceMode === 'local-coding-only';
+  const mixed = routing === 'mixed' && !local && !localCoding && !specialists && !writers;
+  const withRules = !local && (mixed || routing === 'rules');
+  const routingLimit = localCoding ? 0 : (apiLimit ?? template?.definition.limits.maxRequests ?? 0);
   const execution = local
     ? localCapabilities.error
       ? undefined
@@ -288,6 +321,7 @@ function PlansContent({ project }: { project: Project }) {
   const single =
     !specialists &&
     !writers &&
+    !mixed &&
     (mode === 'single' || (mode === 'auto' && classification?.recommendedMode === 'single'));
   const orderedSteps = template
     ? teamStepOrder(template.definition.steps)!.map((key) =>
@@ -301,9 +335,17 @@ function PlansContent({ project }: { project: Project }) {
     ? effectiveSteps.reduce((sum, step) => sum + step.maxRequests, 0) *
       template.definition.maxIterations
     : null;
+  const routingReady =
+    !mixed ||
+    (new Set(effectiveSteps.map(({ key }) => destinations[key])).size === 2 &&
+      effectiveSteps.every(({ key }) => !!destinations[key]));
+  const stageCatalog = (destination: CodingDestination) =>
+    capabilities.currentData && !capabilities.error
+      ? codingOption(capabilities.currentData, template?.definition.toolProfile, false, destination)
+      : undefined;
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!task || !template || !execution || !memoryValid) return;
+    if (!task || !template || !execution || !memoryValid || !routingReady) return;
     setError('');
     try {
       const { plan }: { plan: TeamPlan } = await prepare({
@@ -316,8 +358,8 @@ function PlansContent({ project }: { project: Project }) {
           taskVersion: task.version,
           templateId: template.id,
           templateVersion: template.version,
-          mode: specialists || writers ? 'team' : mode,
-          ...(!specialists && !writers && mode === 'single' && { singleStep }),
+          mode: specialists || writers || mixed ? 'team' : mode,
+          ...(!specialists && !writers && !mixed && mode === 'single' && { singleStep }),
           executionId: local
             ? 'local-readonly-v1'
             : template.definition.inferenceMode === 'local-coding-only'
@@ -329,7 +371,20 @@ function PlansContent({ project }: { project: Project }) {
               model: stepModels[s.key] || effectiveModel,
             })),
           }),
-          model: effectiveModel || null,
+          model: mixed ? null : effectiveModel || null,
+          ...(withRules && {
+            routing: {
+              mode: mixed ? 'mixed' : localCoding ? 'local' : 'api',
+              maxApiRequests: routingLimit,
+              ...(mixed && {
+                stages: effectiveSteps.map(({ key }) => ({
+                  step: key,
+                  destination: destinations[key]!,
+                  ...(routedModels[key] && { model: routedModels[key] }),
+                })),
+              }),
+            },
+          }),
         },
       }).unwrap();
       setSelected(plan.id);
@@ -405,6 +460,10 @@ function PlansContent({ project }: { project: Project }) {
                   setTemplate(e.target.value);
                   setVersion(0);
                   setStep('');
+                  setRouting('default');
+                  setApiLimit(null);
+                  setDestinations({});
+                  setRoutedModels({});
                 }}
               >
                 <option value="">Selecciona una plantilla</option>
@@ -426,6 +485,10 @@ function PlansContent({ project }: { project: Project }) {
                 onChange={(e) => {
                   setVersion(Number(e.target.value));
                   setStep('');
+                  setRouting('default');
+                  setApiLimit(null);
+                  setDestinations({});
+                  setRoutedModels({});
                 }}
               >
                 {detail?.versions.map((item) => (
@@ -438,8 +501,8 @@ function PlansContent({ project }: { project: Project }) {
             <label>
               Modo del plan
               <select
-                disabled={specialists || writers}
-                value={specialists || writers ? 'team' : mode}
+                disabled={specialists || writers || mixed}
+                value={specialists || writers || mixed ? 'team' : mode}
                 onChange={(e) => setMode(e.target.value as typeof mode)}
               >
                 <option value="auto">Automático según tamaño</option>
@@ -447,7 +510,7 @@ function PlansContent({ project }: { project: Project }) {
                 <option value="team">Equipo completo</option>
               </select>
             </label>
-            {!specialists && !writers && mode === 'single' && (
+            {!specialists && !writers && !mixed && mode === 'single' && (
               <label>
                 Etapa del agente único
                 <select required value={singleStep} onChange={(e) => setStep(e.target.value)}>
@@ -460,22 +523,116 @@ function PlansContent({ project }: { project: Project }) {
                 </select>
               </label>
             )}
-            <label>
-              Modelo del plan
-              <select
-                disabled={!execution?.models.length}
-                value={effectiveModel}
-                onChange={(e) => setModel(e.target.value)}
-              >
-                {!execution?.models.length && <option value="">Sin modelo disponible</option>}
-                {execution?.models.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.id}
-                  </option>
-                ))}
-              </select>
-            </label>
+            {!mixed && (
+              <label>
+                Modelo del plan
+                <select
+                  disabled={!execution?.models.length}
+                  value={effectiveModel}
+                  onChange={(e) => setModel(e.target.value)}
+                >
+                  {!execution?.models.length && <option value="">Sin modelo disponible</option>}
+                  {execution?.models.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.id}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
           </div>
+          {template && !local && (
+            <fieldset>
+              <legend>Selección de inferencia</legend>
+              <label>
+                Política del plan
+                <select
+                  value={routing}
+                  onChange={(event) => setRouting(event.target.value as typeof routing)}
+                >
+                  <option value="default">Destino de la plantilla</option>
+                  <option value="rules">
+                    Reglas con {localCoding ? 'Ollama local' : 'API de OpenAI'}
+                  </option>
+                  {!localCoding &&
+                    !specialists &&
+                    !writers &&
+                    template.definition.steps.length > 1 && (
+                      <option value="mixed">Mixto por etapas</option>
+                    )}
+                </select>
+              </label>
+              {withRules && !localCoding && (
+                <label>
+                  Límite de peticiones a la API
+                  <input
+                    type="number"
+                    required
+                    min={0}
+                    max={template.definition.limits.maxRequests}
+                    value={routingLimit}
+                    onChange={(event) => setApiLimit(event.target.valueAsNumber)}
+                  />
+                </label>
+              )}
+              {mixed && (
+                <>
+                  <p>
+                    Elige ambos destinos en etapas distintas. Las etapas API pueden recibir el
+                    workspace y las entregas de etapas locales de este mismo plan. La vista previa
+                    detalla las transferencias que autorizarás.
+                  </p>
+                  {effectiveSteps.map(({ key, title }) => {
+                    const destination = destinations[key];
+                    const catalog = destination ? stageCatalog(destination) : undefined;
+                    return (
+                      <div key={key} className="job-grid">
+                        <label>
+                          Destino de {title}
+                          <select
+                            required
+                            value={destination ?? ''}
+                            onChange={(event) => {
+                              setDestinations({
+                                ...destinations,
+                                [key]: (event.target.value || undefined) as
+                                  CodingDestination | undefined,
+                              });
+                              setRoutedModels({ ...routedModels, [key]: undefined });
+                            }}
+                          >
+                            <option value="">Elige destino</option>
+                            <option value="codex-v1">API de OpenAI</option>
+                            <option value="codex-local-v1">Ollama local</option>
+                          </select>
+                        </label>
+                        <label>
+                          Modelo de {title}
+                          <select
+                            disabled={!catalog?.available}
+                            value={routedModels[key] ?? ''}
+                            onChange={(event) =>
+                              setRoutedModels({ ...routedModels, [key]: event.target.value })
+                            }
+                          >
+                            <option value="">Primer modelo permitido</option>
+                            {catalog?.models.map((item) => (
+                              <option key={item.id} value={item.id}>
+                                {item.id}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        {destination && !catalog?.available && (
+                          <p>Este destino no está disponible.</p>
+                        )}
+                      </div>
+                    );
+                  })}
+                </>
+              )}
+            </fieldset>
+          )}
           {specialists && (
             <p>
               Este workflow requiere todos los especialistas y su resumen.{' '}
@@ -546,12 +703,12 @@ function PlansContent({ project }: { project: Project }) {
               </p>
             </>
           )}
-          {execution ? (
+          {mixed ? null : execution ? (
             <ExecutionDetails option={execution} />
           ) : (
             <p role="status">Elige una plantilla o espera su diagnóstico de ejecución.</p>
           )}
-          {!execution?.available && (
+          {!mixed && !execution?.available && (
             <p>
               {local
                 ? 'Configura un modelo Ollama instalado, permitido y con revisión observada antes de preparar el workflow local.'
@@ -565,10 +722,11 @@ function PlansContent({ project }: { project: Project }) {
               preparing.isLoading ||
               !memoryValid ||
               !execution ||
+              !routingReady ||
               (local && !execution.available) ||
               !task ||
               !template ||
-              (!specialists && !writers && mode === 'single' && !singleStep)
+              (!specialists && !writers && !mixed && mode === 'single' && !singleStep)
             }
           >
             Preparar copia del plan

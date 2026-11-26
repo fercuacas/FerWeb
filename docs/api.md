@@ -245,9 +245,9 @@ Rutas bajo `/api/projects/:projectId`, protegidas por sesión y propietario. Las
 | `PATCH /team-templates/:templateId` | `{version,definition}` → `{template}` con versión nueva. Conflicto si no es la cabeza vigente. |
 | `POST /team-templates/:templateId/archive` | `{version}` → `{archived:true}`; conserva versiones y planes. |
 | `GET /team-plans` | `{plans}` con hasta cien resúmenes recientes, sin textos privados de roles/skills. |
-| `POST /team-plans` | `{requestId,taskId,taskVersion,templateId,templateVersion,mode,singleStep?,executionId,model}` → 201 `{plan}`; copia inmutable, sin encolar. |
+| `POST /team-plans` | `{requestId,taskId,taskVersion,templateId,templateVersion,mode,singleStep?,executionId,model,routing?}` → 201 `{plan}` con copia inmutable. |
 | `GET /team-plans/:planId` | `{plan}` con snapshot completo, hash, estado y aprobación nullable. |
-| `POST /team-plans/:planId/approve` | `{hash,version:1}` → `{plan}` aprobado, idempotente para la misma copia; no ejecuta. |
+| `POST /team-plans/:planId/approve` | `{hash,version:1,acceptApiTransfers?}` → `{plan}` aprobado para esa copia. La selección por reglas con etapas API exige `acceptApiTransfers: true` en la primera aprobación. |
 
 `definition` contiene nombre, descripción, `maxIterations`, `limits` de P04 y `steps`. Cada paso declara `key`, título, selección de rol/versiones, `dependsOn`, `exitCriteria`, `requiredCapabilities` y `maxRequests`. Solo se permiten esos campos; claves únicas, DAG válido y peticiones de todas las iteraciones dentro del máximo del padre. Versiones de plantilla entre 1 y 50; de una a seis etapas y de una a tres iteraciones. Las referencias se resuelven dentro del proyecto.
 
@@ -371,6 +371,15 @@ El laboratorio admite `contextExperiment: ferweb-context-p10-v1`, con `retrieval
 - `POST /projects/:projectId/lab/agent-evaluations/:evaluationId/reviews` recibe `version` (número actual de valoraciones), `verdict` (`solo`, `team`, `tie` o `inconclusive`) y `note`. Guarda una valoración humana adicional. Con condiciones distintas solo se admite `inconclusive`.
 
 El proyecto archivado permite leer y exportar. La revalidación usa la autorización de Codex y equipos, incluidas sus referencias a contexto y memoria. El [laboratorio](laboratory.md#evaluación-de-agente-único-y-equipo-p13) describe los límites del corpus y las métricas.
+
+## Comparación y selección de inferencia P21
+
+- `GET /projects/:projectId/lab/provider-comparisons` devuelve comparaciones guardadas y candidatos individuales terminales agrupados por destino.
+- `POST` en la misma ruta recibe `apiId`, `localId`, `case` (`recorded` o `addition-v1`) y `localHardware` opcional. Guarda evidencia con huella y devuelve la misma comparación si se repite un par y caso con la misma evidencia. Un par ocupado con evidencia distinta devuelve 409.
+- `GET /projects/:projectId/lab/provider-comparisons/:evaluationId` devuelve la evidencia congelada. Añadir `/export` descarga el mismo JSON. Ambas rutas comprueban acceso a los trabajos de origen.
+- En `POST /team-plans`, `routing` admite `mode` (`api`, `local` o `mixed`), `maxApiRequests` y `stages` para el modo mixto. Cada asignación contiene `step`, `destination` (`codex-v1` o `codex-local-v1`) y `model` opcional. Usa `mode: team`, `executionId: codex-v1` y `model: null` en el cuerpo principal de un plan mixto. La copia devuelve `snapshot.routing` con versión de política, decisión por etapa y transferencias.
+
+El flujo de aprobación y la aceptación con modelos reales se describen en la [guía P21](provider-routing.md).
 
 ## Lecciones y cumplimiento P14
 

@@ -6,6 +6,8 @@ import {
   type codingRunSchema,
   type contextReceipt,
   type teamExecutionResponse,
+  type ProviderComparisonInput,
+  providerComparisonEvidence,
 } from '@ferweb/contracts';
 import type { z } from 'zod';
 import { HttpError } from '../../http-error.js';
@@ -198,6 +200,142 @@ const contextHash = (item: EvaluationRun, corpus: AgentEvaluationInput['case']) 
   ]);
 };
 
+function grades(
+  corpus: AgentEvaluationInput['case'],
+  state: Arm['state'],
+  before: Map<string, string> | null,
+  after: Map<string, string> | null,
+) {
+  const baseline =
+    corpus === 'recorded'
+      ? ungraded('not_run', 'recorded_only')
+      : gradeAddition(before?.get(additionPath));
+  const grade =
+    corpus === 'recorded'
+      ? baseline
+      : state !== 'completed'
+        ? ungraded('not_run', 'run_not_completed')
+        : !after
+          ? ungraded('unverifiable', 'artifact_unverified')
+          : !before || baseline.status !== 'failed'
+            ? ungraded('unverifiable', 'fixture_baseline_not_failing')
+            : gradeAdditionArtifact(before, after);
+  return {
+    baseline,
+    grade,
+    artifactHash: after && filesFingerprint(after),
+    costUsd: null,
+    lineCoverage: null,
+  };
+}
+
+function comparisonArm(item: EvaluationRun, corpus: ProviderComparisonInput['case']) {
+  const { run, configuration } = item;
+  const environment = run.environment;
+  const {
+    inference: _,
+    localRevision: _revision,
+    simulated: _simulation,
+    ...tools
+  } = environment ?? {};
+  const report = run.report;
+  const before = baseline(item);
+  const after = item.state === 'completed' && before ? checkedArtifact(item, before) : null;
+  const usage = run.budget?.steps.find((step) => step.jobId === run.jobId);
+  return {
+    ...grades(corpus, item.state as Arm['state'], before, after),
+    jobId: run.jobId,
+    state: item.state,
+    errorCode: item.errorCode,
+    destination: configuration.executionId ?? 'codex-v1',
+    model: configuration.model,
+    modelRevision: configuration.modelRevision ?? null,
+    reportedModel: report?.execution?.reportedModel ?? null,
+    configurationRevision:
+      report?.execution?.configurationRevision ?? environment?.localRevision ?? null,
+    serverVersion: report?.execution?.serverVersion ?? null,
+    cliVersion: report?.cliVersion ?? null,
+    simulated: report ? report.simulated : (environment?.simulated ?? null),
+    taskHash: taskHash(run.task),
+    commit: run.commit,
+    sourceHash: before ? filesFingerprint(before) : null,
+    toolsHash:
+      environment?.image && environment.policyHash
+        ? fingerprint([
+            tools,
+            configuration.toolProfile ?? 'node-isolated-v1',
+            configuration.workspaceAccess ?? 'write',
+          ])
+        : null,
+    contextHash: fingerprint([contextHash(item, corpus), run.agent]),
+    reportHash: report ? fingerprint(report) : null,
+    limits: configuration.budgetLimits ?? null,
+    maxRequests: configuration.maxRequests,
+    maxOutputTokens: configuration.maxOutputTokens,
+    timeoutMs: configuration.limits.timeoutMs,
+    requests: usage?.admittedRequests ?? report?.modelRequests ?? null,
+    elapsedMs: elapsed(item.createdAt, item.finishedAt),
+    usage: report?.providerUsage ?? null,
+    independentTests: (report?.tests ?? [])
+      .filter((test) => test.origin.startsWith('controller'))
+      .map(({ origin, exitCode }) => ({ origin, exitCode })),
+  };
+}
+
+export function compareProviders(
+  input: ProviderComparisonInput,
+  apiRun: EvaluationRun,
+  localRun: EvaluationRun,
+) {
+  const api = comparisonArm(apiRun, input.case),
+    local = comparisonArm(localRun, input.case);
+  const differences = [];
+  if (api.taskHash !== local.taskHash) differences.push('task');
+  if (
+    !api.sourceHash ||
+    api.sourceHash !== local.sourceHash ||
+    api.commit !== local.commit ||
+    apiRun.repositoryId !== localRun.repositoryId ||
+    !apiRun.tree ||
+    canonical(apiRun.tree) !== canonical(localRun.tree)
+  )
+    differences.push('sources');
+  if (!api.toolsHash || api.toolsHash !== local.toolsHash || api.cliVersion !== local.cliVersion)
+    differences.push('tools');
+  if (api.contextHash !== local.contextHash) differences.push('context');
+  if (
+    !api.limits ||
+    canonical(api.limits) !== canonical(local.limits) ||
+    [apiRun, localRun].some(
+      (item) =>
+        canonical(item.configuration.budgetLimits ?? null) !==
+          canonical(item.run.budget?.limits ?? null) || item.run.budget?.steps.length !== 1,
+    ) ||
+    api.maxRequests !== local.maxRequests ||
+    api.maxOutputTokens !== local.maxOutputTokens ||
+    api.timeoutMs !== local.timeoutMs
+  )
+    differences.push('limits');
+  if (
+    api.simulated === null ||
+    api.simulated !== local.simulated ||
+    [apiRun, localRun].some(
+      ({ run }) => run.report && run.report.simulated !== run.environment?.simulated,
+    )
+  )
+    differences.push('simulation');
+  return providerComparisonEvidence.parse({
+    protocol: 'ferweb-provider-comparison-v1',
+    case: input.case,
+    fixtureHash: input.case === 'addition-v1' ? additionFixtureHash : null,
+    localHardware: input.localHardware ?? null,
+    comparable: !differences.length,
+    differences,
+    api,
+    local,
+  });
+}
+
 export function evaluationEvidence(
   corpus: AgentEvaluationInput['case'],
   solo: EvaluationRun,
@@ -302,33 +440,6 @@ export function evaluationEvidence(
     }
   } else teamOutput = null;
 
-  function grades(
-    state: Arm['state'],
-    before: Map<string, string> | null,
-    after: Map<string, string> | null,
-  ) {
-    const baseline =
-      corpus === 'recorded'
-        ? ungraded('not_run', 'recorded_only')
-        : gradeAddition(before?.get(additionPath));
-    const grade =
-      corpus === 'recorded'
-        ? baseline
-        : state !== 'completed'
-          ? ungraded('not_run', 'run_not_completed')
-          : !after
-            ? ungraded('unverifiable', 'artifact_unverified')
-            : !before || baseline.status !== 'failed'
-              ? ungraded('unverifiable', 'fixture_baseline_not_failing')
-              : gradeAdditionArtifact(before, after);
-    return {
-      baseline,
-      grade,
-      artifactHash: after && filesFingerprint(after),
-      costUsd: null,
-      lineCoverage: null,
-    };
-  }
   const soloState = solo.state as Arm['state'];
   return {
     protocol: 'ferweb-agent-evaluation-v1',
@@ -338,7 +449,7 @@ export function evaluationEvidence(
     comparable: differences.length === 0,
     differences,
     solo: {
-      ...grades(soloState, soloInput, soloOutput),
+      ...grades(corpus, soloState, soloInput, soloOutput),
       state: soloState,
       errorCode: solo.errorCode,
       elapsedMs: elapsed(solo.createdAt, solo.finishedAt),
@@ -367,7 +478,7 @@ export function evaluationEvidence(
       ],
     },
     team: {
-      ...grades(execution.state as Arm['state'], teamInput, teamOutput),
+      ...grades(corpus, execution.state as Arm['state'], teamInput, teamOutput),
       state: execution.state as Arm['state'],
       errorCode: execution.errorCode,
       elapsedMs: elapsed(execution.createdAt, execution.finishedAt),

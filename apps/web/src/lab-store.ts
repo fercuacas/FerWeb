@@ -13,6 +13,10 @@ import {
   type contextAdoptionInput,
   agentEvaluation,
   agentEvaluationList,
+  providerComparison,
+  providerComparisonList,
+  type ProviderComparison,
+  type ProviderComparisonInput,
   type AgentEvaluation,
   type AgentEvaluationInput,
   type agentEvaluationReviewInput,
@@ -20,6 +24,29 @@ import {
 import { workspaceApi } from './workspace-store';
 export const labApi = workspaceApi.injectEndpoints({
   endpoints: (builder) => ({
+    providerComparisons: builder.query<z.infer<typeof providerComparisonList>, string>({
+      query: (project) => `/projects/${project}/lab/provider-comparisons`,
+      transformResponse: (data) => providerComparisonList.parse(data),
+      providesTags: ['Laboratory', 'Job'],
+      keepUnusedDataFor: 0,
+    }),
+    providerComparison: builder.query<ProviderComparison, { project: string; id: string }>({
+      query: ({ project, id }) => `/projects/${project}/lab/provider-comparisons/${id}`,
+      transformResponse: (data) => providerComparison.parse(data),
+      keepUnusedDataFor: 0,
+    }),
+    compareProviders: builder.mutation<
+      ProviderComparison,
+      { project: string; body: ProviderComparisonInput }
+    >({
+      query: ({ project, body }) => ({
+        url: `/projects/${project}/lab/provider-comparisons`,
+        method: 'POST',
+        body,
+      }),
+      transformResponse: (data) => providerComparison.parse(data),
+      invalidatesTags: ['Laboratory'],
+    }),
     agentEvaluations: builder.query<z.infer<typeof agentEvaluationList>, string>({
       query: (project) => `/projects/${project}/lab/agent-evaluations`,
       transformResponse: (data) => agentEvaluationList.parse(data),

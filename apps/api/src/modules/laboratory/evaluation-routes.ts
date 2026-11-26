@@ -1,6 +1,10 @@
 import express from 'express';
 import { z } from 'zod';
-import { agentEvaluationInput, agentEvaluationReviewInput } from '@ferweb/contracts';
+import {
+  agentEvaluationInput,
+  agentEvaluationReviewInput,
+  providerComparisonInput,
+} from '@ferweb/contracts';
 import type { AgentEvaluations } from './evaluations.js';
 
 export function agentEvaluationRouter(service: AgentEvaluations) {
@@ -9,6 +13,22 @@ export function agentEvaluationRouter(service: AgentEvaluations) {
   const scope = (req: express.Request, res: express.Response) =>
     [(res.locals.user as { id: string }).id, z.uuid().parse(req.params.projectId)] as const;
   const id = (req: express.Request) => z.uuid().parse(req.params.evaluationId);
+  const providers = '/projects/:projectId/lab/provider-comparisons';
+  router.get(providers, async (req, res) => {
+    res.json(await service.listProviders(...scope(req, res)));
+  });
+  router.post(providers, async (req, res) => {
+    res.json(
+      await service.compareProviders(...scope(req, res), providerComparisonInput.parse(req.body)),
+    );
+  });
+  router.get(providers + '/:evaluationId', async (req, res) => {
+    res.json(await service.readProviders(...scope(req, res), id(req)));
+  });
+  router.get(providers + '/:evaluationId/export', async (req, res) => {
+    const result = await service.readProviders(...scope(req, res), id(req));
+    res.attachment(`ferweb-provider-comparison-${result.id}.json`).json(result);
+  });
   router.get(path, async (req, res) => {
     res.json(await service.list(...scope(req, res)));
   });

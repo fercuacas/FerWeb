@@ -6,6 +6,8 @@ En cada proyecto, abrir **Laboratorio**. El recorrido es guardar casos congelado
 
 ## Evaluación de agente único y equipo P13
 
+Para comparar dos trabajos individuales que usan destinos de inferencia distintos, usa la sección API/local del laboratorio. Comparte las comprobaciones deterministas de P13 para la fixture de suma y conserva evidencia independiente. [Comparación y protocolo P21](provider-routing.md).
+
 Desde **Trabajos**, completa un trabajo Codex individual y un plan en modo equipo para la misma tarea y versión. Usa el mismo repositorio, commit, perfil, modelo, plazo y techo global de solicitudes, con concurrencia uno y 4096 tokens máximos de salida por solicitud, que es el límite de cada paso del equipo. Para aislar la coordinación usa el mismo material adicional de skills, memoria y contexto en ambos brazos. La asignación de solicitudes entre pasos y sus instrucciones forman parte de la intervención. Las ejecuciones fallidas y canceladas también se pueden seleccionar.
 
 En **Laboratorio → Evaluar agente y equipo**, elige ambos trabajos. **Informes registrados** conserva el resultado sin pruebas secretas. **Fixture de suma v1** activa las sondas deterministas para el corpus CommonJS con `src/add.cjs` inicialmente defectuoso. El panel separa el verificador, las pruebas observadas del informe y las valoraciones humanas. Conserva pasos y rondas iniciadas, causas registradas, tiempo desde creación hasta cierre, llamadas admitidas y uso reportado por auxiliar. El coste y la cobertura de líneas quedan desconocidos. El recuento de sondas de la fixture expresa cobertura del caso, con las pruebas del repositorio listadas aparte.

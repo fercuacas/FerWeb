@@ -13,6 +13,7 @@ import { budgetsApi } from './budgets-store';
 import { BudgetUsage } from './Budgets';
 import { githubApi } from './github-store';
 import { ContextReceiptView } from './ContextPacks';
+import { PlanRouting } from './PlanRouting';
 
 const names = {
   pending: 'Pendiente',
@@ -491,7 +492,11 @@ export function TeamRunDetails({
                 : 'secuencial · Un solo trabajo activo por proyecto'}{' '}
             · Sin reintentos automáticos de código
           </p>
-          <ExecutionDetails option={data.plan.execution} />
+          {data.plan.routing ? (
+            <PlanRouting decision={data.plan.routing} />
+          ) : (
+            <ExecutionDetails option={data.plan.execution} />
+          )}
           <TeamBudget project={project.id} id={data.execution.budgetId} />
           {data.integrations?.map((integration, index) => (
             <div key={integration.hash}>

@@ -781,12 +781,14 @@ export class TeamExecutions {
       )
         throw conflict('team_integration_changed');
     }
+    const routing = snapshot.routing?.stages.find((stage) => stage.step === step.key);
+    const destination = routing?.execution.id ?? snapshot.execution.id;
     await this.coding.create(
       run.owner_id,
       run.project_id,
       {
         requestId: current.request_id,
-        ...(snapshot.execution.id === 'codex-local-v1' && { executionId: 'codex-local-v1' }),
+        ...(destination === 'codex-local-v1' && { executionId: 'codex-local-v1' }),
         ...(snapshot.contexts?.length
           ? { contextReceipt: snapshot.contexts.find((c) => c.step === current.step_key)!.receipt }
           : snapshot.memory?.length
@@ -795,7 +797,7 @@ export class TeamExecutions {
         taskId: snapshot.task.id,
         taskVersion: snapshot.task.version,
         commit: run.commit_sha,
-        model: snapshot.model!,
+        model: routing?.model ?? snapshot.model!,
         ...(snapshot.template.definition.toolProfile && {
           toolProfile: snapshot.template.definition.toolProfile,
         }),

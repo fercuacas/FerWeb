@@ -26,6 +26,7 @@ import { canonical, digest } from '../jobs/review-artifacts.js';
 import { teamPresets } from './presets.js';
 import { assertReviewTarget, freezeReviewTarget } from '../jobs/dimension-reviews.js';
 import { stableId } from '../retrieval/chunking.js';
+import { decideRouting } from './routing.js';
 
 const missing = () => new HttpError(404, 'not_found', 'No se ha encontrado el recurso.');
 const conflict = () =>
@@ -154,6 +155,7 @@ export class TeamService {
     project: string,
     definition: TeamDefinition,
     option: ExecutionOption,
+    routing?: TeamPlan['snapshot']['routing'],
   ) {
     const steps = [];
     const order = teamStepOrder(definition.steps)!;
@@ -168,7 +170,8 @@ export class TeamService {
       );
       if (materials.some((item, index) => item.sha256 !== agent.skills?.[index]?.sha256))
         throw conflict();
-      if (![step, agent, ...materials].every((item) => compatible(item, option)))
+      const execution = routing?.stages.find((stage) => stage.step === key)?.execution ?? option;
+      if (![step, agent, ...materials].every((item) => compatible(item, execution)))
         throw new HttpError(
           422,
           'team_incompatible',
@@ -329,9 +332,8 @@ export class TeamService {
     }
     const task = await this.projects.getTask(owner, project, snapshot.task.id);
     if (task.version !== snapshot.task.version) throw conflict();
-    const definition = snapshot.template.definition;
-    const execution = await this.executionFor(owner, project, definition);
-    if (!execution.available || canonical(execution) !== canonical(snapshot.execution))
+    const execution = await this.currentExecution(owner, project, snapshot);
+    if (!execution)
       throw new HttpError(
         409,
         'team_environment_changed',
@@ -346,7 +348,14 @@ export class TeamService {
         snapshot.template.version,
       );
       if (canonical(template) !== canonical(snapshot.template)) throw conflict();
-      const resolved = await this.resolve(db, owner, project, template.definition, execution);
+      const resolved = await this.resolve(
+        db,
+        owner,
+        project,
+        template.definition,
+        execution,
+        snapshot.routing,
+      );
       for (const step of snapshot.steps) {
         if (
           canonical(resolved.find((item) => item.key === step.key)?.agent) !== canonical(step.agent)
@@ -354,6 +363,26 @@ export class TeamService {
           throw conflict();
       }
     });
+  }
+  private async currentExecution(owner: string, project: string, snapshot: TeamPlan['snapshot']) {
+    const definition = snapshot.template.definition;
+    if (!snapshot.routing) {
+      const execution = await this.executionFor(owner, project, definition);
+      return execution.available && canonical(execution) === canonical(snapshot.execution)
+        ? execution
+        : null;
+    }
+    const caps = await this.coding.capabilities(owner, project);
+    for (const stage of snapshot.routing.stages) {
+      const current = codingOption(
+        caps,
+        definition.toolProfile,
+        definition.strategy === 'specialists',
+        stage.execution.id,
+      );
+      if (!current.available || canonical(current) !== canonical(stage.execution)) return null;
+    }
+    return snapshot.execution;
   }
   async prepare(owner: string, project: string, input: z.infer<typeof prepareTeamPlanInput>) {
     await this.projects.get(owner, project);
@@ -424,7 +453,54 @@ export class TeamService {
         'team_inference_mismatch',
         'El proveedor elegido no coincide con la política del workflow. No se permite fallback.',
       );
-    const execution = await this.executionFor(owner, project, selected.definition);
+    const definition = selected.definition;
+    const keys = teamStepOrder(definition.steps)!;
+    const classification = classifyPlanTask(task);
+    const mode = input.mode === 'auto' ? classification.recommendedMode : input.mode;
+    const chosen = keys.filter((key) => mode !== 'single' || key === (input.singleStep ?? keys[0]));
+    if (!chosen.length)
+      throw new HttpError(422, 'team_step_missing', 'El paso elegido no existe en la plantilla.');
+    const requestedRouting = input.routing;
+    if (
+      requestedRouting &&
+      (local ||
+        (definition.inferenceMode === 'local-coding-only'
+          ? requestedRouting.mode !== 'local'
+          : requestedRouting.mode === 'local') ||
+        (requestedRouting.mode === 'mixed' &&
+          (definition.strategy || input.mode !== 'team' || input.model !== null)))
+    )
+      throw new HttpError(
+        422,
+        'routing_mode',
+        'La política debe respetar la plantilla. El modo mixto requiere un equipo secuencial completo y un destino por etapa.',
+      );
+    let routing: TeamPlan['snapshot']['routing'];
+    if (requestedRouting) {
+      const caps = await this.coding.capabilities(owner, project);
+      const readOnly = definition.strategy === 'specialists';
+      routing = decideRouting(
+        requestedRouting,
+        chosen.map((key) => definition.steps.find((step) => step.key === key)!),
+        {
+          'codex-v1': codingOption(caps, definition.toolProfile, readOnly),
+          'codex-local-v1': codingOption(caps, definition.toolProfile, readOnly, 'codex-local-v1'),
+        },
+        {
+          model: input.model,
+          maxRequests: definition.limits.maxRequests,
+          iterations: definition.maxIterations,
+          context: !!input.context,
+          memory:
+            !!input.memory?.length ||
+            (input.context?.includeMemory === true && input.context.mode === 'automatic'),
+          review: !!reviewTarget,
+        },
+      );
+    }
+    const execution =
+      routing?.stages[0]?.execution ?? (await this.executionFor(owner, project, definition));
+    const planModel = routing?.stages[0]?.model ?? input.model;
     if (local && !execution.available)
       throw new HttpError(
         503,
@@ -456,8 +532,8 @@ export class TeamService {
         'Las asignaciones de modelo deben pertenecer a etapas únicas del workflow.',
       );
     if (
-      input.model
-        ? !execution.models.some((model) => model.id === input.model)
+      planModel
+        ? !execution.models.some((model) => model.id === planModel)
         : execution.models.length > 0
     )
       throw new HttpError(
@@ -467,16 +543,14 @@ export class TeamService {
       );
     const contexts: NonNullable<TeamPlan['snapshot']['contexts']> = [];
     if (input.context) {
-      const keys = teamStepOrder(selected.definition.steps)!;
-      const mode = input.mode === 'auto' ? classifyPlanTask(task).recommendedMode : input.mode;
-      for (const key of keys.filter(
-        (k) => mode !== 'single' || k === (input.singleStep ?? keys[0]),
-      )) {
+      for (const key of chosen) {
         const step = selected.definition.steps.find((s) => s.key === key)!;
+        const route = routing?.stages.find((stage) => stage.step === key);
+        const model = route?.model ?? stepModels?.find((m) => m.step === key)?.model ?? planModel;
         const prepared = await this.coding.contextPacks!.prepare(owner, project, {
           ...input.context,
           ...(local && { executionId: 'local-readonly-v1' as const }),
-          ...(selected.definition.inferenceMode === 'local-coding-only' && {
+          ...((route?.execution.id ?? execution.id) === 'codex-local-v1' && {
             executionId: 'codex-local-v1' as const,
           }),
           requestId: stableId(input.requestId + ':' + key),
@@ -484,9 +558,7 @@ export class TeamService {
           taskVersion: task.version,
           agent: step.role,
           phase: 'team:' + key,
-          ...((stepModels?.find((m) => m.step === key)?.model ?? input.model) && {
-            model: stepModels?.find((m) => m.step === key)?.model ?? input.model!,
-          }),
+          ...(model && { model }),
           readOnly: selected.definition.strategy === 'specialists',
           ...(selected.definition.toolProfile && { toolProfile: selected.definition.toolProfile }),
           memory: input.memory ?? [],
@@ -522,19 +594,23 @@ export class TeamService {
         input.templateId,
         input.templateVersion,
       );
-      const allSteps = await this.resolve(db, owner, project, template.definition, execution);
-      const classification = classifyPlanTask(task);
-      const mode = input.mode === 'auto' ? classification.recommendedMode : input.mode;
-      const single = input.singleStep ?? allSteps[0]!.key;
-      if (mode === 'single' && !allSteps.some((step) => step.key === single))
-        throw new HttpError(422, 'team_step_missing', 'El paso elegido no existe en la plantilla.');
+      if (canonical(template) !== canonical(selected)) throw conflict();
+      const allSteps = await this.resolve(
+        db,
+        owner,
+        project,
+        template.definition,
+        execution,
+        routing,
+      );
       const steps =
         mode === 'single'
           ? allSteps
-              .filter((step) => step.key === single)
+              .filter((step) => chosen.includes(step.key))
               .map((step) => ({ ...step, dependsOn: [] }))
           : allSteps;
       const snapshot = teamPlanSnapshot.parse({
+        ...(routing && { routing }),
         ...(stepModels && { stepModels }),
         ...(contexts.length && { contexts }),
         ...(input.memory?.length && { memory: input.memory }),
@@ -551,7 +627,7 @@ export class TeamService {
         classification,
         mode,
         execution,
-        model: input.model,
+        model: planModel,
         limits: template.definition.limits,
         maxIterations: template.definition.maxIterations,
         plannedRequests:
@@ -598,8 +674,7 @@ export class TeamService {
       await this.coding.contextPacks!.assertCurrent(owner, project, item.receipt);
     if (initial.snapshot.memory?.length)
       await this.coding.memory.selections(owner, project, initial.snapshot.memory);
-    const definition = initial.snapshot.template.definition;
-    const execution = await this.executionFor(owner, project, definition);
+    const execution = await this.currentExecution(owner, project, initial.snapshot);
     return this.write(owner, project, async (db) => {
       const row = await this.planRow(db, owner, project, id);
       const plan = planDto(row);
@@ -610,12 +685,7 @@ export class TeamService {
         digest(canonical(plan.snapshot)) !== input.hash
       )
         throw conflict();
-      if (
-        !plan.snapshot.execution.available ||
-        !plan.snapshot.model ||
-        !execution.available ||
-        canonical(execution) !== canonical(plan.snapshot.execution)
-      )
+      if (!plan.snapshot.execution.available || !plan.snapshot.model || !execution)
         throw new HttpError(
           409,
           'plan_blocked',
@@ -629,6 +699,12 @@ export class TeamService {
       ).rows[0];
       if (task?.version !== plan.snapshot.task.version) throw conflict();
       if (plan.approval) return { plan };
+      if (plan.snapshot.routing?.reservedApiRequests && !input.acceptApiTransfers)
+        throw new HttpError(
+          422,
+          'routing_consent',
+          'Confirma las transferencias a la API para aprobar esta copia.',
+        );
       const updated = (
         await db.query(
           'UPDATE prepared_team_plans SET approved_at=COALESCE(approved_at,now()),approval_hash=hash WHERE id=$1 RETURNING *',

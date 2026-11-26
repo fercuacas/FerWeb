@@ -4,6 +4,10 @@ import {
   agentEvaluationEvidence,
   agentEvaluationList,
   codingConfiguration,
+  providerComparison,
+  providerComparisonEvidence,
+  providerComparisonList,
+  type ProviderComparisonInput,
   type AgentEvaluationInput,
   type agentEvaluationReviewInput,
 } from '@ferweb/contracts';
@@ -12,7 +16,7 @@ import { HttpError } from '../../http-error.js';
 import type { CodingService } from '../jobs/coding-service.js';
 import { canonical, digest } from '../jobs/review-artifacts.js';
 import type { TeamExecutions } from '../teams/executions.js';
-import { evaluationEvidence, type EvaluationRun } from './evaluation-evidence.js';
+import { compareProviders, evaluationEvidence, type EvaluationRun } from './evaluation-evidence.js';
 
 const missing = () => new HttpError(404, 'not_found', 'No se ha encontrado la comparación.');
 const conflict = (code: string, message: string) => new HttpError(409, code, message);
@@ -24,6 +28,23 @@ const summary = (row: QueryResultRow) => ({
   createdAt: row.created_at.toISOString(),
 });
 const isActive = (state: string) => state === 'pending' || state === 'running';
+const providerSummary = (row: QueryResultRow) => ({
+  id: row.id,
+  apiId: row.api_id,
+  localId: row.local_id,
+  case: row.case_key,
+  createdAt: row.created_at.toISOString(),
+});
+function providerResult(row: QueryResultRow) {
+  const evidence = providerComparisonEvidence.parse(row.evidence);
+  if (digest(canonical(evidence)) !== row.evidence_hash)
+    throw conflict('evaluation_changed', 'La evidencia guardada ha perdido su integridad.');
+  return providerComparison.parse({
+    ...providerSummary(row),
+    evidence,
+    evidenceHash: row.evidence_hash,
+  });
+}
 
 export class AgentEvaluations {
   constructor(
@@ -31,6 +52,119 @@ export class AgentEvaluations {
     private readonly coding: CodingService,
     private readonly teams: TeamExecutions,
   ) {}
+
+  async listProviders(owner: string, project: string) {
+    await this.coding.projects.get(owner, project);
+    const [comparisons, runs] = await Promise.all([
+      this.pool.query(
+        'SELECT id,api_id,local_id,case_key,created_at FROM provider_comparisons WHERE project_id=$1 ORDER BY created_at DESC,id LIMIT 100',
+        [project],
+      ),
+      this.pool.query(
+        `SELECT id,title,state,created_at,destination FROM (
+        SELECT j.id,j.title,j.state,j.created_at,COALESCE(j.configuration->>'executionId','codex-v1') AS destination,
+          row_number() OVER (PARTITION BY COALESCE(j.configuration->>'executionId','codex-v1') ORDER BY j.created_at DESC,j.id) AS position
+        FROM jobs j JOIN coding_runs c ON c.job_id=j.id
+        WHERE j.project_id=$1 AND c.owner_id=$2 AND j.state IN ('completed','failed','cancelled')
+          AND NOT EXISTS (SELECT 1 FROM team_execution_steps s WHERE s.job_id=j.id)
+      ) AS candidates WHERE position<=100 ORDER BY created_at DESC,id`,
+        [project, owner],
+      ),
+    ]);
+    const candidates = (destination: string) =>
+      runs.rows
+        .filter((row) => row.destination === destination)
+        .map(({ id, title, state, created_at }) => ({
+          id,
+          title,
+          state,
+          createdAt: created_at.toISOString(),
+        }));
+    return providerComparisonList.parse({
+      comparisons: comparisons.rows.map(providerSummary),
+      api: candidates('codex-v1'),
+      local: candidates('codex-local-v1'),
+    });
+  }
+
+  async readProviders(owner: string, project: string, id: string) {
+    const row = (
+      await this.pool.query(
+        `SELECT e.* FROM provider_comparisons e JOIN projects p ON p.id=e.project_id
+      WHERE e.id=$1 AND p.id=$2 AND p.owner_id=$3`,
+        [id, project, owner],
+      )
+    ).rows[0];
+    if (!row) throw missing();
+    await Promise.all([
+      this.coding.read(owner, project, row.api_id),
+      this.coding.read(owner, project, row.local_id),
+    ]);
+    return providerResult(row);
+  }
+
+  async compareProviders(owner: string, project: string, input: ProviderComparisonInput) {
+    const scope = await this.coding.projects.get(owner, project);
+    const archived = () =>
+      conflict('project_archived', 'Restaura el proyecto antes de guardar una comparación.');
+    if (scope.archivedAt) throw archived();
+    const [api, local] = await Promise.all([
+      this.loadRun(owner, project, input.apiId),
+      this.loadRun(owner, project, input.localId),
+    ]);
+    if (
+      api.run.teamExecutionId ||
+      local.run.teamExecutionId ||
+      api.configuration.executionId === 'codex-local-v1' ||
+      local.configuration.executionId !== 'codex-local-v1'
+    )
+      throw conflict(
+        'evaluation_arms',
+        'Selecciona dos trabajos individuales, uno de la API y otro de Ollama local.',
+      );
+    if (isActive(api.state) || isActive(local.state))
+      throw conflict('evaluation_active', 'Espera a que ambos trabajos terminen.');
+    const evidence = compareProviders(input, api, local);
+    const hash = digest(canonical(evidence));
+    const row = await this.coding.projects.locked(owner, project, async (db, current) => {
+      if (current.archived_at) throw archived();
+      const keys = [project, input.apiId, input.localId, input.case];
+      const old = (
+        await db.query(
+          'SELECT * FROM provider_comparisons WHERE project_id=$1 AND api_id=$2 AND local_id=$3 AND case_key=$4',
+          keys,
+        )
+      ).rows[0];
+      if (old) {
+        if (old.evidence_hash !== hash)
+          throw conflict(
+            'evaluation_changed',
+            'Ya existe una comparación de estos trabajos y caso con otra evidencia.',
+          );
+        return old;
+      }
+      if (
+        (
+          await db.query(
+            'SELECT 1 FROM provider_comparisons WHERE project_id=$1 OFFSET 999 LIMIT 1',
+            [project],
+          )
+        ).rowCount
+      )
+        throw conflict(
+          'evaluation_limit',
+          'Se ha alcanzado el límite de comparaciones del proyecto.',
+        );
+      return (
+        await db.query(
+          `INSERT INTO provider_comparisons(project_id,api_id,local_id,case_key,evidence,evidence_hash)
+        VALUES($1,$2,$3,$4,$5,$6) RETURNING *`,
+          [...keys, JSON.stringify(evidence), hash],
+        )
+      ).rows[0]!;
+    });
+    return providerResult(row);
+  }
 
   async list(owner: string, project: string) {
     await this.coding.projects.get(owner, project);

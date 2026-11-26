@@ -285,7 +285,15 @@ export class CodingService {
         ? describeReadOnlyCoding(capabilities)
         : describeCoding(capabilities, input.toolProfile);
     if (contextPack && canonical(contextPack.execution) !== canonical(option)) throw changed();
-    if (team && canonical(option) !== canonical(team.snapshot.execution)) throw changed();
+    if (team) {
+      const route = team.snapshot.routing?.stages.find((stage) => stage.step === team.stepKey);
+      if (
+        (team.snapshot.routing && !route) ||
+        canonical(option) !== canonical(route?.execution ?? team.snapshot.execution) ||
+        (route && route.model !== input.model)
+      )
+        throw changed();
+    }
     if (
       recipe &&
       (!option.available || recipe.snapshot.runtimeRevision !== option.configurationRevision)

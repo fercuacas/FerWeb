@@ -109,6 +109,8 @@ Cancelar un presupuesto cierra nuevas admisiones y detiene sus pasos mediante el
 
 ## Equipos y planes (P05)
 
+P21 añade selección por reglas para destinos API y local, y permite autorizar un plan mixto secuencial por etapas. El modelo elegido y las transferencias forman parte de la copia aprobada. [Reglas de selección y comparación](provider-routing.md).
+
 En **Agentes → Equipos y plantillas** puedes crear un workflow propio o partir de tres presets secuenciales: implementar y revisar, investigar y responder, y revisar un diff. P07 añade **Especialistas y resumen**. Asigna a cada etapa un rol y su versión de este proyecto, capacidades, criterios de salida, dependencias y máximo de peticiones. El catálogo conserva hasta cincuenta plantillas por proyecto y cincuenta versiones por plantilla; archivar impide nuevas preparaciones y conserva el historial.
 
 El servidor valida un DAG de una a seis etapas: rechaza claves repetidas, ciclos, referencias ausentes, roles ajenos/archivados y capacidades o skills incompatibles. Cada workflow admite de una a tres iteraciones. El producto de iteraciones por peticiones de todas las etapas debe caber en el presupuesto padre de P04: hasta veinte peticiones, diez segundos a veinte minutos y concurrencia uno por defecto. P07 permite solicitar dos exclusivamente para especialistas de solo lectura, con configuración explícita del proyecto. Los presets son definiciones propias de FerWeb; requieren roles del proyecto y no conceden permisos ni instalan herramientas.

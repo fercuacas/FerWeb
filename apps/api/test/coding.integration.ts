@@ -33,6 +33,8 @@ import {
   teamMessagesResponse,
   type TeamDefinition,
   reviewResponse,
+  providerComparison,
+  providerComparisonList,
 } from '@ferweb/contracts';
 import { createPool } from '../src/database.js';
 import { readConfig } from '../src/config.js';
@@ -4209,6 +4211,300 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
         }
         assert.equal(await count(), jobs);
         assert.equal((await localFixtureState()).cloudRequests, before.cloudRequests);
+      },
+    );
+    await t.test(
+      'P21 compares the same frozen coding task across providers and exports only recorded evidence',
+      async () => {
+        if (!worker || worker.exitCode !== null || worker.signalCode !== null) await startWorker();
+        const root = `/projects/${project}`;
+        const api = await enqueue('P20 P21 provider comparison', { maxRequests: 4 });
+        const localRes = await request(
+          'POST',
+          root + '/coding',
+          {
+            ...api.body,
+            requestId: randomUUID(),
+            executionId: 'codex-local-v1',
+            model: 'fixture-local',
+          },
+          cookie,
+        );
+        assert.equal(localRes.status, 202, await localRes.clone().text());
+        const local = jobDetailSchema.parse(await localRes.json()).job;
+        assert.equal((await terminal(api.job.id)).job.state, 'completed');
+        assert.equal((await terminal(local.id)).job.state, 'completed');
+        const path = root + '/lab/provider-comparisons';
+        const compare = {
+          apiId: api.job.id,
+          localId: local.id,
+          case: 'addition-v1',
+          localHardware: 'Simulated CPU fixture',
+        };
+        const response = await request('POST', path, compare, cookie);
+        assert.equal(response.status, 200, await response.clone().text());
+        const saved = providerComparison.parse(await response.json());
+        assert.deepEqual(saved.evidence.differences, []);
+        assert.equal(saved.evidence.comparable, true);
+        assert.equal(saved.evidence.local.serverVersion, '0.13.4');
+        assert.equal(saved.evidence.localHardware, 'Simulated CPU fixture');
+        for (const arm of [saved.evidence.api, saved.evidence.local]) {
+          assert.equal(arm.simulated, true);
+          assert.equal(arm.costUsd, null);
+          assert.equal(arm.baseline.status, 'failed');
+          assert.equal(arm.grade.status, 'passed');
+          assert.ok(arm.independentTests.some((test) => test.exitCode === 0));
+        }
+        assert.equal(saved.evidence.local.usage?.inputTokens ?? null, null);
+        const repeated = await request('POST', path, compare, cookie);
+        assert.equal(providerComparison.parse(await repeated.json()).id, saved.id);
+        const wrong = await request('POST', path, { ...compare, apiId: local.id }, cookie);
+        assert.equal(wrong.status, 409);
+        const list = providerComparisonList.parse(
+          await (await request('GET', path, undefined, cookie)).json(),
+        );
+        assert.ok(list.api.some((run) => run.id === api.job.id));
+        assert.ok(list.local.some((run) => run.id === local.id));
+        assert.equal((await request('GET', path + '/' + saved.id, undefined, foreign)).status, 404);
+        const downloaded = await request(
+          'GET',
+          path + '/' + saved.id + '/export',
+          undefined,
+          cookie,
+        );
+        assert.match(downloaded.headers.get('content-disposition') ?? '', /attachment/);
+        assert.deepEqual(providerComparison.parse(await downloaded.json()), saved);
+        const different = await enqueue('P20 P21 different task', {
+          executionId: 'codex-local-v1',
+          model: 'fixture-local',
+          maxRequests: 5,
+        });
+        assert.equal((await terminal(different.job.id)).job.state, 'completed');
+        const other = await request(
+          'POST',
+          path,
+          { apiId: api.job.id, localId: different.job.id, case: 'recorded' },
+          cookie,
+        );
+        assert.equal(other.status, 200, await other.clone().text());
+        assert.deepEqual(providerComparison.parse(await other.json()).evidence.differences, [
+          'task',
+          'limits',
+        ]);
+      },
+    );
+    await t.test(
+      'P21 mixed approval freezes stage decisions, budgets and transfers and never reroutes a failed local stage',
+      async () => {
+        if (!worker || worker.exitCode !== null || worker.signalCode !== null) await startWorker();
+        const root = `/projects/${project}`;
+        const post = (path: string, body: unknown) => request('POST', root + path, body, cookie);
+        const read = (path: string) => request('GET', root + path, undefined, cookie);
+        const roles = [];
+        for (const template of ['implementer', 'reviewer'])
+          roles.push(
+            agentMutationResponse.parse(await (await post('/agents', { template })).json()).role,
+          );
+        const definition: TeamDefinition = {
+          name: 'P21 routing evidence',
+          description: 'Sequential preset with verified handoff.',
+          maxIterations: 1,
+          limits: { maxRequests: 8, timeoutMs: 120000, concurrency: 1 },
+          steps: [
+            {
+              key: 'implement',
+              title: 'Implement',
+              role: { id: roles[0]!.id, version: 1 },
+              dependsOn: [],
+              exitCriteria: ['Passing tests.'],
+              requiredCapabilities: ['text', 'workspaceWrite'],
+              maxRequests: 4,
+            },
+            {
+              key: 'review',
+              title: 'Review',
+              role: { id: roles[1]!.id, version: 1 },
+              dependsOn: ['implement'],
+              exitCriteria: ['Verify handoff.'],
+              requiredCapabilities: ['text', 'toolCalls'],
+              maxRequests: 2,
+            },
+          ],
+        };
+        const template = teamTemplateResponse
+          .pick({ template: true })
+          .parse(await (await post('/team-templates', { definition })).json()).template;
+        const localTemplate = teamTemplateResponse.pick({ template: true }).parse(
+          await (
+            await post('/team-templates', {
+              definition: { ...definition, inferenceMode: 'local-coding-only' },
+            })
+          ).json(),
+        ).template;
+        const taskRow = await task('P20 P21 mixed routing');
+        const routing = {
+          mode: 'mixed',
+          maxApiRequests: 2,
+          stages: [
+            { step: 'implement', destination: 'codex-local-v1', model: 'fixture-local' },
+            { step: 'review', destination: 'codex-v1', model: 'fixture-codex' },
+          ],
+        };
+        const input = {
+          requestId: randomUUID(),
+          taskId: taskRow.id,
+          taskVersion: taskRow.version,
+          templateId: template.id,
+          templateVersion: 1,
+          mode: 'team',
+          executionId: 'codex-v1',
+          model: null,
+          routing,
+        };
+        const expectCode = async (response: Response, status: number, code: string) => {
+          assert.equal(response.status, status, await response.clone().text());
+          assert.equal((await response.json()).error.code, code);
+        };
+        await expectCode(
+          await post('/team-plans', { ...input, routing: { ...routing, maxApiRequests: 1 } }),
+          422,
+          'routing_budget',
+        );
+        await expectCode(
+          await post('/team-plans', {
+            ...input,
+            templateId: localTemplate.id,
+            executionId: 'codex-local-v1',
+          }),
+          422,
+          'routing_mode',
+        );
+        await expectCode(
+          await post('/team-plans', {
+            ...input,
+            routing: { ...routing, stages: [routing.stages[0]] },
+          }),
+          422,
+          'routing_stages',
+        );
+        await expectCode(
+          await post('/team-plans', {
+            ...input,
+            routing: {
+              ...routing,
+              stages: [{ ...routing.stages[0], model: 'unknown-local' }, routing.stages[1]],
+            },
+          }),
+          422,
+          'routing_model',
+        );
+        const localOnly = await post('/team-plans', {
+          ...input,
+          requestId: randomUUID(),
+          templateId: localTemplate.id,
+          executionId: 'codex-local-v1',
+          routing: { mode: 'local', maxApiRequests: 0 },
+        });
+        assert.equal(localOnly.status, 201, await localOnly.clone().text());
+        const localPlan = teamPlanResponse.parse(await localOnly.json()).plan;
+        assert.ok(
+          localPlan.snapshot.routing?.stages.every(
+            (stage) => stage.execution.id === 'codex-local-v1' && !stage.transfers.length,
+          ),
+        );
+        const apiOnly = await post('/team-plans', {
+          ...input,
+          requestId: randomUUID(),
+          routing: { mode: 'api', maxApiRequests: 6 },
+        });
+        assert.equal(apiOnly.status, 201, await apiOnly.clone().text());
+        assert.equal(
+          teamPlanResponse.parse(await apiOnly.json()).plan.snapshot.routing?.reservedApiRequests,
+          6,
+        );
+        const prepare = async (body = input) => {
+          const response = await post('/team-plans', body);
+          assert.equal(response.status, 201, await response.clone().text());
+          return teamPlanResponse.parse(await response.json()).plan;
+        };
+        const plan = await prepare();
+        const repeat = await post('/team-plans', input);
+        assert.equal(teamPlanResponse.parse(await repeat.json()).plan.hash, plan.hash);
+        const decision = plan.snapshot.routing!;
+        assert.equal(decision.policy, 'ferweb-routing-v1');
+        assert.equal(decision.reservedApiRequests, 2);
+        assert.deepEqual(
+          decision.stages.map((step) => [step.execution.id, step.model]),
+          [
+            ['codex-local-v1', 'fixture-local'],
+            ['codex-v1', 'fixture-codex'],
+          ],
+        );
+        assert.deepEqual(decision.stages[0]?.transfers, []);
+        assert.ok(decision.stages[1]?.transfers.includes('current-run-deliveries'));
+        assert.ok(
+          decision.stages.every((stage) =>
+            stage.candidates.some((candidate) => candidate.reason === 'destination_denied'),
+          ),
+        );
+        const before = await localFixtureState();
+        const approve = (id: string, hash: string, consent: boolean) =>
+          post(`/team-plans/${id}/approve`, {
+            version: 1,
+            hash,
+            ...(consent && { acceptApiTransfers: true }),
+          });
+        await expectCode(await approve(plan.id, plan.hash, false), 422, 'routing_consent');
+        assert.equal((await approve(plan.id, plan.hash, true)).status, 200);
+        const execute = (id: string, hash: string) =>
+          post(`/team-plans/${id}/execute`, {
+            version: 1,
+            hash,
+            requestId: randomUUID(),
+            commit: 'a'.repeat(40),
+          });
+        try {
+          await localFixtureState({ revision: 'e'.repeat(64) });
+          await expectCode(await execute(plan.id, plan.hash), 409, 'team_environment_changed');
+        } finally {
+          await localFixtureState({ revision: before.revision });
+        }
+        assert.equal((await localFixtureState()).cloudRequests, before.cloudRequests);
+        const executed = await execute(plan.id, plan.hash);
+        assert.equal(executed.status, 202, await executed.clone().text());
+        const mixed = await teamTerminal(
+          teamExecutionResponse.parse(await executed.json()).execution.id,
+        );
+        assert.equal(
+          mixed.execution.state,
+          'completed',
+          JSON.stringify(mixed.steps.map(({ state, errorCode }) => ({ state, errorCode }))),
+        );
+        assert.deepEqual(mixed.plan.routing, decision);
+        assert.equal((await report(mixed.steps[0]!.jobId!)).report?.execution?.provider, 'ollama');
+        assert.equal((await report(mixed.steps[1]!.jobId!)).report?.execution?.provider, 'openai');
+        const after = await localFixtureState();
+        assert.equal(after.cloudRequests - before.cloudRequests, 2);
+        const badTask = await task('P20 P21 malformed local then API');
+        const bad = await prepare({
+          ...input,
+          requestId: randomUUID(),
+          taskId: badTask.id,
+          taskVersion: badTask.version,
+        });
+        assert.equal((await approve(bad.id, bad.hash, true)).status, 200);
+        const failure = await execute(bad.id, bad.hash);
+        assert.equal(failure.status, 202, await failure.clone().text());
+        const failed = await teamTerminal(
+          teamExecutionResponse.parse(await failure.json()).execution.id,
+        );
+        assert.equal(failed.execution.state, 'failed');
+        assert.equal(failed.steps[1]!.jobId, null);
+        assert.equal((await localFixtureState()).cloudRequests, after.cloudRequests);
+        const persisted = teamPlanResponse.parse(
+          await (await read(`/team-plans/${plan.id}`)).json(),
+        ).plan;
+        assert.deepEqual(persisted.snapshot.routing, decision);
       },
     );
     await t.test(
