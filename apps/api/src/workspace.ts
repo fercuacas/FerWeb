@@ -53,6 +53,8 @@ import { AiClient } from './modules/chat/client.js';
 import { LocalReadService } from './modules/jobs/local-readonly.js';
 import { extensionRouter } from './modules/extensions/routes.js';
 import { listUtilities } from './modules/utility-packs/catalog.js';
+import { Automations } from './modules/automations/service.js';
+import { automationRouter } from './modules/automations/routes.js';
 
 export interface WorkspaceOptions {
   ai?: AiClient | null;
@@ -187,6 +189,7 @@ export function createWorkspaceRouter({
   const teamExecutions = new TeamExecutions(pool, codingService);
   const teams = new TeamService(pool, codingService);
   router.use(teamRouter(teams, teamExecutions));
+  router.use(automationRouter(new Automations(codingService)));
   const evaluations = new AgentEvaluations(pool, codingService, teamExecutions);
   router.use(agentEvaluationRouter(evaluations));
   router.use(learningRouter(new ProjectLearning(pool, codingService, evaluations)));

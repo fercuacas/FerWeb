@@ -918,6 +918,37 @@ body:has(dialog[open]) {
 .utility-entries dd {
   margin-inline-start: 0;
 }
+.automations-page {
+  display: grid;
+  gap: 1rem;
+  overflow-wrap: anywhere;
+}
+.automation-card {
+  margin-block: 0.75rem;
+  padding: 0.85rem;
+  border: 1px solid #d8dfce;
+  border-radius: 8px;
+  min-width: 0;
+}
+.automation-card summary {
+  cursor: pointer;
+}
+.automation-card dt {
+  font-weight: 600;
+}
+.automation-card dd {
+  margin: 0 0 0.6rem;
+}
+.automation-card .automation-confirm {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-block: 0.75rem;
+}
+.automation-confirm input {
+  width: auto;
+  min-height: 0;
+}
 .review-canvas,
 .control-steps > li {
   margin-block: 1rem;

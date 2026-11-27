@@ -419,6 +419,13 @@ La ruta base es `/projects/:projectId/tasks/:taskId/recipes`. `GET` devuelve el 
 
 Los planes de paquete usan la ruta de recetas P15 y una clave `pack-*` de versión exacta. El snapshot conserva el commit y las rutas metodológicas de ECC junto con el alcance del proyecto. Los planes `plan` se preparan sin inferencia. La receta `pack-evidence` usa el perfil de lectura de Codex API tras aprobación. La importación de contenido revisado reutiliza `POST /skills` del proyecto. [Recorrido](utility-packs.md).
 
+## Automatizaciones P24
+
+- `GET /projects/:projectId/automations` devuelve programaciones, fechas recientes, notificaciones y cantidad sin leer. Cada enlace de seguimiento usa el identificador de la ejecución de equipo autorizada.
+- `POST` en la misma ruta recibe `requestId`, `planId`, `planHash`, `title`, `calendar: {time,timeZone}` y `maxOccurrences`. Devuelve el borrador con la huella, la revisión y el calendario calculado.
+- `POST /:scheduleId/actions` requiere `revision` y acción `approve`, `pause`, `resume` o `cancel`. `approve` exige además la huella del borrador. `POST /notifications/:notificationId/read` recibe `{}` y conserva la primera lectura.
+- El worker llama a `POST /internal/automations/tick` con token de servicio y `{}`. El reloj lo controla el servidor. La migración 031 persiste las autorizaciones, fechas y avisos. [Calendario y recuperación](automations.md).
+
 ## Referencias de diseño
 
 - [Node.js crypto](https://nodejs.org/api/crypto.html).

@@ -14,6 +14,7 @@ import {
 import { CodingService } from './coding-service.js';
 import { ReviewService } from './review-service.js';
 import { TeamExecutions } from '../teams/executions.js';
+import { Automations } from '../automations/service.js';
 import { TeamMessages } from '../teams/messages.js';
 import { HttpError } from '../../http-error.js';
 export function codingRouter(service: CodingService) {
@@ -167,6 +168,7 @@ export function codingInternalRouter(service: CodingService, token: string) {
     );
   });
   const teams = new TeamExecutions(service.pool, service);
+  const automations = new Automations(service);
   const messages = new TeamMessages(service.pool, service);
   router.post('/coding/:jobId/messages', async (req, res) => {
     const body = z.strictObject({ fence: z.uuid(), message: sendTeamMessageInput }).parse(req.body);
@@ -181,6 +183,10 @@ export function codingInternalRouter(service: CodingService, token: string) {
   router.post('/teams/tick', async (req, res) => {
     z.strictObject({}).parse(req.body);
     res.json(await teams.tick());
+  });
+  router.post('/automations/tick', async (req, res) => {
+    z.strictObject({}).parse(req.body);
+    res.json(await automations.tick());
   });
   router.post('/coding/:jobId/admit', async (req, res) => {
     res.json(

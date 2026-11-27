@@ -35,6 +35,7 @@ import {
   reviewResponse,
   providerComparison,
   providerComparisonList,
+  automationOverview,
 } from '@ferweb/contracts';
 import { createPool } from '../src/database.js';
 import { readConfig } from '../src/config.js';
@@ -48,6 +49,8 @@ import { GitHubService } from '../src/modules/github/service.js';
 import { CodingService } from '../src/modules/jobs/coding-service.js';
 import { RunnerClient } from '../src/modules/jobs/runner-client.js';
 import { TeamService } from '../src/modules/teams/service.js';
+import { Automations } from '../src/modules/automations/service.js';
+import { HttpError } from '../src/http-error.js';
 import { ProjectLearning } from '../src/modules/laboratory/learning.js';
 import { learningObservation } from '../src/modules/laboratory/learning-observations.js';
 import { githubFixture } from '../../../tests/fixtures/github.mjs';
@@ -144,11 +147,11 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
     await github.connect(owner.id, 71);
     await github.link(owner.id, project, { installationId: 71, repositoryId: 101, version: 0 });
     await github.sync(owner.id, project, 1);
-    async function task(title: string) {
+    async function task(title: string, projectId = project) {
       return (
         await pool.query(
           "INSERT INTO tasks(project_id,title,description,priority,status) VALUES($1,$2,$3,'medium','todo') RETURNING id,version",
-          [project, title, 'Fix add without changing tests. Return evidence.'],
+          [projectId, title, 'Fix add without changing tests. Return evidence.'],
         )
       ).rows[0];
     }
@@ -308,19 +311,19 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
         task: taskRow,
       };
     }
-    async function teamDetail(id: string) {
+    async function teamDetail(id: string, projectId = project) {
       const response = await request(
         'GET',
-        `/projects/${project}/team-executions/${id}`,
+        `/projects/${projectId}/team-executions/${id}`,
         undefined,
         cookie,
       );
       assert.equal(response.status, 200, await response.clone().text());
       return teamExecutionResponse.parse(await response.json());
     }
-    const teamTerminal = (id: string) =>
+    const teamTerminal = (id: string, projectId = project) =>
       waitFor(async () => {
-        const data = await teamDetail(id);
+        const data = await teamDetail(id, projectId);
         return ['completed', 'failed', 'cancelled'].includes(data.execution.state) ? data : false;
       }, 60000);
     async function startWorker() {
@@ -4684,6 +4687,277 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
             .status,
           200,
         );
+      },
+    );
+    await t.test(
+      'P24 schedules freeze team authorization, recover occurrences and deduplicate actionable notifications',
+      async () => {
+        await stopWorker();
+        fixture.state.denied = false;
+        await github.connect(owner.id, 71);
+        const project = (
+          await pool.query(
+            "INSERT INTO projects(owner_id,name) VALUES($1,'Automation fixture') RETURNING id",
+            [owner.id],
+          )
+        ).rows[0].id as string;
+        await github.link(owner.id, project, { installationId: 71, repositoryId: 101, version: 0 });
+        await github.sync(owner.id, project, 1);
+        let now = new Date('2040-02-01T10:58:00Z');
+        const automations = new Automations(coding, () => now);
+        const changeTime = (at: string) => {
+          now = new Date(at);
+        };
+        const list = () => automations.list(owner.id, project);
+        const root = `/projects/${project}`;
+        const post = (path: string, data: unknown) => request('POST', root + path, data, cookie);
+        async function approvedPlan(local: boolean) {
+          const role = agentMutationResponse.parse(
+            await (await post('/agents', { template: 'implementer' })).json(),
+          ).role;
+          const definition: TeamDefinition = {
+            name: local ? 'P24 native local plan' : 'P24 scheduled team plan',
+            description: 'Frozen schedule fixture.',
+            ...(local && { inferenceMode: 'local-coding-only' }),
+            limits: { maxRequests: 4, timeoutMs: 120000, concurrency: 1 },
+            maxIterations: 1,
+            steps: [
+              {
+                key: 'implement',
+                title: 'Implement',
+                role: { id: role.id, version: 1 },
+                dependsOn: [],
+                exitCriteria: ['Verified diff.'],
+                requiredCapabilities: ['text', 'toolCalls', 'workspaceWrite'],
+                maxRequests: 4,
+              },
+            ],
+          };
+          const template = teamTemplateResponse
+            .pick({ template: true })
+            .parse(await (await post('/team-templates', { definition })).json()).template;
+          const t = await task(definition.name, project);
+          const prepared = await post('/team-plans', {
+            requestId: randomUUID(),
+            taskId: t.id,
+            taskVersion: t.version,
+            templateId: template.id,
+            templateVersion: 1,
+            mode: 'team',
+            executionId: local ? 'codex-local-v1' : 'codex-v1',
+            model: local ? 'fixture-local' : 'fixture-codex',
+          });
+          assert.equal(prepared.status, 201, await prepared.clone().text());
+          const { plan } = teamPlanResponse.parse(await prepared.json());
+          const approved = await post(`/team-plans/${plan.id}/approve`, {
+            hash: plan.hash,
+            version: 1,
+          });
+          assert.equal(approved.status, 200, await approved.clone().text());
+          return plan;
+        }
+        const api = await approvedPlan(false);
+        const frozen = {
+          requestId: randomUUID(),
+          planId: api.id,
+          planHash: api.hash,
+          title: 'P24 recurrence',
+          calendar: { time: '11:00', timeZone: 'Europe/London' },
+          maxOccurrences: 4,
+        };
+        const draft = await automations.create(owner.id, project, frozen);
+        assert.equal(draft.state, 'draft');
+        assert.equal((await automations.create(owner.id, project, frozen)).id, draft.id);
+        await assert.rejects(
+          automations.change(owner.id, project, draft.id, {
+            action: 'approve',
+            revision: draft.revision,
+            hash: '0'.repeat(64),
+          }),
+          (error) => error instanceof HttpError && error.status === 409,
+        );
+        const activated = await automations.change(owner.id, project, draft.id, {
+          action: 'approve',
+          revision: draft.revision,
+          hash: draft.hash,
+        });
+        assert.equal(activated.nextRunAt, '2040-02-01T11:00:00.000Z');
+        await automations.tick();
+        assert.deepEqual((await list()).occurrences, []);
+        assert.equal((await request('GET', root + '/automations', undefined, foreign)).status, 404);
+        assert.equal(
+          (await fetch(base + '/internal/automations/tick', { method: 'POST' })).status,
+          401,
+        );
+        const restarted = new Automations(coding, () => now);
+        changeTime('2040-02-01T11:00:03Z');
+        const attempts = await Promise.all([
+          automations.tick(),
+          restarted.tick(),
+          restarted.tick(),
+        ]);
+        assert.ok(attempts.every((tick) => tick.deferred === 0));
+        const first = (await list()).occurrences[0]!;
+        assert.ok(first.teamId);
+        assert.equal(first.teamState, 'pending');
+        assert.equal((await list()).occurrences.length, 1);
+        assert.equal((await list()).unread, 0);
+        const schedule = async (id: string) =>
+          (await list()).schedules.find((item) => item.id === id)!;
+        const paused = await automations.change(owner.id, project, draft.id, {
+          action: 'pause',
+          revision: (await schedule(draft.id)).revision,
+        });
+        assert.equal(paused.nextRunAt, null);
+        changeTime('2040-02-02T10:59:00Z');
+        assert.equal((await restarted.tick()).checked, 0);
+        const resumed = await automations.change(owner.id, project, draft.id, {
+          action: 'resume',
+          revision: paused.revision,
+        });
+        assert.equal(resumed.nextRunAt, '2040-02-02T11:00:00.000Z');
+        changeTime('2040-02-02T11:00:00Z');
+        await restarted.tick();
+        changeTime('2040-02-03T11:16:00Z');
+        await restarted.tick();
+        const skipped = (await list()).occurrences.filter((item) => item.disposition === 'skipped');
+        assert.deepEqual(skipped.map(({ reason }) => reason).sort(), [
+          'automation_overlap',
+          'missed_window',
+        ]);
+        assert.equal((await list()).unread, 0);
+
+        await startWorker();
+        assert.equal((await teamTerminal(first.teamId, project)).execution.state, 'completed');
+        // The real restarted worker publishes its terminal notice through the authenticated tick.
+        const completeNotice = await waitFor(
+          async () =>
+            (await list()).notifications.find((item) => item.kind === 'completed') ?? false,
+          12000,
+        );
+        assert.equal(completeNotice.occurrence.id, first.id);
+        await Promise.all([automations.tick(), restarted.tick()]);
+        assert.equal(
+          (await list()).notifications.filter((item) => item.kind === 'completed').length,
+          1,
+        );
+        const readRoute = `/automations/notifications/${encodeURIComponent(completeNotice.id)}/read`;
+        assert.equal((await post(readRoute, {})).status, 200);
+        assert.equal((await post(readRoute, {})).status, 200);
+        assert.equal((await list()).unread, 0);
+        await stopWorker();
+
+        changeTime('2040-02-04T11:00:00Z');
+        await restarted.tick();
+        const admitted = (await list()).occurrences.filter(
+          (item) => item.disposition === 'admitted',
+        );
+        assert.equal(admitted.length, 2);
+        const pending = admitted.find((item) => item.id !== first.id)!;
+        assert.ok(pending.teamId && pending.teamId !== first.teamId);
+        assert.equal((await schedule(draft.id)).state, 'exhausted');
+        const exhausted = await schedule(draft.id);
+        assert.equal(exhausted.nextRunAt, null);
+        await automations.change(owner.id, project, draft.id, {
+          action: 'cancel',
+          revision: exhausted.revision,
+        });
+        assert.equal((await teamDetail(pending.teamId, project)).execution.cancelRequested, true);
+        await startWorker();
+        assert.equal((await teamTerminal(pending.teamId, project)).execution.state, 'cancelled');
+        assert.equal(
+          (await pool.query('SELECT execution_id FROM prepared_team_plans WHERE id=$1', [api.id]))
+            .rows[0].execution_id,
+          null,
+        );
+
+        async function schedulePlan(plan: typeof api, title: string) {
+          const item = await automations.create(owner.id, project, {
+            ...frozen,
+            title,
+            requestId: randomUUID(),
+            planId: plan.id,
+            planHash: plan.hash,
+            maxOccurrences: 1,
+          });
+          return automations.change(owner.id, project, item.id, {
+            action: 'approve',
+            revision: item.revision,
+            hash: item.hash,
+          });
+        }
+        const stale = await schedulePlan(api, 'P24 stale task');
+        const local = await schedulePlan(
+          await approvedPlan(true),
+          'P24 unavailable local destination',
+        );
+        assert.equal(local.snapshot.destination, 'local');
+        assert.equal(local.snapshot.apiRequestLimit, 0);
+        await pool.query('UPDATE tasks SET version=version+1 WHERE id=$1', [api.snapshot.task.id]);
+        const fixtureBefore = await localFixtureState();
+        try {
+          await localFixtureState({ version: '0.12.0' });
+          changeTime('2040-02-05T11:00:00Z');
+          await Promise.all([automations.tick(), restarted.tick()]);
+          assert.equal((await schedule(stale.id)).state, 'blocked');
+          assert.equal((await schedule(local.id)).state, 'blocked');
+          const blocked = await list();
+          assert.equal(blocked.occurrences.filter((item) => item.teamId).length, 2);
+          assert.equal(
+            blocked.notifications.find((item) => item.occurrence.scheduleId === stale.id)?.kind,
+            'blocked',
+          );
+          assert.equal(
+            blocked.notifications.find((item) => item.occurrence.scheduleId === local.id)?.kind,
+            'action_required',
+          );
+          assert.equal(blocked.unread, 2);
+          await restarted.tick();
+          assert.equal((await list()).notifications.length, 3);
+          const response = await request('GET', root + '/automations', undefined, cookie);
+          assert.equal(response.status, 200);
+          assert.equal(automationOverview.parse(await response.json()).unread, 2);
+        } finally {
+          await localFixtureState({
+            version: fixtureBefore.version,
+            tools: fixtureBefore.tools,
+            revision: fixtureBefore.revision,
+          });
+        }
+        await stopWorker();
+        const failure = await schedulePlan(
+          await approvedPlan(true),
+          'P24 destination revoked after admission',
+        );
+        changeTime('2040-02-06T11:00:00Z');
+        await restarted.tick();
+        const reserved = (await list()).occurrences.find((item) => item.scheduleId === failure.id)!;
+        assert.ok(reserved.teamId);
+        try {
+          await localFixtureState({ version: '0.12.0' });
+          await startWorker();
+          const failed = await teamTerminal(reserved.teamId, project);
+          assert.equal(failed.execution.state, 'failed');
+          assert.equal(failed.steps[0]!.jobId, null);
+          const notice = await waitFor(
+            async () =>
+              (await list()).notifications.find((item) => item.kind === 'failed') ?? false,
+            12000,
+          );
+          assert.equal(notice.occurrence.id, reserved.id);
+          assert.equal((await restarted.tick()).notices, 0);
+          assert.equal(
+            (await list()).notifications.filter((item) => item.occurrence.id === reserved.id)
+              .length,
+            1,
+          );
+        } finally {
+          await localFixtureState({
+            version: fixtureBefore.version,
+            tools: fixtureBefore.tools,
+            revision: fixtureBefore.revision,
+          });
+        }
       },
     );
     await t.test('team revocation stops active code and hides private deliveries', async () => {

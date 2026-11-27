@@ -22,6 +22,7 @@ import { ProjectCoordination } from './TaskCoordination';
 import { ProjectConversations } from './Conversations';
 import { ProjectLaboratory } from './Laboratory';
 import { ProjectJobs } from './Jobs';
+import { ProjectAutomations } from './Automations';
 import { AgentsPage } from './Agents';
 import { PlanDetails, ProjectPlans } from './TeamPlans';
 import { TaskTeamHistory } from './TeamRuns';
@@ -542,16 +543,18 @@ function ProjectPage({
   teamId,
   stepId,
   planId,
+  automations,
 }: {
   id: string;
   jobId: string | undefined;
   teamId: string | undefined;
   stepId: string | undefined;
   planId: string | undefined;
+  automations: boolean;
 }) {
-  const [tab, setTab] = useState<'tasks' | 'github' | 'chat' | 'laboratory' | 'jobs' | 'knowledge'>(
-    jobId || teamId || planId ? 'jobs' : 'tasks',
-  );
+  const [tab, setTab] = useState<
+    'tasks' | 'github' | 'chat' | 'laboratory' | 'jobs' | 'knowledge' | 'automations'
+  >(automations ? 'automations' : jobId || teamId || planId ? 'jobs' : 'tasks');
   const result = workspaceApi.useProjectQuery(id, { refetchOnFocus: true });
   const [edit, setEdit] = useState(false);
   const [archive, setArchive] = useState(false);
@@ -633,6 +636,13 @@ function ProjectPage({
         >
           Trabajos
         </button>
+        <button
+          className={tab === 'automations' ? 'selected' : ''}
+          aria-pressed={tab === 'automations'}
+          onClick={() => setTab('automations')}
+        >
+          Automatizaciones
+        </button>
       </div>
       <p>
         <a className="text-link" href={`#/agents/${id}`}>
@@ -649,6 +659,8 @@ function ProjectPage({
         <ProjectKnowledge key={id} project={project} />
       ) : tab === 'laboratory' ? (
         <ProjectLaboratory key={id} project={project} />
+      ) : tab === 'automations' ? (
+        <ProjectAutomations key={id} project={project} />
       ) : (
         <>
           {planId && <PlanDetails key={planId} project={project} id={planId} />}
@@ -779,9 +791,9 @@ function ProjectList() {
 export function Workspace({ route, user }: { route: string; user: User }) {
   const [logout, { isLoading, error }] = authApi.useLogoutMutation();
   const dispatch = useDispatch<AppDispatch>();
-  const [, id, jobId, teamId, stepId, planId] =
+  const [, id, jobId, teamId, stepId, planId, automations] =
     route.match(
-      /^\/projects\/([^/]+)(?:\/jobs\/([^/]+)|\/teams\/([^/]+)(?:\/steps\/([^/]+))?|\/plans\/([^/]+))?$/,
+      /^\/projects\/([^/]+)(?:\/jobs\/([^/]+)|\/teams\/([^/]+)(?:\/steps\/([^/]+))?|\/plans\/([^/]+)|\/(automations))?$/,
     ) ?? [];
   const agentsRoute = route.match(/^\/agents(?:\/([^/]+))?$/);
   const githubRoute = route.split('?')[0] === '/github';
@@ -892,6 +904,7 @@ export function Workspace({ route, user }: { route: string; user: User }) {
               teamId={teamId}
               stepId={stepId}
               planId={planId}
+              automations={!!automations}
             />
           ) : agentsRoute ? (
             <AgentsPage id={agentsRoute[1]} />

@@ -44,29 +44,35 @@ try {
   );
   await executor.start();
   // The durable coordinator never claims a jobs slot. Only its Codex children do.
-  let coordinating = false;
   const coordinatorAbort = new AbortController();
-  const coordinator = setInterval(() => {
-    if (coordinating || !process.env.RUNNER_SERVICE_TOKEN) return;
-    coordinating = true;
-    void fetch(`${process.env.FERWEB_INTERNAL_API_URL ?? 'http://api:3001'}/internal/teams/tick`, {
-      method: 'POST',
-      headers: {
-        authorization: 'Bearer ' + process.env.RUNNER_SERVICE_TOKEN,
-        'content-type': 'application/json',
-      },
-      body: '{}',
-      redirect: 'error',
-      signal: AbortSignal.any([coordinatorAbort.signal, AbortSignal.timeout(30000)]),
-    })
-      .then(async (response) => {
-        await response.body?.cancel();
+  const tick = (scope: 'teams' | 'automations', interval: number) => {
+    let coordinating = false;
+    const token = process.env.RUNNER_SERVICE_TOKEN;
+    const base = process.env.FERWEB_INTERNAL_API_URL ?? 'http://api:3001';
+    return setInterval(() => {
+      if (coordinating || !token) return;
+      coordinating = true;
+      void fetch(`${base}/internal/${scope}/tick`, {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer ' + token,
+          'content-type': 'application/json',
+        },
+        body: '{}',
+        redirect: 'error',
+        signal: AbortSignal.any([coordinatorAbort.signal, AbortSignal.timeout(30000)]),
       })
-      .catch(() => {})
-      .finally(() => {
-        coordinating = false;
-      });
-  }, 1000);
+        .then(async (response) => {
+          await response.body?.cancel();
+        })
+        .catch(() => {})
+        .finally(() => {
+          coordinating = false;
+        });
+    }, interval);
+  };
+  const coordinator = tick('teams', 1000);
+  const scheduler = tick('automations', 5000);
   const server = createServer((_request, response) => {
     const ready = executor.ready();
     response.writeHead(ready ? 200 : 503, { 'Content-Type': 'application/json' });
@@ -87,6 +93,7 @@ try {
     if (stopping) return;
     stopping = true;
     clearInterval(coordinator);
+    clearInterval(scheduler);
     coordinatorAbort.abort();
     const timer = setTimeout(() => process.exit(1), 8000).unref();
     server.close();

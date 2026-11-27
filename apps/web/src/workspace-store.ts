@@ -115,6 +115,7 @@ export const workspaceApi = createApi({
     'ContextPack',
     'Coordination',
     'Extension',
+    'Automation',
   ],
   endpoints: (builder) => ({
     executionCapabilities: builder.query<ReturnType<typeof executionCatalogSchema.parse>, string>({

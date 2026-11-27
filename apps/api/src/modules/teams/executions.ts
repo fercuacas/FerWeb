@@ -26,6 +26,12 @@ const active = (state: string) => ['pending', 'running'].includes(state);
 const missing = () => new HttpError(404, 'not_found', 'No se ha encontrado la ejecución.');
 const conflict = (code = 'team_changed') =>
   new HttpError(409, code, 'Las condiciones han cambiado o la ejecución ya no admite esta acción.');
+type ScheduledAdmission = {
+  occurrenceId: string;
+  linkVersion: number;
+  policyVersion: number;
+  reserve: (db: PoolClient) => Promise<void>;
+};
 const dto = (row: QueryResultRow) =>
   teamExecution.parse({
     id: row.id,
@@ -260,8 +266,19 @@ export class TeamExecutions {
     planId: string,
     input: z.infer<typeof executeTeamPlanInput>,
   ) {
+    return this.read(owner, project, await this.admit(owner, project, planId, input));
+  }
+  async admit(
+    owner: string,
+    project: string,
+    planId: string,
+    input: z.infer<typeof executeTeamPlanInput>,
+    scheduled?: ScheduledAdmission,
+  ): Promise<string> {
     await this.coding.projects.get(owner, project);
-    const requestHash = digest(canonical({ planId, ...input }));
+    const requestHash = digest(
+      canonical({ planId, ...input, ...(scheduled && { occurrence: scheduled.occurrenceId }) }),
+    );
     const prior = (
       await this.pool.query(
         'SELECT id,request_hash FROM team_executions WHERE project_id=$1 AND request_id=$2',
@@ -270,11 +287,11 @@ export class TeamExecutions {
     ).rows[0];
     if (prior) {
       if (prior.request_hash !== requestHash) throw conflict();
-      return this.read(owner, project, prior.id);
+      return prior.id as string;
     }
     const { plan } = await this.teams.readPlan(owner, project, planId);
     if (
-      plan.state !== 'approved' ||
+      (!scheduled && plan.state !== 'approved') ||
       plan.approval?.hash !== input.hash ||
       plan.hash !== input.hash ||
       digest(canonical(plan.snapshot)) !== input.hash ||
@@ -289,17 +306,20 @@ export class TeamExecutions {
       link.stale ||
       !link.snapshot ||
       link.snapshot.treeTruncated ||
-      link.snapshot.commit !== input.commit
+      link.snapshot.commit !== input.commit ||
+      (scheduled && link.version !== scheduled.linkVersion)
     )
       throw conflict('team_source_changed');
-    const id = await this.coding.jobs.queue.tx(async (db) => {
+    return this.coding.jobs.queue.tx(async (db) => {
       const p = (
         await db.query(
-          'SELECT archived_at,team_parallelism FROM projects WHERE id=$1 AND owner_id=$2 FOR UPDATE',
+          'SELECT archived_at,team_parallelism,team_policy_version FROM projects WHERE id=$1 AND owner_id=$2 FOR UPDATE',
           [project, owner],
         )
       ).rows[0];
       if (!p || p.archived_at) throw conflict('project_archived');
+      if (scheduled && p.team_policy_version !== scheduled.policyVersion)
+        throw conflict('automation_policy_changed');
       if (plan.snapshot.limits.concurrency > p.team_parallelism)
         throw conflict('team_parallelism_not_configured');
       const old = (
@@ -335,7 +355,7 @@ export class TeamExecutions {
       ).rows[0];
       if (
         !frozen ||
-        frozen.execution_id ||
+        (!scheduled && frozen.execution_id) ||
         frozen.changes_requested ||
         frozen.approval_hash !== input.hash ||
         task?.version !== plan.snapshot.task.version ||
@@ -351,7 +371,9 @@ export class TeamExecutions {
           [project],
         )
       ).rows[0];
-      if (count.active || count.total >= 1000) throw conflict('team_execution_limit');
+      if (count.active || count.total >= 1000)
+        throw conflict(scheduled && count.active ? 'automation_overlap' : 'team_execution_limit');
+      if (scheduled) await scheduled.reserve(db);
       const budget = await this.coding.jobs.queue.budgets.insert(
         db,
         project,
@@ -360,7 +382,7 @@ export class TeamExecutions {
       );
       const row = (
         await db.query(
-          'INSERT INTO team_executions(project_id,plan_id,request_id,request_hash,snapshot,commit_sha,repository_id,repository,link_version,budget_id,parallelism) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id',
+          'INSERT INTO team_executions(project_id,plan_id,request_id,request_hash,snapshot,commit_sha,repository_id,repository,link_version,budget_id,parallelism,automation_occurrence_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id',
           [
             project,
             planId,
@@ -373,6 +395,7 @@ export class TeamExecutions {
             link.version,
             budget,
             plan.snapshot.limits.concurrency,
+            scheduled?.occurrenceId ?? null,
           ],
         )
       ).rows[0];
@@ -381,10 +404,11 @@ export class TeamExecutions {
           'INSERT INTO team_execution_steps(execution_id,position,step_key) VALUES($1,$2,$3)',
           [row.id, index + 1, step.key],
         );
-      await db.query('UPDATE prepared_team_plans SET execution_id=$2 WHERE id=$1', [
-        planId,
-        row.id,
-      ]);
+      if (!scheduled)
+        await db.query('UPDATE prepared_team_plans SET execution_id=$2 WHERE id=$1', [
+          planId,
+          row.id,
+        ]);
       await teamEvent(
         db,
         row.id,
@@ -393,26 +417,28 @@ export class TeamExecutions {
       );
       return row.id as string;
     });
-    return this.read(owner, project, id);
+  }
+  async requestCancellation(db: PoolClient, id: string) {
+    const row = (await db.query('SELECT * FROM team_executions WHERE id=$1 FOR UPDATE', [id]))
+      .rows[0];
+    if (!row || !active(row.state) || row.cancel_requested) return;
+    await db.query('UPDATE team_executions SET cancel_requested=true WHERE id=$1', [id]);
+    await db.query(
+      'UPDATE execution_budgets SET cancelled_at=COALESCE(cancelled_at,now()) WHERE id=$1',
+      [row.budget_id],
+    );
+    await teamEvent(
+      db,
+      id,
+      'cancel_requested',
+      'Cancelación solicitada; no se crearán más etapas.',
+    );
   }
   async cancel(owner: string, project: string, id: string) {
     await this.owned(owner, project, id);
     await this.coding.jobs.queue.tx(async (db) => {
       await db.query('SELECT id FROM projects WHERE id=$1 FOR UPDATE', [project]);
-      const row = (await db.query('SELECT * FROM team_executions WHERE id=$1 FOR UPDATE', [id]))
-        .rows[0];
-      if (!active(row.state) || row.cancel_requested) return;
-      await db.query('UPDATE team_executions SET cancel_requested=true WHERE id=$1', [id]);
-      await db.query(
-        'UPDATE execution_budgets SET cancelled_at=COALESCE(cancelled_at,now()) WHERE id=$1',
-        [row.budget_id],
-      );
-      await teamEvent(
-        db,
-        id,
-        'cancel_requested',
-        'Cancelación solicitada; no se crearán más etapas.',
-      );
+      await this.requestCancellation(db, id);
     });
     const jobs = (
       await this.pool.query(
@@ -596,6 +622,15 @@ export class TeamExecutions {
         run.error_code ?? 'cancelled',
       );
       return;
+    }
+    if (run.automation_occurrence_id) {
+      const grant = await this.pool.query(
+        `SELECT 1 FROM prepared_team_plans p JOIN tasks t ON t.id=p.task_id AND t.project_id=p.project_id
+         WHERE p.id=$1 AND p.project_id=$2 AND p.approval_hash=$3 AND NOT p.changes_requested
+         AND t.version=$4`,
+        [run.plan_id, run.project_id, run.snapshot.hash, snapshot.task.version],
+      );
+      if (!grant.rowCount) throw conflict('team_approval_required');
     }
     for (const ended of steps.filter(
       (step) => step.job_id && !active(step.state) && !step.delivery,
