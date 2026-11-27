@@ -15,17 +15,18 @@ Actualizado el **27 de noviembre de 2026**. [Evidencias anteriores](history.md).
 - P23 incorpora 759 fichas de ECC, diez planes locales por familia y una receta de evidencias con Codex API de solo lectura. [Utilidades](utility-packs.md).
 - P24 incorpora programaciones diarias por proyecto con autorización, recuperación y notificaciones internas. [Automatizaciones](automations.md).
 - P25 incorpora telemetría protegida, diagnóstico y restauración comprobada de datos ampliados. [Operación](deployment.md).
+- P26 auditó cobertura y compatibilidad. [Matriz](plans/ecc-codex-prompts/coverage.md).
 
 ## Verificado
 
-- `npm run docker:check` superó **12 Python, 30 básicas, 139 pruebas/subcasos de integración y 29 Chromium**, tipos, compilación, formato y smoke. Registro privado `.local/p25-docker-check.log`.
+- `npm run docker:check` superó **12 Python, 30 básicas, 140 pruebas/subcasos de integración y 29 Chromium**, tipos, compilación, formato y smoke. Registro privado `.local/p26-docker-check-verified.log`.
 - `release:check` restauró 73 tablas y verificó Qdrant con su recibo SQL. Carga local de 800 solicitudes, cero errores y sin huérfanos. [Evidencia](load-testing.md).
 - Siete servicios saludables, migración **031** y web `http://127.0.0.1:5173`. Autoridad `ferweb_postgres_data`.
 
 ## Límites y siguiente paso
 
-SQL, Qdrant, CLI y contenedores reales. GitHub e inferencia simulados. Pendientes aceptación con App, modelos y hardware, importación del ZIP en Codex, conectores externos y despliegue permanente. Métricas ausentes desconocidas. Sin ahorro, velocidad o GPU medidos. Citas sujetas a revisión humana.
+SQL, Qdrant, CLI y contenedores reales. GitHub e inferencia simulados. Aceptación real pendiente con App, modelos y hardware, ZIP en Codex, conectores y despliegue. Métricas ausentes desconocidas. Citas sujetas a revisión humana.
 
 P19/P20 mantienen inferencia local sin fallback. La parada remota de Ollama sigue desconocida. GitHub conserva su política propia. E10 sin mejoras reales adoptadas. Docker comparte kernel y su controlador es privilegiado. [Límites](codex.md), [CI](https://github.com/fercuacas/FerWeb/actions).
 
-Siguiente entrega: P26. [Plan](plans/ecc-codex-prompts/progress.md).
+Plan P00–P26 auditado. [Aceptación externa opcional](plans/ecc-codex-prompts/coverage.md#aceptación-externa-opcional).

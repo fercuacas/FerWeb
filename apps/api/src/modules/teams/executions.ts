@@ -562,11 +562,16 @@ export class TeamExecutions {
       } catch (error) {
         // Validation failure is terminal. Retrying code or inference is never a recovery policy.
         const code = error instanceof HttpError ? error.code : 'team_coordinator_failed';
-        await this.coding.jobs.queue.tx(async (db) => {
+        const errorCode = await this.coding.jobs.queue.tx(async (db) => {
           const row = (
-            await db.query('SELECT state FROM team_executions WHERE id=$1 FOR UPDATE', [run.id])
+            await db.query<{ state: string; cancel_requested: boolean; error_code: string | null }>(
+              'SELECT state,cancel_requested,error_code FROM team_executions WHERE id=$1 FOR UPDATE',
+              [run.id],
+            )
           ).rows[0];
-          if (!active(row.state)) return;
+          if (!row || !active(row.state)) return undefined;
+          // Admission can reject a parent that was cancelled after this tick began.
+          if (row.cancel_requested) return row.error_code;
           await db.query(
             'UPDATE team_executions SET error_code=$2,cancel_requested=true WHERE id=$1',
             [run.id, code],
@@ -582,7 +587,9 @@ export class TeamExecutions {
             'Validación fallida; deteniendo cualquier etapa activa.',
             { code },
           );
+          return code;
         });
+        if (errorCode === undefined) continue;
         // Admission is closed before finding children: another coordinator may
         // have admitted one while this failure was being handled.
         const jobs = (
@@ -594,7 +601,8 @@ export class TeamExecutions {
         for (const job of jobs) await this.coding.jobs.queue.cancel(job.id, run.project_id);
         // Collect every terminal delivery before closing, including siblings
         // that ended in the same tick as the first failed child.
-        if (!jobs.length) await this.advance({ ...run, cancel_requested: true, error_code: code });
+        if (!jobs.length)
+          await this.advance({ ...run, cancel_requested: true, error_code: errorCode });
       }
     }
     return { checked: rows.length };

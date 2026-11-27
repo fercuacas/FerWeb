@@ -36,6 +36,7 @@ import {
   providerComparison,
   providerComparisonList,
   automationOverview,
+  memorySelection,
 } from '@ferweb/contracts';
 import { createPool } from '../src/database.js';
 import { readConfig } from '../src/config.js';
@@ -49,6 +50,7 @@ import { GitHubService } from '../src/modules/github/service.js';
 import { CodingService } from '../src/modules/jobs/coding-service.js';
 import { RunnerClient } from '../src/modules/jobs/runner-client.js';
 import { TeamService } from '../src/modules/teams/service.js';
+import { TeamExecutions } from '../src/modules/teams/executions.js';
 import { Automations } from '../src/modules/automations/service.js';
 import { HttpError } from '../src/http-error.js';
 import { ProjectLearning } from '../src/modules/laboratory/learning.js';
@@ -209,6 +211,7 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
       toolProfile?: TeamDefinition['toolProfile'],
       existingTask?: { id: string; version: number },
       localCoding = false,
+      memory: ReturnType<typeof memorySelection.parse>[] = [],
     ) {
       const post = (path: string, body: unknown) => request('POST', path, body, cookie);
       const roles = [];
@@ -278,6 +281,7 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
             mode: 'team',
             executionId: localCoding ? 'codex-local-v1' : 'codex-v1',
             model: localCoding ? 'fixture-local' : 'fixture-codex',
+            ...(memory.length && { memory }),
             ...(withContext && {
               context: {
                 profile: 'lean',
@@ -1276,6 +1280,7 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
     await t.test(
       'durable sequential teams hand off verified files, survive reload and stop without replay on cancellation, failures and worker loss',
       async () => {
+        if (!worker || worker.exitCode !== null || worker.signalCode !== null) await startWorker();
         const successful = await startTeam('P06 successful team');
         const id = successful.data.execution.id;
         assert.equal(
@@ -1346,6 +1351,55 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
         assert.ok(budget.admittedRequests > 0 && budget.admittedRequests <= 10);
         assert.equal(budget.reservedRequests, budget.admittedRequests);
         assert.ok(budget.steps.every((step) => step.released));
+        const originalCreate = coding.create;
+        await stopWorker();
+        try {
+          const selected = await task('P26 cancel before team step admission');
+          const preparation = await request(
+            'POST',
+            `/projects/${project}/team-plans`,
+            {
+              requestId: randomUUID(),
+              taskId: selected.id,
+              taskVersion: selected.version,
+              templateId: done.plan.template.id,
+              templateVersion: done.plan.template.version,
+              mode: 'team',
+              executionId: 'codex-v1',
+              model: 'fixture-codex',
+            },
+            cookie,
+          );
+          assert.equal(preparation.status, 201, await preparation.clone().text());
+          const plan = teamPlanResponse.parse(await preparation.json()).plan;
+          const route = `/projects/${project}/team-plans/${plan.id}`;
+          const approval = { hash: plan.hash, version: 1 };
+          assert.equal((await request('POST', route + '/approve', approval, cookie)).status, 200);
+          const execution = await request(
+            'POST',
+            route + '/execute',
+            { ...approval, requestId: randomUUID(), commit: 'a'.repeat(40) },
+            cookie,
+          );
+          assert.equal(execution.status, 202, await execution.clone().text());
+          const pending = teamExecutionResponse.parse(await execution.json()).execution;
+          const coordinator = new TeamExecutions(pool, coding);
+          // Cancel after the tick chooses a step, before its real admission transaction.
+          coding.create = async (...args) => {
+            await coordinator.cancel(owner.id, project, pending.id);
+            return originalCreate.apply(coding, args);
+          };
+          await coordinator.tick();
+          const stopped = await teamDetail(pending.id);
+          assert.equal(stopped.execution.state, 'cancelled');
+          assert.equal(stopped.execution.errorCode, 'cancelled');
+          assert.ok(stopped.steps.every((step) => !step.jobId));
+          assert.ok(stopped.events.some((event) => event.type === 'cancel_requested'));
+          assert.equal(stopped.events.at(-1)?.type, 'cancelled');
+        } finally {
+          coding.create = originalCreate;
+          await startWorker();
+        }
         const cancelled = await startTeam('P06 cancel active team');
         const live = await waitFor(async () => {
           const data = await teamDetail(cancelled.data.execution.id);
@@ -2457,10 +2511,33 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
           lesson: null,
           sources: [{ kind: 'job', id: job.id }],
         });
-        const team = await startTeam('P10 context team', 4, true),
+        const writesBefore = fixture.state.writes.length;
+        const team = await startTeam(
+            'P26 context and memory team',
+            4,
+            true,
+            undefined,
+            undefined,
+            false,
+            [memory.selection],
+          ),
           teamDone = await teamTerminal(team.data.execution.id);
         assert.equal(teamDone.execution.state, 'completed');
         assert.equal(teamDone.plan.contexts!.length, 2);
+        assert.deepEqual(teamDone.plan.memory, [memory.selection]);
+        assert.equal(
+          teamDone.steps[1]!.delivery!.inputHash,
+          teamDone.steps[0]!.delivery!.outputHash,
+        );
+        const budget = await coding.jobs.queue.budgets.read(
+          owner.id,
+          project,
+          teamDone.execution.budgetId,
+        );
+        assert.ok(budget.admittedRequests > 0 && budget.admittedRequests <= 10);
+        assert.equal(budget.reservedRequests, budget.admittedRequests);
+        assert.equal(budget.steps.length, 2);
+        assert.ok(budget.steps.every((step) => step.released));
         const receiptIds = new Set<string>();
         for (const step of teamDone.steps) {
           const run = await report(step.jobId!);
@@ -2468,9 +2545,34 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
           receiptIds.add(run.contextReceipt.id);
           const child = await packs.read(owner.id, project, run.contextReceipt.id);
           assert.equal(child.snapshot.phase, 'team:' + step.key);
+          assert.deepEqual(child.snapshot.memory, [memory.selection]);
           assert.equal(child.remainingExpansions, 2);
         }
         assert.equal(receiptIds.size, 2);
+        const implemented = teamDone.steps[0]!.jobId!;
+        const draftRoute = `/projects/${project}/coding/${implemented}/review`;
+        const draft = await request(
+          'PUT',
+          draftRoute,
+          {
+            version: 0,
+            title: 'P26 review draft',
+            body: 'Review the verified change and the source handoff.',
+            branch: `ferweb/p26-${implemented}`,
+            approved: false,
+            notes: 'Review the recorded team delivery.',
+          },
+          cookie,
+        );
+        assert.equal(draft.status, 200, await draft.clone().text());
+        const stored = await request('GET', draftRoute, undefined, cookie);
+        assert.equal(stored.status, 200);
+        const saved = reviewResponse.parse(await stored.json()).review;
+        assert.equal(saved?.state, 'prepared');
+        assert.equal(saved?.approved, false);
+        assert.equal(saved?.pullNumber, null);
+        assert.equal((await request('GET', draftRoute, undefined, foreign)).status, 404);
+        assert.equal(fixture.state.writes.length, writesBefore);
         fixture.state.extraFiles = fixture.state.extraFiles.filter(
           (f) => f.path !== 'docs/p10-contract.md',
         );
@@ -4607,8 +4709,17 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
     await t.test(
       'P20 local teams share the common coding reports and budget across real tool handoffs',
       async () => {
+        if (!worker || worker.exitCode !== null || worker.signalCode !== null) await startWorker();
+        const packs = coding.contextPacks!;
+        await packs.retrieval.index(owner.id, project, true);
+        const previousMap = await packs.map(owner.id, project);
+        await packs.saveMap(owner.id, project, {
+          version: previousMap?.version ?? 0,
+          markdown: '# Local fixture\nUse src/add.cjs and tests/add.test.cjs.',
+          paths: [],
+        });
         const before = await localFixtureState();
-        const run = await startTeam('P20 local team', 4, false, undefined, undefined, true);
+        const run = await startTeam('P20 local team P26', 4, true, undefined, undefined, true);
         const done = await teamTerminal(run.data.execution.id);
         assert.equal(done.execution.state, 'completed', JSON.stringify(done));
         assert.equal(done.plan.execution.provider, 'ollama');
@@ -4618,7 +4729,13 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
           assert.equal(child.job.kind, 'codex-v1');
           if (child.job.kind === 'codex-v1')
             assert.equal(child.job.configuration.executionId, 'codex-local-v1');
-          assert.equal((await report(step.jobId!)).report?.execution?.provider, 'ollama');
+          const run = await report(step.jobId!);
+          assert.equal(run.report?.execution?.provider, 'ollama');
+          assert.ok(run.contextReceipt);
+          const receipt = await packs.read(owner.id, project, run.contextReceipt.id);
+          assert.equal(receipt.snapshot.execution.id, 'codex-local-v1');
+          assert.equal(receipt.snapshot.retrieval.strategy, 'lexical-v1');
+          assert.equal(receipt.snapshot.retrieval.embeddingUsed, false);
         }
         assert.equal((await localFixtureState()).cloudRequests, before.cloudRequests);
       },

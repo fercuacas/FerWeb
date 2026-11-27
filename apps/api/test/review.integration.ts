@@ -6,7 +6,12 @@ import {
   codingCapabilities,
   codingReport,
   codingComparisons,
+  codingRunSchema,
+  conversationResponse,
+  jobDetailSchema,
+  projectResponseSchema,
   reviewResponse,
+  unknownUsage,
 } from '@ferweb/contracts';
 import { createPool } from '../src/database.js';
 import { readConfig } from '../src/config.js';
@@ -20,6 +25,8 @@ import { GitHubService } from '../src/modules/github/service.js';
 import { CodingService } from '../src/modules/jobs/coding-service.js';
 import { ReviewService } from '../src/modules/jobs/review-service.js';
 import { RunnerClient } from '../src/modules/jobs/runner-client.js';
+import { canonical, digest } from '../src/modules/jobs/review-artifacts.js';
+import { ChatService } from '../src/modules/chat/service.js';
 import { githubFixture } from '../../../tests/fixtures/github.mjs';
 import { publicationFixture } from '../../../tests/fixtures/publication.mjs';
 import { codingCorpus } from '../../../tests/fixtures/coding.mjs';
@@ -55,7 +62,11 @@ test('review/publication: real HTTP and SQL, GitHub write double (reports explic
     await admin.query(`CREATE DATABASE "${database}"`);
     created = true;
     const migrations = await loadMigrations();
-    await applyMigrations(pool, migrations);
+    const reviewMigration = migrations.findIndex(
+      (migration) => migration.name === '009_reviews.sql',
+    );
+    assert.ok(reviewMigration >= 0 && reviewMigration < migrations.length - 1);
+    await applyMigrations(pool, migrations.slice(0, reviewMigration + 1));
     const password = randomBytes(24).toString('hex'),
       owner = await provisionOwner(pool, { email: 'review-owner@ferweb.test', password });
     await pool.query('INSERT INTO app_users(email,password_hash) VALUES($1,$2)', [
@@ -74,11 +85,73 @@ test('review/publication: real HTTP and SQL, GitHub write double (reports explic
         [project, JSON.stringify(['Add correctly'])],
       )
     ).rows[0]!;
+    const legacyChat = randomUUID(),
+      legacyJob = randomUUID(),
+      legacyConfiguration = { maxOutputTokens: 256 },
+      legacyCommit = 'a'.repeat(40);
+    await pool.query(
+      "INSERT INTO conversations(id,project_id,title,provider,model,configuration,version) VALUES($1,$2,'Previous chat','ollama','fixture-old',$3,1)",
+      [legacyChat, project, legacyConfiguration],
+    );
+    await pool.query(
+      `INSERT INTO chat_turns(conversation_id,request_id,sequence,prompt,response,provider,model,configuration,status,usage,finished_at)
+       VALUES($1,$2,1,'Previous prompt','Previous answer','ollama','fixture-old',$3,'completed',$4,now())`,
+      [legacyChat, randomUUID(), legacyConfiguration, unknownUsage()],
+    );
+    const legacyJobConfiguration = {
+      taskId: task.id,
+      commit: legacyCommit,
+      model: 'fixture-a',
+      maxRequests: 4,
+      maxOutputTokens: 256,
+      limits: { timeoutMs: 60000, maxAttempts: 1 },
+    };
+    await pool.query(
+      `INSERT INTO jobs(id,project_id,request_id,request_hash,title,kind,configuration,state,finished_at)
+       VALUES($1,$2,$3,'legacy-hash','Previous execution','codex-v1',$4,'completed',now())`,
+      [legacyJob, project, randomUUID(), legacyJobConfiguration],
+    );
+    const timestamp = new Date().toISOString();
+    const historicalReport = codingReport.parse({
+      kind: 'codex-v1',
+      jobId: legacyJob,
+      commit: legacyCommit,
+      repository: 'demo/ferweb',
+      task,
+      model: 'fixture-a',
+      cliVersion: 'fixture',
+      simulated: true,
+      startedAt: timestamp,
+      finishedAt: timestamp,
+      summary: 'Previous report',
+      commands: [],
+      tests: [],
+      diff: [],
+      diffComplete: true,
+      usage: null,
+      cost: null,
+      durationMs: 0,
+      modelRequests: 0,
+      terminationConfirmed: true,
+      limitations: ['Synthetic historical report'],
+    });
+    await pool.query(
+      `INSERT INTO coding_runs(job_id,task_id,task_snapshot,owner_id,repository_id,repository,commit_sha,files,manifest,excluded,base_branch,report)
+       VALUES($1,$2,$3,$4,101,'demo/ferweb',$5,'[]','[]','[]','main',$6)`,
+      [legacyJob, task.id, task, owner.id, legacyCommit, historicalReport],
+    );
+    await pool.query(
+      `INSERT INTO coding_reviews(job_id,project_id,repository_id,title,body,branch,approved,notes,report_hash)
+       VALUES($1,$2,101,'Previous draft','Preserved review',$3,true,'Reviewed before upgrade',$4)`,
+      [legacyJob, project, `ferweb/previous-${legacyJob}`, digest(canonical(historicalReport))],
+    );
+    await applyMigrations(pool, migrations);
     const origin = 'http://127.0.0.1:5173';
     server = createApp(() => inspectDatabase(pool, migrations), migrations.length, {
       pool,
       github,
       coding,
+      chats: new ChatService(pool, null),
       appOrigin: origin,
       secureCookies: false,
     }).listen(0, '127.0.0.1');
@@ -111,6 +184,45 @@ test('review/publication: real HTTP and SQL, GitHub write double (reports explic
     await github.link(owner.id, project, { installationId: 71, repositoryId: 101, version: 0 });
     await github.sync(owner.id, project, 1);
     const path = (id: string) => `/projects/${project}/coding/${id}`;
+    await t.test(
+      'P26 reads records made on migration 009 through current authenticated routes',
+      async () => {
+        const prefix = `/projects/${project}`;
+        async function read(route: string) {
+          const result = await request('GET', route, undefined, cookie);
+          assert.equal(result.status, 200, await result.clone().text());
+          assert.equal((await request('GET', route, undefined, foreign)).status, 404);
+          return result.json();
+        }
+        const legacyProject = projectResponseSchema.parse(await read(prefix)).project;
+        assert.equal(legacyProject.name, 'Review fixture');
+        assert.equal(legacyProject.version, 1);
+        const chat = conversationResponse.parse(
+          await read(`${prefix}/conversations/${legacyChat}`),
+        );
+        assert.equal(chat.conversation.id, legacyChat);
+        assert.equal(chat.turns.length, 1);
+        assert.equal(chat.turns[0]!.response, 'Previous answer');
+        assert.deepEqual(chat.turns[0]!.usage, unknownUsage());
+        assert.deepEqual(chat.turns[0]!.sources, []);
+        assert.equal(chat.turns[0]!.contextMetrics, null);
+        const { job } = jobDetailSchema.parse(await read(`${prefix}/jobs/${legacyJob}`));
+        assert.equal(job.state, 'completed');
+        assert.deepEqual(job.configuration, legacyJobConfiguration);
+        const run = codingRunSchema.parse(await read(path(legacyJob)));
+        assert.deepEqual(run.report, historicalReport);
+        assert.deepEqual(run.memory, []);
+        assert.equal(run.contextReceipt, null);
+        const { review, dimensions } = reviewResponse.parse(
+          await read(path(legacyJob) + '/review'),
+        );
+        assert.equal(review?.body, 'Preserved review');
+        assert.equal(review?.approved, true);
+        assert.equal(review?.version, 1);
+        assert.equal(review?.state, 'prepared');
+        assert.deepEqual(dimensions, []);
+      },
+    );
     async function run() {
       const job = await coding.create(owner.id, project, {
         requestId: randomUUID(),

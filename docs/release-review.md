@@ -1,5 +1,7 @@
 # Revisión del primer candidato FerWeb
 
+Esta página conserva la evidencia del 3 de noviembre de 2026. La auditoría del candidato ampliado, su compatibilidad y las pruebas externas pendientes se siguen en la [cobertura P26](plans/ecc-codex-prompts/coverage.md). La aceptación de recuperación de P25 también pasó en [GitHub Actions](https://github.com/fercuacas/FerWeb/actions/runs/46040568258).
+
 **2026-11-03. Candidato local preparado; no publicado ni desplegado como instancia permanente.** El producto y repositorio siguen llamándose FerWeb. Procedimientos en [deployment.md](deployment.md), instalación en el [README en inglés](../README.md) y [demo](demo.md).
 
 ## Funciona
