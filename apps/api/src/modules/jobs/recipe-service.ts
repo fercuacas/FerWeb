@@ -245,6 +245,22 @@ export class RecipeService {
           ],
         ],
       }[input.format ?? 'steps'];
+      const utility = definition.utility;
+      if (utility) {
+        if (input.format && input.format !== 'steps')
+          throw invalid('Los paquetes usan su plan de pasos y validación.');
+        sections.push(
+          ['Entregable para revisar', definition.output],
+          [
+            'Fuentes',
+            [
+              `- Proyecto: ${link.fullName}@${link.snapshot.commit} · ${scope}`,
+              ...utility.paths.map((path) => `- Método: affaan-m/ECC@${utility.commit} · ${path}`),
+              `- Licencia del método: ${utility.license} · affaan-m/ECC@${utility.commit}:LICENSE`,
+            ].join('\n'),
+          ],
+        );
+      }
       preview = `# ${task.title}\n\n${sections.map(([heading, content]) => `## ${heading}\n\n${content}`).join('\n\n')}`;
     } else if (mode === 'draft') {
       preview = `# ${task.title}\n\n## Resumen\n\n${task.description}\n\n## Cambios\n\n${source!.paths.map((path) => '- ' + path).join('\n')}\n\n## Verificación\n\nCompletar con las comprobaciones observadas del informe ${source!.jobId}.\n`;

@@ -1,8 +1,35 @@
 # Cobertura de utilidades ECC
 
-Esta matriz es un **plan**. P00 comprobó que las 30 familias se corresponden con las fases P00–P26 y que las rutas iniciales de los prompts existen. La revisión por entrada canónica corresponde a P23. El estado de cada entrega y la disponibilidad de la aplicación se registran por separado. [Progreso](progress.md) · [Estado de FerWeb](../../status.md)
+P00 trazó 30 capacidades del plan. P23 añade el catálogo por entrada canónica, los paquetes y la evidencia de sus recorridos. La matriz histórica conserva los criterios de cada entrega. [Progreso](progress.md) · [Estado de FerWeb](../../status.md)
 
-La unidad de cobertura es la familia/capacidad; P23 debe completar un inventario por entrada canónica del commit ECC fijado, sin contar traducciones o copias generadas como utilidades nuevas. Los números de prompts en una celda expresan entregas relacionadas, no aceptación ya lograda.
+## Inventario verificable por entrada
+
+El inventario contiene **759 fichas** del commit fijado de ECC 2.2.3. Incluye 314 skills, 71 agentes, 98 comandos, reglas, modos, workflows, herramientas, manifests, prototipos y los servidores declarados en el registro MCP. El identificador es la ruta canónica, con un fragmento por servidor en el fichero compartido. Cada recurso asociado conserva la ruta y el objeto Git del origen. La ficha muestra la licencia declarada, con MIT del repositorio por defecto. Los archivos de licencia y otros recursos adjuntos conservan su referencia original. [Inventario JSON](../../../apps/api/src/modules/utility-packs/inventory.json) · [ECC b38be6a7](https://github.com/affaan-m/ECC/tree/b38be6a7f6350964d59328b52f0624e1d1d552d1)
+
+El generador lee el árbol y los metadatos fijados. Clasifica 1.681 archivos bajo las entradas, 1.535 como traducciones, variantes de host y shims, y 1.485 como material auxiliar. Los ejemplos internos, recursos del repositorio y copias no se cuentan como utilidades independientes. Ejecuta `node scripts/ecc-inventory.mjs <ruta-a-ECC> --verify` con el commit presente para comprobar igualdad por entrada, recurso y huella. [Generador](../../../scripts/ecc-inventory.mjs)
+
+Por modo de origen, hay 515 fichas de contenido, 98 de workflow, 85 de herramientas y 61 de integración externa. La disponibilidad se muestra por separado en cada ficha.
+
+| Familia portable | Resultado del plan versionado |
+| --- | --- |
+| Ingeniería | Plan incremental de cambio, prueba y reversión |
+| Frontend, diseño y accesibilidad | Matriz de estados, foco y comprobaciones |
+| Backend y datos | Plan de contratos, migración y persistencia |
+| Móvil | Matriz de recorridos por dispositivo y conexión |
+| Investigación y documentación | Protocolo de fuentes y mapa de evidencias opcional |
+| Contenido y SEO | Brief y verificación editorial |
+| Documentos y multimedia | Guion, materiales y derechos |
+| Operaciones empresariales | Mapa de proceso y borrador revisable |
+| Redes y homelab | Revisión documental de infraestructura propia |
+| Dominios especializados | Ficha de revisión para una persona cualificada |
+
+**Contenido utilizable.** Las siete adaptaciones portables revisadas del catálogo P03 se pueden importar como versiones pendientes de aprobación en el proyecto. Sus usos y perfiles dependen del rol que las vincule. Las demás referencias conservan su estado en la ficha.
+
+**Recorridos de FerWeb.** La API y Chromium prueban catálogo y filtros, planes locales y persistencia. La integración verifica los diez planes y una ejecución aislada de mapa de evidencias con Codex CLI real y proveedor simulado. Los planes locales preparan un entregable de revisión desde una tarea y sus fuentes. La receta de evidencias requiere confirmación explícita y el perfil Codex API de solo lectura. [Recorrido](../../utility-packs.md).
+
+**Aceptación externa pendiente.** Las fichas de MCP y servicios listan el adaptador, los permisos, el destino, la cuenta o el presupuesto exigidos según proceda. Su acción permanece deshabilitada. La ejecución del mapa con un modelo API real sigue pendiente. [Progreso y evidencias](progress.md).
+
+## Mapa histórico de capacidades
 
 | Familia | Origen ECC | Prompts | Evidencia que se exige |
 |---|---|---|---|

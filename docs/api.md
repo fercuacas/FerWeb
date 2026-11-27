@@ -413,6 +413,12 @@ La ruta base es `/projects/:projectId/tasks/:taskId/recipes`. `GET` devuelve el 
 
 [Ejemplo de manifiesto y recorrido P22](extensions.md).
 
+## Paquetes de utilidades P23
+
+`GET /projects/:projectId/utility-packs` devuelve el origen ECC fijado, los diez paquetes con sus recetas disponibles, el total y una página de fichas. Acepta `q`, `family`, `mode`, `status` y `page` desde uno. Los estados son `catalogued`, `reviewed`, `workflow` y `pending`. Requiere acceso al proyecto y admite consulta en archivo.
+
+Los planes de paquete usan la ruta de recetas P15 y una clave `pack-*` de versión exacta. El snapshot conserva el commit y las rutas metodológicas de ECC junto con el alcance del proyecto. Los planes `plan` se preparan sin inferencia. La receta `pack-evidence` usa el perfil de lectura de Codex API tras aprobación. La importación de contenido revisado reutiliza `POST /skills` del proyecto. [Recorrido](utility-packs.md).
+
 ## Referencias de diseño
 
 - [Node.js crypto](https://nodejs.org/api/crypto.html).

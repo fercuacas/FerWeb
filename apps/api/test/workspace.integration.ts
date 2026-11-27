@@ -8,6 +8,7 @@ import {
   portablePreview,
   skillResponse,
   agentMutationResponse,
+  utilityCatalog,
   type ExtensionManifest,
 } from '@ferweb/contracts';
 import { skillManifestFixture } from '../../../tests/fixtures/skills.mjs';
@@ -371,6 +372,84 @@ test('workspace HTTP with real PostgreSQL and two isolated users', async (t) => 
         201,
       );
     });
+    await t.test(
+      'P23 lists the pinned ECC inventory once and keeps connectors and skill review separate',
+      async () => {
+        const { project: scoped } = await (
+          await request('POST', '/projects', { name: 'P23 utility catalog', description: '' }, a)
+        ).json();
+        const route = `/projects/${scoped.id}/utility-packs`;
+        const read = async (query = '') => {
+          const result = await request('GET', route + query, undefined, a);
+          assert.equal(result.status, 200, await result.clone().text());
+          return utilityCatalog.parse(await result.json());
+        };
+        assert.equal((await request('GET', route, undefined, b)).status, 404);
+        assert.equal((await request('GET', route + '?mode=install', undefined, a)).status, 400);
+        assert.equal((await request('GET', route + '?page=0', undefined, a)).status, 400);
+        const first = await read();
+        assert.equal(first.source.commit, 'b38be6a7f6350964d59328b52f0624e1d1d552d1');
+        assert.match(first.source.notice, /Copyright \(c\) 2026 Affaan Mustafa/);
+        assert.equal(first.packages.length, 10);
+        const entries = [...first.entries];
+        for (let page = 2; page <= Math.ceil(first.total / first.pageSize); page++)
+          entries.push(...(await read('?page=' + page)).entries);
+        assert.equal(entries.length, 759);
+        assert.equal(new Set(entries.map(({ path }) => path)).size, first.inventoryTotal);
+        assert.equal(entries.filter(({ path }) => path.startsWith('skills/')).length, 314);
+        assert.equal(entries.filter(({ path }) => path.startsWith('agents/')).length, 71);
+        assert.equal(entries.filter(({ path }) => path.startsWith('commands/')).length, 98);
+        const licensed = entries.find(
+          ({ path }) => path === 'skills/osint-investigation/SKILL.md',
+        )!;
+        assert.equal(licensed.license, 'CC-BY-SA-4.0');
+        assert.ok(licensed.resources.some(({ path }) => path.endsWith('/LICENSE.txt')));
+        assert.equal(licensed.recipe, null);
+        const filtered = await read('?q=FAL+AI&mode=external&status=pending');
+        assert.ok(filtered.entries.some(({ path }) => path.endsWith('#mcpServers.fal-ai')));
+        assert.ok(
+          filtered.entries.every(
+            (item) =>
+              item.status === 'pending' &&
+              !item.recipe &&
+              !item.curated &&
+              !item.providers.length &&
+              item.requirements.length >= 2,
+          ),
+        );
+        assert.deepEqual((await read('?family=networks&q=zzNoUtility')).entries, []);
+        const guide = entries.find(({ path }) => path === 'skills/postgres-patterns/SKILL.md')!;
+        assert.equal(guide.curated, 'ecc-postgres');
+        assert.equal(guide.recipe?.key, 'pack-backend');
+        const draft = await request(
+          'POST',
+          `/projects/${scoped.id}/skills`,
+          { curated: guide.curated },
+          a,
+        );
+        assert.equal(draft.status, 201);
+        const { skill } = skillResponse.parse(await draft.json());
+        assert.equal(skill.review, 'pending');
+        assert.equal(skill.license, 'MIT');
+        assert.equal(
+          (
+            await request(
+              'PATCH',
+              `/projects/${scoped.id}`,
+              { archived: true, version: scoped.version },
+              a,
+            )
+          ).status,
+          200,
+        );
+        assert.equal((await read()).inventoryTotal, first.inventoryTotal);
+        assert.equal(
+          (await request('POST', `/projects/${scoped.id}/skills`, { curated: guide.curated }, a))
+            .status,
+          409,
+        );
+      },
+    );
     await t.test(
       'P22 extensions stage and review local access, preserve project edits and retain history through rollback',
       async () => {

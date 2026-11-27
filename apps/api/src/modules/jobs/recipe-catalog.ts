@@ -1,4 +1,5 @@
 import { recipeDefinition, type RecipeDefinition } from '@ferweb/contracts';
+import { utilityRecipes } from './utility-recipes.js';
 
 const firstVersion = (
   definition: Omit<RecipeDefinition, 'version' | 'maxRequests' | 'timeoutMs' | 'maxOutputTokens'>,
@@ -111,4 +112,5 @@ export const recipes = [
     ],
     output: 'Texto local para el borrador de E9.',
   }),
+  ...utilityRecipes.map(firstVersion),
 ];

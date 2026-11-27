@@ -6,6 +6,7 @@ import { jobsApi } from './jobs-store';
 import { recipeApi } from './recipe-store';
 import { errorMessage } from './workspace-store';
 import { ReviewCanvas } from './ReviewCanvas';
+import { UtilityPacks } from './UtilityPacks';
 
 const modeLabel = {
   read: 'Un agente · Solo lectura',
@@ -79,7 +80,7 @@ function PrepareRecipe({
                 .filter(Boolean),
           ...(launches && { model: chosen }),
           ...(recipe.mode === 'write' && { profile }),
-          ...(recipe.mode === 'plan' && { format }),
+          ...(recipe.mode === 'plan' && !recipe.utility && { format }),
           ...(usesDiff && { sourceJobId }),
           ...(agent && { agent: { id: agent.id, version: agent.latest.version } }),
         };
@@ -134,7 +135,7 @@ function PrepareRecipe({
           />
         </label>
       )}
-      {recipe.mode === 'plan' && (
+      {recipe.mode === 'plan' && !recipe.utility && (
         <label>
           Formato del plan
           <select
@@ -326,6 +327,7 @@ export function TaskRecipes({
   const [open, setOpen] = useState(false);
   const [key, setKey] = useState('');
   const [selected, setSelected] = useState('');
+  const recipeSelect = useRef<HTMLSelectElement>(null);
   const query = recipeApi.useRecipesQuery(
     { project, task: task.id },
     { skip: !open, refetchOnMountOrArgChange: true, refetchOnFocus: true },
@@ -343,7 +345,11 @@ export function TaskRecipes({
             <>
               <label>
                 Elegir receta
-                <select value={key} onChange={(event) => setKey(event.target.value)}>
+                <select
+                  ref={recipeSelect}
+                  value={key}
+                  onChange={(event) => setKey(event.target.value)}
+                >
                   <option value="">Selecciona una receta</option>
                   {data.recipes.map((item) => (
                     <option key={item.key} value={item.key}>
@@ -387,6 +393,15 @@ export function TaskRecipes({
               archived={archived}
             />
           )}
+          <UtilityPacks
+            project={project}
+            archived={archived}
+            canChoose={!archived && !!data}
+            onChoose={(recipe) => {
+              setKey(recipe);
+              recipeSelect.current?.focus();
+            }}
+          />
         </>
       )}
     </details>

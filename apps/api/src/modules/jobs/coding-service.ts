@@ -881,7 +881,10 @@ export class CodingService {
       ...(recipe &&
         (recipe.definition.key === 'investigate' ||
           recipe.definition.key === 'review' ||
-          recipe.definition.key === 'docs') && { artifactVerification: true }),
+          recipe.definition.key === 'docs' ||
+          (recipe.definition.utility && recipe.definition.mode === 'read')) && {
+          artifactVerification: true,
+        }),
       ...(agent && {
         role: {
           purpose: agent.purpose,

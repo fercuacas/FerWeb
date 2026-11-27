@@ -1,9 +1,9 @@
 import type { SkillContent } from '@ferweb/contracts';
 import { digest } from '../jobs/review-artifacts.js';
+import { eccCommit, eccRepository } from '../utility-packs/source.js';
 
-const commit = 'b38be6a7f6350964d59328b52f0624e1d1d552d1';
 // License from affaan-m/ECC at the pinned commit above.
-const notice = `MIT License
+export const eccLicenseNotice = `MIT License
 
 Copyright (c) 2026 Affaan Mustafa
 
@@ -112,8 +112,8 @@ export const curatedSkills: SkillContent[] = guides.map(({ path, text, resource,
     ? 'Referencia con dependencias de ejecución.'
     : 'Adaptación para el flujo de FerWeb.',
   license: 'MIT',
-  notice,
-  origin: { kind: 'ecc', repository: 'affaan-m/ECC', commit, path },
+  notice: eccLicenseNotice,
+  origin: { kind: 'ecc', repository: eccRepository, commit: eccCommit, path },
   requiredCapabilities: ['text'],
   allowedToolProfiles: ['node-isolated-v1', 'text-only'],
   resources: resource ? [resource] : [],

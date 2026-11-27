@@ -9,6 +9,7 @@ import {
   taskInputSchema,
   taskPatchSchema,
   taskFilterSchema,
+  utilityQuery,
   type User,
 } from '@ferweb/contracts';
 import { HttpError } from './http-error.js';
@@ -51,6 +52,7 @@ import { contextPackRouter } from './modules/context-packs/routes.js';
 import { AiClient } from './modules/chat/client.js';
 import { LocalReadService } from './modules/jobs/local-readonly.js';
 import { extensionRouter } from './modules/extensions/routes.js';
+import { listUtilities } from './modules/utility-packs/catalog.js';
 
 export interface WorkspaceOptions {
   ai?: AiClient | null;
@@ -203,6 +205,10 @@ export function createWorkspaceRouter({
   });
   router.get('/projects/:projectId', async (request, response) => {
     response.json({ project: await projects.get(owner(response), uuid(request.params.projectId)) });
+  });
+  router.get('/projects/:projectId/utility-packs', async (request, response) => {
+    await projects.get(owner(response), uuid(request.params.projectId));
+    response.json(listUtilities(utilityQuery.parse(request.query)));
   });
   router.patch('/projects/:projectId', async (request, response) => {
     response.json({

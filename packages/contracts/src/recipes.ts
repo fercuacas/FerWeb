@@ -2,6 +2,19 @@ import { z } from 'zod';
 import { agentSelection, agentTemplateId } from './agents.js';
 import { codingToolProfile } from './execution.js';
 
+export const utilityFamily = z.enum([
+  'engineering',
+  'frontend',
+  'backend',
+  'mobile',
+  'research',
+  'content',
+  'documents',
+  'business',
+  'networks',
+  'specialized',
+]);
+
 export const recipeKey = z.enum([
   'investigate',
   'plan',
@@ -12,6 +25,17 @@ export const recipeKey = z.enum([
   'build',
   'docs',
   'pr-draft',
+  'pack-engineering',
+  'pack-frontend',
+  'pack-backend',
+  'pack-mobile',
+  'pack-research',
+  'pack-content',
+  'pack-documents',
+  'pack-business',
+  'pack-networks',
+  'pack-specialized',
+  'pack-evidence',
 ]);
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 const commit = z.string().regex(/^[a-f0-9]{40}$/);
@@ -32,6 +56,14 @@ export const recipeDefinition = z.object({
   maxRequests: z.number().int().min(1).max(20),
   timeoutMs: z.number().int().min(10000).max(1200000),
   maxOutputTokens: z.number().int().min(64).max(8192),
+  utility: z
+    .object({
+      family: utilityFamily,
+      commit,
+      license: z.literal('MIT'),
+      paths: z.array(z.string()).min(1),
+    })
+    .optional(),
 });
 export const recipeInput = z.strictObject({
   requestId: z.uuid(),

@@ -3017,7 +3017,11 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
           model: 'fixture-codex',
         };
         const overview = await request('GET', route, undefined, cookie);
-        assert.equal(recipeOverview.parse(await overview.json()).recipes.length, 9);
+        assert.equal(
+          recipeOverview.parse(await overview.json()).recipes.filter((item) => !item.utility)
+            .length,
+          9,
+        );
         assert.equal((await request('GET', route, undefined, foreign)).status, 404);
         const prepare = async (body: unknown) => {
           const response = await request('POST', route, body, cookie);
@@ -3151,6 +3155,96 @@ test('Codex CLI with simulated Responses: isolated real containers, immutable in
         );
         const saved = await request('GET', route + '/' + research.id, undefined, cookie);
         assert.equal(recipePlan.parse(await saved.json()).jobId, researchJob);
+      },
+    );
+    await t.test(
+      'P23 prepares all ten family plans and runs the approved evidence recipe in the existing read-only executor',
+      async () => {
+        if (!worker || worker.exitCode !== null || worker.signalCode !== null) await startWorker();
+        const selected = await task('P23 scoped utility evidence');
+        const route = `/projects/${project}/tasks/${selected.id}/recipes`;
+        const { recipes } = recipeOverview.parse(
+          await (await request('GET', route, undefined, cookie)).json(),
+        );
+        const plans = recipes.filter(({ mode, utility }) => mode === 'plan' && utility);
+        assert.deepEqual(plans.map(({ utility }) => utility?.family).sort(), [
+          'backend',
+          'business',
+          'content',
+          'documents',
+          'engineering',
+          'frontend',
+          'mobile',
+          'networks',
+          'research',
+          'specialized',
+        ]);
+        const input = { version: 1, taskVersion: selected.version, paths: ['src/add.cjs'] };
+        const prepare = async (body: Record<string, unknown>) => {
+          const response = await request(
+            'POST',
+            route,
+            { ...input, ...body, requestId: randomUUID() },
+            cookie,
+          );
+          assert.equal(response.status, 201, await response.clone().text());
+          return recipePlan.parse(await response.json());
+        };
+        for (const { key, output, steps, utility } of plans) {
+          const plan = await prepare({ key });
+          assert.equal(plan.jobId, null);
+          assert.equal(plan.snapshot.runtimeRevision, null);
+          assert.deepEqual(plan.snapshot.definition.utility, utility);
+          const preview = plan.snapshot.preview!;
+          assert.ok(preview.includes(steps[0]!));
+          assert.ok(preview.includes(output));
+          assert.ok(preview.includes(plan.snapshot.commit) && preview.includes('src/add.cjs'));
+          assert.ok(utility!.paths.every((path) => preview.includes(path)));
+          assert.equal(
+            (await request('POST', `${route}/${plan.id}/execute`, { hash: plan.hash }, cookie))
+              .status,
+            422,
+          );
+        }
+        assert.equal(
+          (await pool.query('SELECT 1 FROM coding_runs WHERE task_id=$1', [selected.id])).rowCount,
+          0,
+        );
+        assert.equal(
+          (
+            await request(
+              'POST',
+              route,
+              { ...input, key: 'pack-evidence', requestId: randomUUID(), model: 'not-available' },
+              cookie,
+            )
+          ).status,
+          422,
+        );
+        const evidence = await prepare({ key: 'pack-evidence', model: 'fixture-codex' });
+        assert.equal(evidence.jobId, null);
+        assert.equal(evidence.snapshot.simulated, true);
+        const response = await request(
+          'POST',
+          `${route}/${evidence.id}/execute`,
+          { hash: evidence.hash },
+          cookie,
+        );
+        assert.equal(response.status, 202, await response.clone().text());
+        const { jobId } = recipePlan.parse(await response.json());
+        assert.ok(jobId);
+        const { job } = await terminal(jobId);
+        assert.equal(job.state, 'completed', JSON.stringify(job.errorCode));
+        assert.equal(job.kind, 'codex-v1');
+        assert.equal(job.configuration.workspaceAccess, 'read-only');
+        assert.equal(job.configuration.recipe?.key, 'pack-evidence');
+        const result = (await report(jobId)).report!;
+        assert.deepEqual(result.diff, []);
+        assert.ok(
+          result.controls?.events.some(
+            ({ id, status }) => id === 'artifact' && status === 'passed',
+          ),
+        );
       },
     );
     await t.test(

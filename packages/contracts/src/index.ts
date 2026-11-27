@@ -7,6 +7,7 @@ export * from './agent-evaluation.js';
 export * from './routing.js';
 export * from './provider-comparison.js';
 export * from './extensions.js';
+export * from './utility-packs.js';
 export * from './learning.js';
 export * from './recipes.js';
 export * from './canvas.js';

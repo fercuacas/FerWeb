@@ -1,0 +1,11 @@
+# Paquetes de utilidades ECC (P23)
+
+Abre **Tareas → Detalle de tarea → Recetas de la tarea → Paquetes de utilidades ECC**. Busca por nombre, ruta o tema. Puedes combinar la familia, el modo y el estado. Cada ficha muestra la entrada, la salida disponible, la procedencia, la licencia, los destinos y los requisitos. Los recursos del origen se identifican mediante su ruta y objeto Git. [Inventario y cobertura](plans/ecc-codex-prompts/coverage.md).
+
+En **Familia**, elige un paquete y pulsa el botón de su plan. Indica las rutas de referencia y pulsa **Preparar receta**. FerWeb guarda la tarea, el commit del proyecto, las rutas, la versión de la receta y las fuentes metodológicas de ECC. La salida incluye pasos, criterios y el entregable que debe revisar el operador. Los diez planes se preparan en el servidor y quedan en PostgreSQL con el historial de recetas. Requieren una tarea y un repositorio vinculado con un snapshot sincronizado. No requieren un modelo.
+
+En **Investigación y documentación**, **Elegir Mapa de evidencias del repositorio** abre una receta con Codex API. Usa el perfil existente de solo lectura. Selecciona un modelo admitido y confirma la huella del plan para iniciar el trabajo. El resultado se abre desde el informe trazable, con comprobación independiente de la integridad. La ruta usa las mismas capacidades y límites de P15. Las demás familias pueden usar su plan local aunque falte un proveedor de inferencia. [Recetas de tarea](codex.md#recetas-de-tarea-p15).
+
+Una ficha con **Importar skill para revisión** incorpora la adaptación de texto de la biblioteca P03. Su aprobación y vinculación se hacen en **Agentes → Biblioteca de skills**. Las versiones conservan procedencia, aviso y hashes. Cada rol sigue sujeto a sus capacidades y destino configurado. Los proyectos archivados admiten consulta de catálogo y planes.
+
+Los conectores pendientes muestran sus requisitos y la acción permanece deshabilitada. Una ficha catalogada puede documentar un comando, una herramienta o un servicio de ECC. Los planes pueden preparar borradores, guiones y listas de revisión. Las operaciones reales de correo, publicación, pagos, vídeo y cómputo requerirían un adaptador y aceptación separados. [Frontera de extensiones](extensions.md).
