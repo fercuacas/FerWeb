@@ -27,6 +27,7 @@ export interface Claim {
   configuration: z.infer<typeof anyJobConfiguration>;
   lease_until: Date;
   deadline_at: Date;
+  correlation?: { parent: unknown; step: unknown; agent: unknown; version: unknown };
 }
 export class JobQueue {
   readonly budgets: ExecutionBudgets;
@@ -274,9 +275,17 @@ export class JobQueue {
       if (count >= 2) return null;
       const row = (
         await db.query(
-          `SELECT j.* FROM jobs j JOIN projects p ON p.id=j.project_id
+          `SELECT j.*,candidate.execution_id AS team_id,candidate.id AS team_step_id,
+             COALESCE(c.agent_snapshot,stage.agent)->>'id' AS agent_id,
+             COALESCE(c.agent_snapshot,stage.agent)->>'version' AS agent_version
+           FROM jobs j JOIN projects p ON p.id=j.project_id
            LEFT JOIN team_execution_steps candidate ON candidate.job_id=j.id
            LEFT JOIN team_executions team ON team.id=candidate.execution_id
+           LEFT JOIN coding_runs c ON c.job_id=j.id
+           LEFT JOIN LATERAL (
+             SELECT item->'agent' AS agent FROM jsonb_array_elements(team.snapshot->'plan'->'steps') item
+             WHERE item->>'key'=candidate.step_key LIMIT 1
+           ) stage ON true
            WHERE j.state='pending' AND NOT j.cancel_requested AND p.archived_at IS NULL AND j.available_at<=clock_timestamp()
            AND (SELECT count(*) FROM jobs busy WHERE busy.project_id=j.project_id AND busy.state='running') <
              CASE WHEN (j.configuration->>'workspaceAccess'='read-only' OR team.snapshot->'plan'->'template'->'definition'->>'strategy'='writers') AND team.parallelism=2 THEN LEAST(team.parallelism,p.team_parallelism) ELSE 1 END
@@ -304,7 +313,16 @@ export class JobQueue {
         checkpoint: row.completed_steps,
       });
       const budgeted = await this.budgets.activate(db, updated);
-      return { ...budgeted, configuration: cfg } as Claim;
+      return {
+        ...budgeted,
+        configuration: cfg,
+        correlation: {
+          parent: row.team_id,
+          step: row.team_step_id,
+          agent: row.agent_id,
+          version: row.agent_version,
+        },
+      } as Claim;
     }, true);
   }
   async heartbeat(claim: Claim) {

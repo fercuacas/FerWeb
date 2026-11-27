@@ -44,6 +44,8 @@ services:
     build: { target: runtime, args: { SOURCE_DATE_EPOCH: '${SOURCE_DATE_EPOCH:-0}' } }
     image: ferweb-api:${FERWEB_RELEASE_TAG:-candidate}
     logging: *logging
+  tools:
+    logging: *logging
   ai:
     <<: *hardening
     image: ferweb-ai:${FERWEB_RELEASE_TAG:-candidate}

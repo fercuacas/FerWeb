@@ -2,6 +2,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import type { RequestHandler } from 'express';
 import type { Pool } from 'pg';
+import { operationMetrics } from './operation-metrics.js';
 
 type Sample = { count: number; seconds: number; buckets: number[] };
 const boundaries = [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 10];
@@ -32,7 +33,11 @@ export function observability(token?: string, pool?: Pool) {
         if (seconds <= limit) sample.buckets[index]!++;
       });
       samples.set(labels, sample);
-      if (!route.startsWith('/api/health/') && route !== '/internal/metrics')
+      if (
+        !route.startsWith('/api/health/') &&
+        route !== '/internal/metrics' &&
+        !['/automations/tick', '/teams/tick'].includes(route)
+      )
         console.log(
           JSON.stringify({
             timestamp: new Date().toISOString(),
@@ -76,6 +81,7 @@ export function observability(token?: string, pool?: Pool) {
         lines.push(
           `ferweb_jobs{state="${state}"} ${jobs.rows.find((row) => row.state === state)?.count ?? '0'}`,
         );
+      lines.push(...(await operationMetrics(pool)));
     }
     for (const [labels, sample] of samples) {
       lines.push(`ferweb_http_requests_total{${labels}} ${sample.count}`);

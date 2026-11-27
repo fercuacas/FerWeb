@@ -120,7 +120,92 @@ for (let attempt = 0; attempt < 50; attempt++) {
   await delay(200);
 }
 assert.equal(state, 'completed');
-const load = await loadTest({ url, origin, cookie, projectId });
+
+async function queueLoad() {
+  const another = await request(
+    '/projects',
+    'POST',
+    { name: 'Release queue load', description: '' },
+    cookie,
+  );
+  assert.equal(another.status, 201);
+  const { project: second } = await another.json();
+  async function enqueue(project, title, steps, wait) {
+    const response = await request(
+      `/projects/${project}/jobs`,
+      'POST',
+      {
+        ...input,
+        requestId: randomUUID(),
+        title,
+        simulation: { ...input.simulation, steps, stepDelayMs: wait },
+        limits: { ...input.limits, timeoutMs: 20000 },
+      },
+      cookie,
+    );
+    assert.equal(response.status, 202);
+    return { project, job: (await response.json()).job.id };
+  }
+  async function detail(target) {
+    const response = await request(
+      `/projects/${target.project}/jobs/${target.job}`,
+      'GET',
+      undefined,
+      cookie,
+    );
+    assert.equal(response.status, 200);
+    return response.json();
+  }
+  async function observe(target, predicate) {
+    for (let retry = 0; retry < 80; retry++) {
+      const result = await detail(target);
+      if (predicate(result)) return result;
+      await delay(100);
+    }
+    assert.fail('Bounded load job did not reach its expected state.');
+  }
+  async function stop(target) {
+    const response = await request(
+      `/projects/${target.project}/jobs/${target.job}/cancel`,
+      'POST',
+      {},
+      cookie,
+    );
+    assert.equal(response.status, 200);
+    return observe(target, ({ job }) => job.state === 'cancelled');
+  }
+  const first = await enqueue(projectId, 'Release load running', 12, 750);
+  await observe(first, ({ job, attempts }) => job.state === 'running' && attempts[0]?.processPid);
+  const [waiting, parallel] = await Promise.all([
+    enqueue(projectId, 'Release load waiting', 3, 50),
+    enqueue(second.id, 'Release load concurrent', 5, 180),
+  ]);
+  assert.equal((await detail(waiting)).job.state, 'pending');
+  const cancelledPending = await stop(waiting);
+  assert.equal(cancelledPending.attempts.length, 0);
+  await observe(parallel, ({ attempts }) => attempts[0]?.processPid);
+  const cancelledActive = await stop(first);
+  assert.equal(cancelledActive.attempts[0].terminationConfirmed, true);
+  const completed = await observe(parallel, ({ job }) => job.state === 'completed');
+  assert.equal(completed.attempts[0].terminationConfirmed, true);
+  const a = cancelledActive.attempts[0];
+  const b = completed.attempts[0];
+  assert.ok(
+    Math.max(Date.parse(a.startedAt), Date.parse(b.startedAt)) <
+      Math.min(Date.parse(a.finishedAt), Date.parse(b.finishedAt)),
+  );
+  return {
+    enqueued: 3,
+    cancelledPending: 1,
+    cancelledActive: 1,
+    completed: 1,
+    concurrentOverlap: true,
+  };
+}
+const [load, queue] = await Promise.all([
+  loadTest({ url, origin, cookie, projectId }),
+  queueLoad(),
+]);
 await writeFile(
   '/app/test-results/release-journey.json',
   JSON.stringify(
@@ -129,6 +214,7 @@ await writeFile(
       authorization: 'passed',
       simulation: { jobId: job.id, idempotency: 'passed', state },
       load,
+      queue,
     },
     null,
     2,

@@ -37,6 +37,7 @@
     "release:start": "node scripts/release.mjs start",
     "release:stop": "node scripts/release.mjs stop",
     "release:status": "node scripts/release.mjs status",
+    "release:diagnose": "node scripts/release.mjs diagnose",
     "release:logs": "node scripts/release.mjs logs",
     "release:owner": "node scripts/release.mjs owner",
     "release:migrate": "node scripts/release.mjs migrate",

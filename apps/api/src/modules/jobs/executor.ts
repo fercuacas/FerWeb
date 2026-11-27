@@ -5,6 +5,8 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { JobQueue, JobControlError, type Claim } from './queue.js';
 import { processRequest } from './protocol.js';
 import { jobConfiguration } from '@ferweb/contracts';
+import { performance } from 'node:perf_hooks';
+import { attemptFields } from './telemetry.js';
 
 export interface Running {
   child?: ChildProcess;
@@ -29,15 +31,15 @@ export class JobExecutor {
   ready() {
     return !this.stopping && Date.now() - this.lastSeen < 5000;
   }
-  private log(event: string, claim?: Claim) {
+  private log(event: string, claim: Claim, durationMs?: number) {
     console.log(
       JSON.stringify({
         level: 'info',
         timestamp: new Date().toISOString(),
         service: 'worker',
         event,
-        executorId: this.id,
-        ...(claim ? { jobId: claim.id, attempt: claim.attempt } : {}),
+        ...attemptFields(claim),
+        ...(durationMs === undefined ? {} : { durationMs }),
       }),
     );
   }
@@ -54,6 +56,8 @@ export class JobExecutor {
       while (!this.stopping && this.active.size < this.concurrency) {
         const claim = await this.queue.claim(this.id);
         if (!claim) break;
+        const started = performance.now();
+        this.log('job_attempt_started', claim);
         const running =
           claim.kind === 'codex-v1' && this.coding
             ? this.coding(claim)
@@ -61,7 +65,22 @@ export class JobExecutor {
               ? this.localRead(claim)
               : this.run(claim);
         this.active.set(claim.id, running);
-        void running.done.finally(() => this.active.delete(claim.id));
+        void running.done
+          .then(
+            () =>
+              this.log(
+                'job_attempt_observation_finished',
+                claim,
+                Math.round(performance.now() - started),
+              ),
+            () =>
+              this.log(
+                'job_attempt_observation_failed',
+                claim,
+                Math.round(performance.now() - started),
+              ),
+          )
+          .finally(() => this.active.delete(claim.id));
       }
       this.lastSeen = Date.now();
     } catch {
@@ -170,7 +189,6 @@ export class JobExecutor {
       closedResolve();
     });
     const done = (async () => {
-      this.log('job_attempt_started', claim);
       try {
         if (!child.pid) throw new JobControlError('spawn_failed');
         await enqueue(async () => {
@@ -209,7 +227,6 @@ export class JobExecutor {
           exitSignal,
           exit !== null || exitSignal !== null,
         );
-        this.log('job_attempt_finished', claim);
       } catch {
         stop('executor_lost');
         await closed;

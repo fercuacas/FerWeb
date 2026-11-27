@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
 import { releaseOptions } from './release-lib.mjs';
 import { backup, restore } from './release-storage.mjs';
+import { diagnose } from './release-diagnostics.mjs';
 
 const command = process.argv[2];
 try {
@@ -42,7 +43,11 @@ try {
     };
     if (command === 'backup') await backup(options, process.argv[3]);
     else if (command === 'restore') await restore(options, process.argv[3]);
-    else if (commands[command]) {
+    else if (command === 'diagnose') {
+      const report = await diagnose(options);
+      console.log(JSON.stringify(report, null, 2));
+      if (!report.ready || !report.queueConsistent) process.exitCode = 1;
+    } else if (commands[command]) {
       if (command === 'build')
         await options.run([
           '--profile',
@@ -54,7 +59,7 @@ try {
       await options.run(commands[command]);
     } else
       throw new Error(
-        'Expected setup, build, start, stop, status, logs, migrate, owner, backup or restore.',
+        'Expected setup, build, start, stop, status, diagnose, logs, migrate, owner, backup or restore.',
       );
   }
 } catch (error) {

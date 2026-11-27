@@ -4,6 +4,7 @@ import type { z } from 'zod';
 import { JobQueue, JobControlError, type Claim } from './queue.js';
 import { RunnerClient } from './runner-client.js';
 import type { Running } from './executor.js';
+import { attemptFields } from './telemetry.js';
 export function codingExecutor(
   queue: JobQueue,
   runner: RunnerClient,
@@ -134,10 +135,7 @@ export function codingExecutor(
             timestamp: new Date().toISOString(),
             service: 'worker',
             event: saved ? 'coding_finished' : 'coding_result_discarded',
-            jobId: claim.id,
-            attempt: claim.attempt,
-            executorId: claim.executor_id,
-            reason,
+            ...attemptFields(claim),
           }),
         );
       } catch {

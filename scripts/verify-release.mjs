@@ -6,6 +6,7 @@ import { resolve, dirname } from 'node:path';
 import net from 'node:net';
 import { docker, root, releaseOptions } from './release-lib.mjs';
 import { backup, restore } from './release-storage.mjs';
+import { diagnose } from './release-diagnostics.mjs';
 
 const suffix = randomBytes(5).toString('hex');
 const directory = resolve(root, '.local', `release-check-${suffix}`);
@@ -116,6 +117,12 @@ const report = {
   checks: [],
   sourceSha256: sourceHash.digest('hex'),
 };
+const recoverySource = await readFile(resolve(source, 'tests/release-recovery.mjs'), 'utf8');
+const recoveryFixture = (stack, mode) =>
+  stack.run(['exec', '-T', 'api', 'node', '--input-type=module'], {
+    input: `const fixtureMode = ${JSON.stringify(mode)};\n${recoverySource}`,
+    capture: true,
+  });
 try {
   await options.run([
     '--profile',
@@ -148,15 +155,6 @@ try {
   });
   report.checks.push('compiled web proxy streaming/cancellation with fake local upstream');
   await options.run(['up', '--detach', '--wait', '--wait-timeout', '180', '--no-build']);
-  const vectorCollection = `release_recovery_${suffix}`;
-  const vector = {
-    id: 42,
-    vector: [0.1, 0.2, 0.3],
-    payload: { source: 'simulated-recovery-fixture', commit: 'a'.repeat(40) },
-  };
-  await options.run(['exec', '-T', 'api', 'node', '--input-type=module'], {
-    input: `const base='http://qdrant:6333/collections/${vectorCollection}';for(const [url,body] of [[base,{vectors:{size:3,distance:'Cosine'}}],[base+'/points?wait=true',{points:[${JSON.stringify(vector)}]}]]){const r=await fetch(url,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(!r.ok)throw Error('Vector fixture failed');}`,
-  });
   await options.run(
     ['exec', '-T', '--env', 'FERWEB_TEST_PASSWORD', 'api', 'node', '--input-type=module'],
     {
@@ -191,11 +189,104 @@ try {
     ),
   );
   report.checks.push(
-    'fresh volumes + applied migrations + compiled Chromium journey + cross-owner authorization + simulated worker + load',
+    'fresh volumes + applied migrations + compiled Chromium journey + cross-owner authorization + concurrent bounded CRUD and queue load',
   );
+  await options.run(['exec', '-T', 'worker', 'node', '--input-type=module'], {
+    input: `import {readdir,readFile} from 'node:fs/promises';
+const pids = (await readdir('/proc')).filter(name => /^[0-9]+$/.test(name) && Number(name) !== process.pid);
+for (const pid of pids) {
+  const cmd = await readFile('/proc/'+pid+'/cmdline','utf8').catch(()=>'');
+  if (cmd.split(String.fromCharCode(0)).some(arg=>arg.endsWith('/jobs/simulator.js')))
+    throw Error('Simulated child still running after load.');
+}
+console.log('PASS: no simulator processes left after load.');`,
+  });
+  await options.run(['stop', 'worker']);
+  await recoveryFixture(options, 'seed');
+  await assert.rejects(backup(options, resolve(directory, 'refused-backup')), /active jobs, teams/);
+  await recoveryFixture(options, 'finish');
+  const fixture = JSON.parse(await recoveryFixture(options, 'verify'));
+  const diagnostics = await diagnose(options);
+  assert.ok(diagnostics.ready && diagnostics.queueConsistent);
+  assert.ok(
+    diagnostics.samples.includes(
+      'ferweb_operations_known_provider_tokens_24h{runtime="codex_local",field="input",scope="simulated"} 7',
+    ),
+  );
+  assert.ok(
+    diagnostics.samples.some((line) =>
+      line.startsWith(
+        'ferweb_operations_output_usage_coverage_24h{runtime="codex_local",provenance="unknown",scope="simulated"} 2',
+      ),
+    ),
+  );
+  assert.ok(
+    !diagnostics.samples.some((line) =>
+      line.startsWith(
+        'ferweb_operations_known_provider_tokens_24h{runtime="codex_local",field="output"',
+      ),
+    ),
+  );
+  assert.ok(
+    diagnostics.samples.includes(
+      'ferweb_operations_cancellation_attempts_24h{runtime="simulator",confirmation="confirmed"} 1',
+    ),
+  );
+  assert.ok(
+    diagnostics.samples.includes(
+      'ferweb_operations_report_coverage_24h{runtime="codex_local",evidence="stored"} 1',
+    ),
+  );
+  assert.ok(!JSON.stringify(diagnostics).includes('P25_PRIVATE_FIXTURE_TEXT'));
+  const workerLog = await options.run(['logs', '--no-color', 'worker'], { capture: true });
+  assert.match(
+    workerLog,
+    /"event":"job_attempt_observation_finished".*"runtime":"simulator".*"durationMs":\d+/,
+  );
+  assert.doesNotMatch(
+    workerLog,
+    /Release load (running|waiting|concurrent)|P25_PRIVATE_FIXTURE_TEXT/,
+  );
+  report.operations = diagnostics;
+  report.checks.push(
+    'active team prevents backup without active child; protected metrics, unknown usage, bounded queue, no leftover leases/reservations or simulator processes',
+  );
+  const vectorCollection = `release_recovery_${suffix}`;
+  const vector = {
+    id: 42,
+    vector: [0.1, 0.2, 0.3],
+    payload: {
+      source: 'simulated-recovery-fixture',
+      commit: 'a'.repeat(40),
+      receipt: fixture.receipt,
+    },
+  };
+  await options.run(['exec', '-T', 'api', 'node', '--input-type=module'], {
+    input: `const base='http://qdrant:6333/collections/${vectorCollection}';for(const [url,body] of [[base,{vectors:{size:3,distance:'Cosine'}}],[base+'/points?wait=true',{points:[${JSON.stringify(vector)}]}]]){const r=await fetch(url,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(!r.ok)throw Error('Vector fixture failed');}`,
+  });
   // Freeze writers before hashing so timestamps/leases do not change between checkpoints.
   await options.run(['stop', 'web', 'api', 'worker', 'runner', 'ai', 'qdrant']);
   const original = await fingerprint(options);
+  report.recoveredRecords = {};
+  for (const table of [
+    'team_executions',
+    'team_execution_steps',
+    'agent_versions',
+    'skill_versions',
+    'project_memory_revisions',
+    'context_pack_receipts',
+    'coding_runs',
+    'execution_request_admissions',
+    'extension_versions',
+    'extension_resources',
+    'extension_events',
+    'automation_schedules',
+    'automation_occurrences',
+    'automation_notifications',
+  ]) {
+    assert.ok(original[table].count > 0, `The recovery fixture must populate ${table}`);
+    report.recoveredRecords[table] = original[table].count;
+  }
   const backupDirectory = resolve(directory, 'backup');
   await backup(options, backupDirectory);
   await options.run(['down']); // preserve source volumes until final scoped cleanup
@@ -222,8 +313,13 @@ try {
     'offline paired backup integrity + tampered checksum rejected + empty-target restore + all-table hashes + overwrite refused',
   );
   await restored.run(['up', '--detach', '--wait', '--wait-timeout', '180', '--no-build']);
+  assert.deepEqual(JSON.parse(await recoveryFixture(restored, 'verify')), fixture);
+  report.catalog = { commit: fixture.catalogCommit, sha256: fixture.catalogHash };
+  report.checks.push(
+    'restored team, role and skill, memory revisions, context receipt, report, connector and notification retain lineage',
+  );
   await restored.run(['exec', '-T', 'api', 'node', '--input-type=module'], {
-    input: `const r=await fetch('http://qdrant:6333/collections/${vectorCollection}/points/42');const body=await r.json();if(!r.ok||body.result?.payload?.commit!=='${'a'.repeat(40)}'||body.result?.payload?.source!=='simulated-recovery-fixture')throw Error('Restored vector mismatch');console.log('PASS: nonempty Qdrant recovery fixture.');`,
+    input: `const r=await fetch('http://qdrant:6333/collections/${vectorCollection}/points/42');const body=await r.json();if(!r.ok||body.result?.payload?.commit!=='${'a'.repeat(40)}'||body.result?.payload?.source!=='simulated-recovery-fixture'||body.result?.payload?.receipt!=='${fixture.receipt}')throw Error('Restored vector mismatch');console.log('PASS: nonempty Qdrant recovery fixture with SQL receipt.');`,
   });
   report.checks.push('nonempty Qdrant collection and source-version payload recovered');
   await restored.run([

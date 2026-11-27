@@ -28,8 +28,21 @@ jobs:
           chmod 777 .artifacts/docker-tests .artifacts/evaluations
       - name: Types, build, unit, integration, browser and simulated providers
         run: npm run docker:check
-      - name: Clean release images, browser journey, load and backup/restore
+      - name: Clean release images, protected metrics, queue load and populated recovery
         run: npm run release:check
+      - name: Summarize verified operations
+        shell: bash
+        run: |
+          node --input-type=module <<'JS' >> "$GITHUB_STEP_SUMMARY"
+          import { readFileSync } from 'node:fs';
+          const report = JSON.parse(readFileSync('.local/release-verification.json', 'utf8'));
+          if (!report.passed || !report.operations.queueConsistent) process.exit(1);
+          console.log('### FerWeb operations');
+          console.log('- Restored SQL tables: ' + Number(report.restoredTables));
+          console.log('- Nonempty domain tables: ' + Object.keys(report.recoveredRecords).length);
+          console.log('- Concurrent CRUD requests: ' + Number(report.journey.load.overall.requests));
+          console.log('- Simulator processes and terminal reservations cleared.');
+          JS
       - name: Diagnose Docker startup failure
         if: failure()
         run: |

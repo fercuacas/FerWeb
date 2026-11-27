@@ -10,8 +10,11 @@ async function fileHash(path) {
   for await (const chunk of createReadStream(path)) hash.update(chunk);
   return hash.digest('hex');
 }
-const activeWork =
-  "SELECT (SELECT count(*) FROM jobs WHERE state IN ('pending','running')) + (SELECT count(*) FROM chat_turns WHERE status='streaming') + (SELECT count(*) FROM lab_batches WHERE status='running') + (SELECT count(*) FROM coding_reviews WHERE state='publishing');";
+const activeWork = `SELECT (SELECT count(*) FROM jobs WHERE state IN ('pending','running'))
+  + (SELECT count(*) FROM team_executions WHERE state IN ('pending','running'))
+  + (SELECT count(*) FROM chat_turns WHERE status='streaming')
+  + (SELECT count(*) FROM lab_batches WHERE status='running')
+  + (SELECT count(*) FROM coding_reviews WHERE state='publishing');`;
 const sql = (options, statement) =>
   options.run(
     [
@@ -44,7 +47,23 @@ function folderPath(folder) {
   return path;
 }
 const volume = (options) => `${options.project}_qdrant_data`;
-async function volumeTool(options, folder, command) {
+async function databaseContainer(options) {
+  const id = await options.run(['ps', '-q', 'db'], { capture: true });
+  if (!/^[a-f0-9]{12,64}$/.test(id)) throw new Error('Start the selected database first.');
+  const mounts = JSON.parse(
+    await docker(['inspect', '--format', '{{json .Mounts}}', id], { capture: true }),
+  );
+  const database = mounts.filter(({ Destination }) => Destination === '/var/lib/postgresql');
+  if (
+    database.length !== 1 ||
+    database[0].Type !== 'volume' ||
+    database[0].Name !== `${options.project}_postgres_data`
+  )
+    throw new Error('The PostgreSQL volume is outside the selected Compose project.');
+  return id;
+}
+async function volumeTool(options, folder, mode) {
+  const reading = mode === 'backup';
   return docker([
     'run',
     '--rm',
@@ -60,22 +79,25 @@ async function volumeTool(options, folder, command) {
     '--cap-add',
     'FOWNER',
     '--mount',
-    `type=volume,source=${volume(options)},target=/data`,
+    `type=volume,source=${volume(options)},target=/data${reading ? ',readonly' : ''}`,
     '--mount',
-    `type=bind,source=${folder},target=/backup`,
+    `type=bind,source=${folder},target=/backup${reading ? '' : ',readonly'}`,
     '--entrypoint',
     'sh',
     await image(options),
     '-c',
-    command,
+    reading
+      ? 'tar -czf /backup/qdrant.tar.gz -C /data .'
+      : 'tar -xzf /backup/qdrant.tar.gz -C /data',
   ]);
 }
 
 export async function backup(options, directory) {
   const folder = folderPath(directory);
+  const id = await databaseContainer(options);
   if (+(await sql(options, activeWork)) !== 0)
     throw new Error(
-      'Drain/cancel active jobs, generations, batches and publications before backup.',
+      'Drain/cancel active jobs, teams, generations, batches and publications before backup.',
     );
   await mkdir(folder, { recursive: false, mode: 0o700 });
   const running = (
@@ -103,9 +125,8 @@ export async function backup(options, directory) {
       '--',
       temp,
     ]);
-    const id = await options.run(['ps', '-q', 'db'], { capture: true });
     await docker(['cp', `${id}:${temp}`, resolve(folder, 'database.dump')]);
-    await volumeTool(options, folder, 'tar -czf /backup/qdrant.tar.gz -C /data .');
+    await volumeTool(options, folder, 'backup');
     const files = {};
     for (const name of ['database.dump', 'qdrant.tar.gz'])
       files[name] = {
@@ -132,8 +153,11 @@ export async function backup(options, directory) {
       'PASS: offline PostgreSQL + Qdrant recovery point written; protect and encrypt it off-host.',
     );
   } finally {
-    await options.run(['exec', '-T', 'db', 'rm', '-f', temp]);
-    if (running.length) await options.run(['start', ...running]);
+    try {
+      await options.run(['exec', '-T', 'db', 'rm', '-f', temp]);
+    } finally {
+      if (running.length) await options.run(['start', ...running]);
+    }
   }
 }
 
@@ -156,6 +180,7 @@ export async function restore(options, directory) {
     throw new Error(
       'Restore only into a new target with db alone; no existing application containers.',
     );
+  const id = await databaseContainer(options);
   if (+(await sql(options, "SELECT count(*) FROM pg_tables WHERE schemaname='public';")) !== 0)
     throw new Error('Refusing to restore over existing database tables.');
   // A pre-existing Qdrant volume is refused even if empty: no overwrite path exists.
@@ -176,7 +201,6 @@ export async function restore(options, directory) {
     ],
     { capture: true },
   );
-  const id = await options.run(['ps', '-q', 'db'], { capture: true });
   const temp = `/tmp/ferweb-restore-${randomBytes(8).toString('hex')}.dump`;
   try {
     await docker(['cp', resolve(folder, 'database.dump'), `${id}:${temp}`]);
@@ -190,7 +214,7 @@ export async function restore(options, directory) {
       '--',
       temp,
     ]);
-    await volumeTool(options, folder, 'tar -xzf /backup/qdrant.tar.gz -C /data');
+    await volumeTool(options, folder, 'restore');
     console.log(
       'PASS: restored into a new target. Validate migrations, data and retrieval before any traffic switch.',
     );
